@@ -6,26 +6,27 @@
 
 ## 0. SBCG工程现状与本次范围
 
-项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，交付本目录下的 `Docs/Hardware_Resources.md`；本次Git只提交SBCG内的文档及新建忽略规则，不把其他目录或既有未跟踪的固件文件一起提交。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
+项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，交付本目录下的 `Docs/Hardware_Resources.md`；本轮按用户要求在SBCG内提交更新后的工程源码及构建配置基线，并补充第一步指南；不提交build、.codex或compile_commands.json等本地生成内容。用户删除.gitignore的改动予以保留。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
 
 已只读核对 `SBCG.ioc`、`Core/Inc/main.h`、`Core/Src/main.c`、顶层CMake及链接脚本，发现下列差异。**下文表格是目标分配，不代表当前工程已经启用这些外设。**
 
 | 项目 | SBCG当前配置 | 目标/处理 |
 | --- | --- | --- |
-| MCU | STM32F746NEH6 / STM32F746NEHx，TFBGA216 | 开发板官方目标是STM32F746NGH6；经CubeMX现有工程的器件迁移流程核对，不手改器件名 |
-| Flash | 链接脚本512K，与NE型号相符 | NG开发板为1 MiB；在CubeMX确认器件后检查生成/迁移的链接设置，不直接改长度掩盖型号差异 |
+| MCU | **STM32F746NGH6 / STM32F746NGHx，TFBGA216** | 用户已修正，当前与开发板官方目标一致 |
+| Flash | **链接脚本1024K，即1 MiB** | 已与NG目标一致；本轮未改链接脚本 |
 | 软件版本 | CubeMX 6.18.1、DB.6.0.181、CubeF7 V1.17.4 | 两板固定同一版本；本文件BSP参数须对照该版本核查 |
+| 显示格式约定 | **用户指定RGB565，每像素16位/2字节** | 后续CubeMX的LTDC图层、帧缓冲和绘图代码按第5.2节统一；当前未启用LTDC |
 | 已启用资源 | SYS/RCC/NVIC/CORTEX_M7；SWD+SWO，PB3/PA13/PA14及HSE脚 | 未启用LTDC/FMC/ETH/USART1/I2C3/TIM2；DHT11的PG7未分配 |
 | 时钟 | HCLK216 MHz、PCLK1 54 MHz、APB1定时器108 MHz；HSE_ON、25 MHz | 第5.1节200 MHz为建议目标，须通过CubeMX调整；不能照抄PSC=99到当前216 MHz时钟 |
 | 生成GPIO | 仅开启GPIOA/B/H时钟，未定义DHT11/PPS标签 | CubeMX分配PG7及其他目标引脚后再生成GPIO初始化和标签宏 |
 
-本地AGENTS.md第4节要求硬件变化由CubeMX完成，并在未经授权操作该流程时等待用户重新生成。因此本次没有改 `.ioc`、`SystemClock_Config()`、`MX_GPIO_Init()`、链接脚本、DMA/NVIC或固件调用链；配置差异和预期生成变化均写入第6节。
+第一步操作见同目录 `CubeMX_Step1.md`。本地AGENTS.md第4节要求硬件变化由CubeMX完成，并在未经授权操作该流程时等待用户重新生成。因此本次没有改 `.ioc`、`SystemClock_Config()`、`MX_GPIO_Init()`、链接脚本、DMA/NVIC或固件调用链；配置差异和预期生成变化均写入第6节。
 
 ## 1. 先统一的结论
 
 | 需求 | 两板统一采用的接口 | 结论与范围 |
 | --- | --- | --- |
-| 4.3英寸 LCD | 板载 U19，480×272，LTDC RGB888 物理总线 | 保留全部 RGB、时序、显示使能和背光引脚；不按 SPI 屏配置 |
+| 4.3英寸 LCD | 板载U19，480×272；**图层/帧缓冲RGB565** | 屏的RGB888物理连线完整保留；每像素2字节；不按SPI屏配置 |
 | 显示缓冲 | 板载 U4 SDRAM，FMC SDRAM Bank1，16位数据总线 | 芯片标称128 Mbit，板上可访问64 Mbit，即8 MiB；地址基准0xC0000000 |
 | 电容触控 | PH7/PH8 的 I2C3，PI13 中断 | 与音频编解码器共用 I2C3；LCD/触控复位接 NRST，没有独立的触控复位 GPIO |
 | 交换机网络 | CN9 RJ45 → U9 LAN8742A → ETH RMII | 50 MHz RMII_REF_CLK 从 PHY 输入 PA1；不是 MCU MCO 输出 |
@@ -232,13 +233,13 @@ ST部分示例代码使用 `HSE_ON`；这里依据上传B-04原理图选择有�
 | 垂直参数（实际长度） | VSYNC=10，VBP=2，VFP=2 |
 | HAL寄存器字段核对 | HorizontalSync=40；VerticalSync=9；AccumulatedHBP=53；AccumulatedVBP=11；AccumulatedActiveW=533；AccumulatedActiveH=283；TotalWidth=565；TotalHeigh=285 |
 | 极性 | HS/VS/DE：Active Low；Pixel Clock：IPC，按BSP选择输入像素时钟极性（通常界面对应正常/上升沿），核对生成的 `LTDC_PCPOLARITY_IPC` |
-| 图层建议 | 一层、480×272、RGB565帧缓冲；起址0xC0000000、Alpha=255；背景黑。图层内存布局需与绘图代码一致 |
+| 图层固定约定 | 用户指定一层RGB565、480×272；起址0xC0000000、Alpha=255、背景黑；HAL字段必须为LTDC_PIXEL_FORMAT_RGB565。图层内存布局与绘图代码一致 |
 | 缓冲大小 | RGB565每帧480×272×2=261120字节；双缓冲522240字节；可将第二缓冲放0xC0040000，两块按256 KiB间距预留 |
 | GPIO控制 | PI12=LCD_DISP，PK3=LCD_BL_CTRL；推挽、No Pull、低速，初始低；SDRAM和LTDC图层准备好后再拉高 |
 
 CubeMX有的界面填写实际长度，有的显示累计值；以表中两套值区分，避免重复减1。时序来源[S5] LCD BSP及[S7] RK043FN48H组件参数，不是仅凭MCU数据手册推测。
 
-RGB565描述的是帧缓冲格式，不代表要删掉LCD的低位RGB接线。若直接使用默认 `BSP_LCD_LayerDefaultInit()`，其像素格式可能为ARGB8888；必须显式统一格式、每像素字节数和内存占用。
+RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP的 `BSP_LCD_LayerDefaultInit()` 默认ARGB8888；当前公开BSP另有 `BSP_LCD_LayerRgb565Init()`，若采用BSP须核对团队版本并统一初始化所有权。不得在CubeMX设置RGB565后又调用ARGB8888默认初始化覆盖。原始RGB565颜色：黑0x0000、白0xFFFF、红0xF800、绿0x07E0、蓝0x001F；内存像素使用uint16_t。BSP/DMA2D不同绘图函数对颜色参数的约定可能不同，须确认是否需要RGB888到RGB565转换，不能直接混用32位LCD_COLOR_*常量。详细颜色和图层设置见 `CubeMX_Step1.md`。
 
 ### 5.3 S1：FMC SDRAM
 
@@ -335,7 +336,7 @@ RGB565描述的是帧缓冲格式，不代表要删掉LCD的低位RGB接线。�
 ## 6. 分步CubeMX配置指南
 
 1. **记录两板实物。** MCU型号、MB1191修订、屏幕型号、ST-LINK连接与焊接改动；记录CubeMX/CubeIDE版本和STM32CubeF7包版本。若实物与B-04不同，先用对应ST原理图核对差异；核对课程DHT11小板的引脚丝印、电压、上拉和数量。
-2. **建立一份共享硬件基线。** 优先Board Selector选STM32F746G-DISCO；若选MCU Selector，必须选STM32F746NGH6/TFBGA216。SBCG现有工程选的是NE型号，应先在CubeMX现有工程的器件迁移/选择流程核对NG目标；不新建替代项目，也不直接改 `.ioc` 或链接脚本。已有项目通过图形界面编辑。板默认初始化可作参考，但逐项检查默认启用的外设；不能只依赖Board Selector自动结果。
+2. **建立一份共享硬件基线。** 优先Board Selector选STM32F746G-DISCO；若选MCU Selector，必须选STM32F746NGH6/TFBGA216。SBCG现有工程已选NG型号、链接Flash为1024K，保持这一基线；不新建替代项目，也不直接改 `.ioc` 或链接脚本。已有项目通过图形界面编辑。板默认初始化可作参考，但逐项检查默认启用的外设；不能只依赖Board Selector自动结果。
 3. **SYS/RCC/Clock Configuration。** Debug选Serial Wire，保留PA13/PA14；配置HSE25 MHz及第5.1节基线。确认SYSCLK/HCLK、APB时钟、TIM2、SDCLK和LTDC时钟实际显示值，无时钟错误。暂不启用主MCU USB。
 4. **固定GPIO和标签。** 按第4节逐脚选择功能和User Label；对自动分配到错误焊接位置的引脚，在图形界面重新选择、必要时锁定。重点检查PG12/AF9、SDCKE0/PC3、SDNE0/PH3、USART1_RX/PB7、ETH_TXD0/PG13和ETH_TXD1/PG14。
 5. **FMC。** 启用SDRAM Bank1，16位、8列、12行、4内部Bank和第5.3节参数；确认全部38个FMC引脚。生成后的应用还需SDRAM命令序列和刷新设置，不能只打开FMC就使用外部内存。
@@ -348,7 +349,7 @@ RGB565描述的是帧缓冲格式，不代表要删掉LCD的低位RGB接线。�
 12. **保存与生成。** 仅点击CubeMX保存`.ioc`、Generate Code；配置保留USER CODE区。检查生成的GPIO AF、外设初始化与时钟值，业务逻辑放USER CODE区或独立文件。SDRAM命令、触控驱动、PHY管理、时间同步并非全部由CubeMX自动完成。
 13. **队友共用。** 两板使用同一已审核`.ioc`基线与软件包版本；仅在业务配置中区分board_role、MAC/IP和实测校准，不改物理引脚表。运行验收前核对第8节清单。
 
-本轮只交付上述可审核配置指南；PG7、器件型号和时钟变化尚未在CubeMX执行。按SBCG/AGENTS.md第4节，用户在CubeMX完成本里程碑的设置并重新生成后，再核查生成代码、开展DHT11驱动实现和硬件测试。此处不通过手写HAL初始化替代生成过程。
+本轮记录用户已完成的NG器件/1024K工程基线并交付可审核配置指南；PG7、目标时钟、FMC和LTDC尚未在CubeMX配置。按SBCG/AGENTS.md第4节，用户在CubeMX完成本里程碑的设置并重新生成后，再核查生成代码、开展DHT11驱动实现和硬件测试。此处不通过手写HAL初始化替代生成过程。
 
 ## 7. 冲突与易错项
 
@@ -402,7 +403,8 @@ RGB565描述的是帧缓冲格式，不代表要删掉LCD的低位RGB接线。�
 - [ ] DHT11为课程实际提供器件；PG7/CN4-5数据线、CN6-4电源、CN6-6/7地线及3.3 V上拉已确认。
 - [ ] 上电至少1秒、起始18～30 ms、读取间隔>2秒、完整40位及校验符合实际模块版本。
 - [ ] 同时运行网络、LCD和音频时，DHT11读取不屏蔽实时中断；PPS仍满足±10 μs，失败重试和超龄状态可观察。
-- [ ] 当前SBCG的NE型号/512K链接设置、HSE模式和216 MHz/PSC参数已通过CubeMX核对；不是只更新了文档。
+- [x] 当前SBCG的NG型号/1024K链接设置已只读核对一致。
+- [ ] 按第一步指南在CubeMX调整HSE/目标时钟，并核对生成代码；随后再配置FMC、RGB565 LTDC和PPS。
 - [ ] 离线测量不依赖电脑辅助程序；示波器和串口仅观察/设参。
 
 ### 8.3 尚未确定、需要补录的信息
@@ -412,7 +414,7 @@ RGB565描述的是帧缓冲格式，不代表要删掉LCD的低位RGB接线。�
 | 两板实际PCB版本及改动 | 未看到实物丝印/焊桥 | 提供版本和路由状态后按对应原理图核查 |
 | 实物U4速度等级/最小时序 | 现有表格取ST BSP参考值 | 获取对应SDRAM器件资料，复核tRAS/tRC/CAS及实际SDCLK |
 | 课程DHT11小板及数量 | 型号由用户确认；三针/四针形态、上拉、厂家版本、数量未知 | 核对丝印和上拉；决定各板独立读取或共享有效温度 |
-| CubeMX器件/时钟迁移 | 已读到6.18.1 / CubeF7 V1.17.4；NE/216 MHz仍为当前配置 | 在CubeMX核对NG及目标时钟，重新生成后检查GPIO、PG2、Flash和定时器参数 |
+| CubeMX系统时钟与显示配置 | 已读到6.18.1 / CubeF7 V1.17.4；NG/1024K已一致，当前仍216 MHz/HSE_ON且无LTDC | 按第一步指南核对系统时钟；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
 | 音频采样/时钟/DMA | 后续采集模块设计 | 决定SAI时钟、DMA和内存带宽，与显示/同步联调 |
 | 时间同步协议与TIM2所有权 | 尚未实现 | 本文给接口，不承诺硬件自测PWM达到±10 μs同步 |
 | DHT11驱动、温度时效及共享方式 | 本轮规划未实现 | 统一>2秒间隔、校验/超时、失效回退及两板声速；实测温补误差 |
