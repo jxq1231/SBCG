@@ -16,6 +16,15 @@
 
 型号已经正确，直接打开现有SBCG.ioc，不重新创建工程。以下设置由用户在CubeMX完成，本次没有手改.ioc或生成的硬件初始化代码。
 
+## 1.1 配置前给队友确认的固定边界
+
+- **TIM2只能有一个主人**：统一时间服务维护1 MHz计数、1秒周期，目标200 MHz HCLK时PSC=99、ARR=999999；其它模块取同步时间戳，不改分频、不各自初始化TIM2。服务统一处理1秒回绕。
+- **两板必须用同一个温度**：一只DHT11接A板PG7，A通过UDP发布；同次测量锁定相同temperature_version/environment_temperature_c。失效保留上次共同有效值，串口手动设温也统一发布。
+- **音频不要改PLLSAI**：LCD固定PLLSAIN192、R5、DivR4，在HSE25 MHz/PLLM25下9.6 MHz；SAI2时钟源选PLLI2S。采样率相关PLLI2S参数后续通过CubeMX确定。
+- **PH15先预留**：本机V1.17.4 BSP把AUDIO_IN_INT定义为PH15；上传B-04图中PH15是TP3、PD6硬连WM8994 Audio_INT。两脚都保留，配SAI前核实真实IRQ事件路径；不把BSP宏直接当原理图连线。
+
+这些是团队目标配置约定，当前工程仍未启用TIM2/SAI/LTDC。详细证据和接口边界见《Hardware_Resources.md》第3.1、4.7、5.6、5.7节。
+
 ## 2. 第一步现在执行：SYS、RCC与系统时钟
 
 ### 2.1 打开和确认工程
@@ -151,6 +160,10 @@ r8/g8/b8范围0～255，结果存入uint16_t。按 `y*480+x` 定位像素，地�
 
 BSP/DMA2D函数的颜色参数可能是RGB888/ARGB8888，再由内部转换输出RGB565；直接写像素、填充、文本、位图并不一定采用相同参数约定。后续实现时分别核对所用API，不能因图层为RGB565就把所有BSP接口一律传16位颜色。
 
+### 3.4 下一阶段加入音频时的时钟核对
+
+在Clock Configuration中将SAI2时钟源选择为PLLI2S，按实际采样率配置PLLI2SN/Q/DivQ。保持LCD支路N192/R5/DivR4和共享PLLM25不变；生成后分别核对 `RCC_SAI2CLKSOURCE_PLLI2S` 与LTDC的PLLSAI参数，再实测LCD刷新和音频采样率。使用BSP时还需核对其时钟回调，不能让BSP与CubeMX分别改同一RCC配置。
+
 ## 4. 第一步完成检查
 
 - [ ] MCU保持NGH6/TFBGA216，Flash保持1024K。
@@ -159,6 +172,7 @@ BSP/DMA2D函数的颜色参数可能是RGB888/ARGB8888，再由内部转换输�
 - [ ] HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz，生成代码与GUI一致。
 - [ ] 工程从CubeMX保存/生成，现有Debug构建通过。
 - [ ] 两板共用同一配置基线及软件包；记录实物启动检查结果。
+- [ ] 队友已确认TIM2单一所有者、单DHT11 UDP温度快照及PLLSAI锁定；PH15和PD6均未分配给其他功能。
 - [ ] 团队已统一后续图层RGB565、2字节像素、261120字节帧缓冲；完整LCD接线保留。
 
 本指南完成的是第一步系统配置操作和后续RGB565约定。屏幕显示、温度、PPS、网络和声音采集仍按《Hardware_Resources.md》的顺序分增量配置和验证，不以编译通过代替硬件验收。
