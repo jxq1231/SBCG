@@ -1,0 +1,36 @@
+# CMake/Ninja build directories and generated metadata
+/build/
+/Debug/
+/Release/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+CMakeUserPresets.json
+
+# Compiler and linker outputs (keep .c/.h/.s sources and linker scripts)
+*.o
+*.obj
+*.d
+*.su
+*.cyclo
+*.elf
+*.axf
+*.bin
+*.hex
+*.map
+*.lst
+
+# Local tooling state and raw runtime logs
+/.codex/
+/.cache/
+/.clangd/
+/.vscode/ipch/
+/Logs/
+/Data/Raw/
+*.log

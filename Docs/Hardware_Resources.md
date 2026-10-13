@@ -6,7 +6,7 @@
 
 ## 0. SBCG工程现状与本次范围
 
-项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，交付本目录下的 `Docs/Hardware_Resources.md`；本轮按用户要求在SBCG内提交更新后的工程源码及构建配置基线，并补充第一步指南；不提交build、.codex或compile_commands.json等本地生成内容。用户删除.gitignore的改动予以保留。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
+项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，交付本目录下的 `Docs/Hardware_Resources.md`；本轮按用户要求在SBCG内提交更新后的工程源码及构建配置基线，并补充第一步指南。Git通过.gitignore排除build、.codex、compile_commands.json、对象文件、固件二进制及其它编译副产物，使其不出现在常规更改列表；保留Core/Drivers源码、.ioc、启动/链接脚本、CMake构建配置、共享VS Code配置及设计文档。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
 
 已只读核对 `SBCG.ioc`、`Core/Inc/main.h`、`Core/Src/main.c`、顶层CMake及链接脚本，发现下列差异。**下文表格是目标分配，不代表当前工程已经启用这些外设。**
 
