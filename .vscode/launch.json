@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+
+    "configurations": [
+        {
+            "name": "STM32F7: Debug",
+
+            "type": "cortex-debug",
+            "request": "launch",
+
+            "cwd": "${workspaceFolder}",
+
+            "executable": "${workspaceFolder}/build/Debug/${workspaceFolderBasename}.elf",
+
+            "servertype": "openocd",
+
+            "gdbPath": "D:/arm-gnu-toolchain-13.2.Rel1-mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
+
+            "serverpath": "C:/Users/25747/AppData/Local/Microsoft/WinGet/Packages/xpack-dev-tools.openocd-xpack_Microsoft.Winget.Source_8wekyb3d8bbwe/xpack-openocd-0.12.0-7/bin/openocd.exe",
+
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32f7x.cfg"
+            ],
+
+            "runToEntryPoint": "main",
+
+            "preLaunchTask": "STM32: Build"
+        }
+    ]
+}

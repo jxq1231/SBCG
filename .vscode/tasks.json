@@ -1,0 +1,101 @@
+{
+    "version": "2.0.0",
+
+    "tasks": [
+        {
+            "label": "STM32: Build",
+            "type": "process",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+
+        {
+            "label": "STM32: Flash",
+            "type": "process",
+            "command": "openocd",
+            "args": [
+                "-f",
+                "interface/stlink.cfg",
+                "-c",
+                "transport select swd",
+                "-c",
+                "adapter speed 1800",
+                "-f",
+                "target/stm32f7x.cfg",
+                "-c",
+                "program build/Debug/${workspaceFolderBasename}.elf verify reset exit"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "STM32: Build"
+            ],
+            "problemMatcher": []
+        },
+
+        {
+            "label": "STM32: Run",
+            "type": "process",
+            "command": "openocd",
+            "args": [
+                "-f",
+                "interface/stlink.cfg",
+                "-c",
+                "transport select swd",
+                "-c",
+                "adapter speed 1800",
+                "-f",
+                "target/stm32f7x.cfg",
+                "-c",
+                "init; reset run; shutdown"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+
+        {
+            "label": "STM32: Clean",
+            "type": "process",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Debug",
+                "--target",
+                "clean"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+
+        {
+            "label": "STM32: AI Debug",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/tools/autodebug.py"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
