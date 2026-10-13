@@ -6,7 +6,7 @@
 
 ## 0. SBCG工程现状与本次范围
 
-项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，交付本目录下的 `Docs/Hardware_Resources.md`；本轮按用户要求在SBCG内提交更新后的工程源码及构建配置基线，并补充第一步指南。Git通过.gitignore排除build、.codex、compile_commands.json、对象文件、固件二进制及其它编译副产物，使其不出现在常规更改列表；保留Core/Drivers源码、.ioc、启动/链接脚本、CMake构建配置、共享VS Code配置及设计文档。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
+项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，更新 `Docs/Hardware_Resources.md` 与第一步指南 `Docs/CubeMX_Step1.md`。工程源码和构建配置基线已在前序提交记录；本次只提交这两份文档。Git通过.gitignore排除build、.codex、compile_commands.json、对象文件、固件二进制及其它编译副产物，使其不出现在常规更改列表；保留Core/Drivers源码、.ioc、启动/链接脚本、CMake构建配置、共享VS Code配置及设计文档。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
 
 已只读核对 `SBCG.ioc`、`Core/Inc/main.h`、`Core/Src/main.c`、顶层CMake及链接脚本，发现下列差异。**下文表格是目标分配，不代表当前工程已经启用这些外设。**
 
@@ -15,7 +15,7 @@
 | MCU | **STM32F746NGH6 / STM32F746NGHx，TFBGA216** | 用户已修正，当前与开发板官方目标一致 |
 | Flash | **链接脚本1024K，即1 MiB** | 已与NG目标一致；本轮未改链接脚本 |
 | 软件版本 | CubeMX 6.18.1、DB.6.0.181、CubeF7 V1.17.4 | 两板固定同一版本；本文件BSP参数须对照该版本核查 |
-| 显示格式约定 | **用户指定RGB565，每像素16位/2字节** | 后续CubeMX的LTDC图层、帧缓冲和绘图代码按第5.2节统一；当前未启用LTDC |
+| 显示格式约定 | **用户指定RGB565，每像素16位/2字节** | 后续CubeMX的LTDC图层、帧缓冲和绘图代码按第5.2节统一；当前未启用LTDC；目标LTDC模式和DMA2D同为RGB565 |
 | 已启用资源 | SYS/RCC/NVIC/CORTEX_M7；SWD+SWO，PB3/PA13/PA14及HSE脚 | 未启用LTDC/FMC/ETH/USART1/I2C3/TIM2；DHT11的PG7未分配 |
 | 时钟 | HCLK216 MHz、PCLK1 54 MHz、APB1定时器108 MHz；HSE_ON、25 MHz | 第5.1节200 MHz为建议目标，须通过CubeMX调整；不能照抄PSC=99到当前216 MHz时钟 |
 | 生成GPIO | 仅开启GPIOA/B/H时钟，未定义DHT11/PPS标签 | CubeMX分配PG7及其他目标引脚后再生成GPIO初始化和标签宏 |
@@ -26,14 +26,14 @@
 
 | 需求 | 两板统一采用的接口 | 结论与范围 |
 | --- | --- | --- |
-| 4.3英寸 LCD | 板载U19，480×272；**图层/帧缓冲RGB565** | 屏的RGB888物理连线完整保留；每像素2字节；不按SPI屏配置 |
+| 4.3英寸 LCD | **LTDC引脚模式、图层、帧缓冲和DMA2D均RGB565**，480×272 | 20个LTDC AF信号（16颜色+4时序）；8个未用低位颜色脚由原MCU脚固定输出0；板上连线不改 |
 | 显示缓冲 | 板载 U4 SDRAM，FMC SDRAM Bank1，16位数据总线 | 芯片标称128 Mbit，板上可访问64 Mbit，即8 MiB；地址基准0xC0000000 |
 | 电容触控 | PH7/PH8 的 I2C3，PI13 中断 | 与音频编解码器共用 I2C3；LCD/触控复位接 NRST，没有独立的触控复位 GPIO |
 | 交换机网络 | CN9 RJ45 → U9 LAN8742A → ETH RMII | 50 MHz RMII_REF_CLK 从 PHY 输入 PA1；不是 MCU MCO 输出 |
-| 整秒脉冲 | **PA15 → CN7-2 / Arduino D9** | 推荐 TIM2_CH1（AF1）输出 `PPS_OUT`，3.3 V、正脉冲、建议100 μs；需跟随两板同步时间基准 |
+| 整秒脉冲 | **PA15 → CN7-2 / Arduino D9** | 推荐 TIM2_CH1（AF1）输出 `PPS_OUT`，3.3 V、正脉冲、建议100 μs；由ETH/PTP秒事件硬件驱动TIM2；TIM2不作为测量时间源 |
 | 观察/设参串口 | **USART1：PA9 TX、PB7 RX → ST-LINK → CN14 USB** | 115200、8数据位、无校验、1停止位、无流控；PC6/PC7 的 Arduino 串口不是 ST-LINK VCP |
 | 温度补偿基础部分 | 串口或屏幕输入环境温度 | 无需外接传感器，满足任务书基础部分的接口要求 |
-| 自动环境测温提高部分 | **一只课程DHT11接A板PG7/D4；A经UDP发布给B** | 两板使用同一个environment_temperature_c及同一测量温度版本；故障保留最后有效值，串口手动设温保留 |
+| 自动环境测温提高部分 | **一只课程DHT11接A板PG7/D4；A经UDP发布给B** | 两板使用同一个environment_temperature_milli_c及同一测量温度版本；故障保留最后有效值，串口手动设温保留 |
 
 证据：资料[S1]第19～23、30、34～41、42～48页，[S2]复用表，[S3]第2～4页。方括号编号见文末。
 
@@ -52,50 +52,53 @@
 
 表内 MCU Pin 使用端口名，例如 `PA15`；括号内是 **MCU 的 TFBGA216 球位**，不是排针序号。`CN7-2` 表示板上 CN7 的2号针，`D9` 表示 Arduino 信号名。LCD 的 `U19-n` 表示原理图屏模块的端子号，不是可随意插线的扩展排针。
 
-两板使用完全相同的 User Label。GPIO 标签采用 `LCD_DISP`、`LCD_BL_CTRL`、`PPS_OUT` 等；业务变量采用 `environment_temperature_c`、`relative_humidity_pct`、`temperature_valid`、`temperature_sample_age_ms`、`sound_speed_m_s`、`board_role`。外设句柄保持 CubeMX 生成的 `huart1`、`hltdc`、`hi2c3`、`heth`、`htim2`、`hsdram1` 等实际名称；不通过改引脚标签来重命名句柄。
+两板使用完全相同的 User Label。GPIO 标签采用 `LCD_DISP`、`LCD_BL_CTRL`、`PPS_OUT` 等；业务变量采用 `environment_temperature_milli_c`（计算/传输）、`environment_temperature_c`（显示）、`relative_humidity_pct`、`temperature_valid`、`temperature_sample_age_ms`、`sound_speed_mm_s`（计算）、`board_role`。外设句柄保持 CubeMX 生成的 `huart1`、`hltdc`、`hi2c3`、`heth`、`htim2`、`hsdram1` 等实际名称；不通过改引脚标签来重命名句柄。
 
 普通 GPIO 的 User Label 通常生成 `<Label>_Pin` / `<Label>_GPIO_Port`；AF 引脚是否生成同样的宏取决于生成器。标签用于定位与团队沟通，不保证生成变量。外围 BSP 自带标签/句柄时应统一使用一套初始化，避免 CubeMX 与 BSP 重复改同一外设。
 
-参数组：`L1`=LTDC；`L2`=LCD控制；`T1`=触控；`S1`=SDRAM；`E1`=ETH；`U1`=USART；`P1`=PPS；`X1`=DHT11温湿度接口。具体数值见第5节。“占用”同时记录板上硬连线和本方案分配；未启用某外设不等于其焊接的引脚成为空闲。
+参数组：`L0`=屏幕低位GPIO恒零；`L1`=RGB565 LTDC有效线；`L2`=LCD控制；`T1`=触控；`S1`=SDRAM；`E1`=ETH；`U1`=USART；`P1`=PPS；`X1`=DHT11温湿度接口。具体数值见第5节。“占用”同时记录板上硬连线和本方案分配；未启用某外设不等于其焊接的引脚成为空闲。
 
 ### 3.1 配置前必须确认的团队约定
 
-| 资源 | 唯一所有者与固定约定 | 其它模块的访问方式 |
+| 资源 | 本项目唯一选择 | 其它模块的访问方式 |
 | --- | --- | --- |
-| TIM2 / 同步时间 | **统一同步时间服务唯一管理**：1 MHz计数、ARR=999999的1秒周期；目标100 MHz TIM2输入时PSC=99 | PPS、音频到达时刻和测距均调用统一时间服务；不各自初始化/修改TIM2 |
-| 环境温度 | **A板温度服务是唯一温度来源**：一只DHT11，或者经串口明确设置的手动温度 | A通过UDP发布；两板同一测量使用同一版本的environment_temperature_c和同一声速算法 |
-| LCD时钟 | **PLLSAI锁定**：N=192、R=5、DivR=4，PLLM=25、HSE=25 MHz时像素时钟9.6 MHz | 音频改PLLI2S参数；不修改PLLSAI或共享PLLM来凑SAI时钟 |
-| 音频预留 | PI4～PI7、PG10、PD6；**PH15额外保留**，PH7/PH8继续共享I2C3 | PH15 BSP宏与原理图用途不同，按第4.7节核查后才决定IRQ配置 |
+| 显示 | **全部RGB565**：LTDC的RGB565引脚模式、图层/帧缓冲、DMA2D输入/输出与业务16位颜色一致；有效引脚按板级原理图，时序采用GUI测试项目的1/43/8、10/12/4，像素时钟按团队约定9.6 MHz | 第5.2节是唯一目标；不混用另一组RGB888 AF和官方BSP41/13/32时序 |
+| 同步时间 | **ETH IEEE1588 MAC硬件时钟是唯一时间源**：A主时钟、B从时钟；时间服务输出64位PTP纳秒时间 | 网络与声音到达时间戳都在PTP时间域；不从TIM2拼接测量时间 |
+| TIM2 / PA15 PPS | 同一时间服务唯一管理；TIM2计数1 MHz，仅执行PTP每秒触发的100 μs脉冲 | 其它模块不得初始化、改分频或读CNT作到达时刻；原自由运行ARR999999方案废止 |
+| 环境温度/算法 | 一只DHT11在A板；UDP共享整数毫摄氏度和temperature_version；**math_version=1统一整数公式** | 同次测量两板使用同一温度、t_A_ns/t_B_ns和公式，禁止一侧浮点另一侧整数 |
+| A/B角色 | **同一固件按96位MCU UID允许名单固定分配角色**：BOARD_A_UID与BOARD_B_UID映射表两板完全相同 | UID未知/配置重复则UNCONFIGURED，不测量；不根据DHT是否失效临时换角色 |
+| LCD/音频时钟 | PLLSAI N192/R5/DivR4及共享PLLM25锁定，LCD9.6 MHz；SAI2走PLLI2S | 音频只配置PLLI2S；PTP通过自身时间/增量校正，不改变主PLL或LCD支路 |
+| 音频预留 | PI4～PI7、PG10、PD6；PH15额外保留，PH7/PH8共享I2C3 | PH15 BSP宏与原理图用途不同，按第4.7节核查后才决定IRQ配置 |
 
-团队在配置前指定每项负责人；负责人通过CubeMX维护硬件配置，App/BSP集中映射句柄，避免不同同学覆盖同一资源。这里规定资源与服务边界，不实现UDP协议、同步算法或音频驱动。
+这里固定架构与配置目标，当前SBCG尚未实现PTP、角色识别、温度UDP或音频。第5.5～5.9节规定后续实现边界；不得把本文的拟定接口当作现有代码。
 
 ## 4. 完整引脚清单
 
-### 4.1 LCD RGB与时序：28个 LTDC 引脚
+### 4.1 屏幕统一RGB565：20个LTDC AF信号与8个低位GPIO
 
-依据[S1]图29、图33、表11及[S2]表12；由[S5] `BSP_LCD_MspInit()` 交叉核对。RGB888 是屏幕物理接线；帧缓冲可以选 RGB565，仍保留这一组物理引脚。
+板上实际连线来自[S1]图29、图33、表11与[S2]表12。RGB565有效颜色线为R3～R7、G2～G7、B3～B7，加CLK/HSYNC/VSYNC/DE，共20个LTDC AF信号；G3必须是板上PJ10，不照搬GUI项目误选的PH14。其它8根已焊接的低位颜色线用对应MCU GPIO推挽输出0（L0），避免屏幕输入浮空；不增加电路。**28是屏幕信号总数，不是28根RGB颜色数据线；其中24颜色+4时序。** 不调用默认BSP_Msp把全部28脚重新设成RGB888 AF。
 
 | 原始 MCU Pin（球位） | 板级物理接口/网络 | 复用功能 | 推荐 User Label | 参数 | 占用与待验证项 |
 | --- | --- | --- | --- | --- | --- |
-| PI15（G4） | U19-5 / LCD_R0 | LTDC_R0 / AF14 | LCD_R0 | L1 | 已硬连屏，需保留 |
-| PJ0（R6） | U19-6 / LCD_R1 | LTDC_R1 / AF14 | LCD_R1 | L1 | 已硬连屏，需保留 |
-| PJ1（R7） | U19-7 / LCD_R2 | LTDC_R2 / AF14 | LCD_R2 | L1 | 已硬连屏，需保留 |
+| PI15（G4） | U19-5 / LCD_R0 | GPIO_Output，推挽恒低 | LCD_R0_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
+| PJ0（R6） | U19-6 / LCD_R1 | GPIO_Output，推挽恒低 | LCD_R1_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
+| PJ1（R7） | U19-7 / LCD_R2 | GPIO_Output，推挽恒低 | LCD_R2_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
 | PJ2（P7） | U19-8 / LCD_R3 | LTDC_R3 / AF14 | LCD_R3 | L1 | 已硬连屏，需保留 |
 | PJ3（N8） | U19-9 / LCD_R4 | LTDC_R4 / AF14 | LCD_R4 | L1 | 已硬连屏，需保留 |
 | PJ4（M9） | U19-10 / LCD_R5 | LTDC_R5 / AF14 | LCD_R5 | L1 | 已硬连屏，需保留 |
 | PJ5（M14） | U19-11 / LCD_R6 | LTDC_R6 / AF14 | LCD_R6 | L1 | 已硬连屏，需保留 |
 | PJ6（K12） | U19-12 / LCD_R7 | LTDC_R7 / AF14 | LCD_R7 | L1 | 已硬连屏，需保留 |
-| PJ7（J12） | U19-13 / LCD_G0 | LTDC_G0 / AF14 | LCD_G0 | L1 | 已硬连屏，需保留 |
-| PJ8（H12） | U19-14 / LCD_G1 | LTDC_G1 / AF14 | LCD_G1 | L1 | 已硬连屏，需保留 |
+| PJ7（J12） | U19-13 / LCD_G0 | GPIO_Output，推挽恒低 | LCD_G0_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
+| PJ8（H12） | U19-14 / LCD_G1 | GPIO_Output，推挽恒低 | LCD_G1_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
 | PJ9（J13） | U19-15 / LCD_G2 | LTDC_G2 / AF14 | LCD_G2 | L1 | 已硬连屏，需保留 |
 | PJ10（H13） | U19-16 / LCD_G3 | LTDC_G3 / AF14 | LCD_G3 | L1 | 已硬连屏，需保留 |
 | PJ11（G12） | U19-17 / LCD_G4 | LTDC_G4 / AF14 | LCD_G4 | L1 | 已硬连屏，需保留 |
 | PK0（G13） | U19-18 / LCD_G5 | LTDC_G5 / AF14 | LCD_G5 | L1 | 已硬连屏，需保留 |
 | PK1（F12） | U19-19 / LCD_G6 | LTDC_G6 / AF14 | LCD_G6 | L1 | 已硬连屏，需保留 |
 | PK2（F13） | U19-20 / LCD_G7 | LTDC_G7 / AF14 | LCD_G7 | L1 | 已硬连屏，需保留 |
-| PE4（A1） | U19-21 / LCD_B0 | LTDC_B0 / AF14 | LCD_B0 | L1 | 已硬连屏，需保留 |
-| PJ13（B9） | U19-22 / LCD_B1 | LTDC_B1 / AF14 | LCD_B1 | L1 | 已硬连屏，需保留 |
-| PJ14（C9） | U19-23 / LCD_B2 | LTDC_B2 / AF14 | LCD_B2 | L1 | 已硬连屏，需保留 |
+| PE4（A1） | U19-21 / LCD_B0 | GPIO_Output，推挽恒低 | LCD_B0_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
+| PJ13（B9） | U19-22 / LCD_B1 | GPIO_Output，推挽恒低 | LCD_B1_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
+| PJ14（C9） | U19-23 / LCD_B2 | GPIO_Output，推挽恒低 | LCD_B2_ZERO | L0 | 已硬连屏；不启用LTDC AF，固定输出0 |
 | PJ15（D10） | U19-24 / LCD_B3 | LTDC_B3 / AF14 | LCD_B3 | L1 | 已硬连屏，需保留 |
 | **PG12（C7）** | U19-25 / LCD_B4 | **LTDC_B4 / AF9** | LCD_B4 | L1 | 不能统一套用AF14 |
 | PK4（D7） | U19-26 / LCD_B5 | LTDC_B5 / AF14 | LCD_B5 | L1 | 已硬连屏，需保留 |
@@ -207,10 +210,10 @@
 | 无MCU信号引脚 | **CN6-4 / 3V3 → DHT11 VCC** | 电源 | 无GPIO别名 | 3.3 V供电，短线 | 核对实际模块支持3.3 V；不默认接5 V |
 | 无MCU信号引脚 | **CN6-6或CN6-7 / GND → DHT11 GND** | 地 | 无GPIO别名 | 共地 | 只接地针，不把VIN/5V当GND |
 | 无MCU信号引脚 | 裸DHT11的3号脚 | NC | 无 | 不连接 | 仅适用于4脚裸器件；三针小板按其丝印接，不能套用裸件脚序 |
-| 无外部引脚 | A板串口或触控设置，UDP共享到B | 软件手动设温 | environment_temperature_c、temperature_source、temperature_version | 基础功能保留，UI标记MANUAL/DHT11/HOLD_LAST | 不把失效或超龄读数标成新有效采样；故障保持最后有效值 |
+| 无外部引脚 | A板串口或触控设置，UDP共享到B | 软件手动设温 | environment_temperature_milli_c、temperature_source、temperature_version | 基础功能保留，UI标记MANUAL/DHT11/HOLD_LAST | 不把失效或超龄读数标成新有效采样；故障保持最后有效值 |
 | 无外部引脚 | MCU内部 | ADC1_IN18 / Temperature Sensor | mcu_die_temperature_c | 仅诊断，不默认启用 | 不作为环境温度；与VBAT共用内部通道 |
 
-PG7在[S1]表11和图26中只接Arduino D4；与第4.1～4.5节的LTDC、FMC、RMII、VCP和PA15/PPS没有引脚重叠。此前给I2C温度模块预留的PB8/PB9、模拟温度预留的PA0不再为DHT11占用；PH7/PH8继续服务触控/音频I2C3，TIM2继续留给PPS/同步。
+PG7在[S1]表11和图26中只接Arduino D4；与第4.1～4.5节的LTDC、FMC、RMII、VCP和PA15/PPS没有引脚重叠。此前给I2C温度模块预留的PB8/PB9、模拟温度预留的PA0不再为DHT11占用；PH7/PH8继续服务触控/音频I2C3，TIM2仅留给统一时间服务的PPS输出。
 
 **接线前核对上拉。** 奥松典型电路使用约4.7 kΩ上拉；若课程三针DHT11小板已带电阻且上拉到其3.3 V电源，直接使用该小板，不额外加电路。若是没有上拉的裸件，PG7开漏方案尚不满足通信条件，不能用MCU内部弱上拉冒充外部上拉，也不能自行补非课程提供电阻。此时可进一步核查课程提供的上拉资源，或评估已硬连板上2.7 kΩ上拉的PB9/CN7-9：该脚与CN2、可能的A4焊桥共网，必须确认总线无其他设备、DHT11低电平驱动和波形合格后，再通过CubeMX迁移；**PB9不是本方案第二个同时使用的DATA脚**。
 
@@ -245,7 +248,7 @@ PH15先不给其它GPIO输出、PPS或课程模块使用；PD6同样保留。启
 | RCC HSE | Bypass Clock Source，输入25 MHz；B-04原理图X2为有源振荡器，经R30接PH0，并给PHY供25 MHz参考 |
 | 主PLL | HSE，PLLM=25、PLLN=400、PLLP=2；其它输出只按实际使用外设配置 |
 | 总线 | AHB /1，APB1 /4，APB2 /2；TIMPRE采用常规倍频路径并核对TIM2时钟 |
-| LTDC | **锁定**PLLSAIN=192、PLLSAIR=5、PLLSAI DivR=4：1 MHz×192/5/4=9.6 MHz；音频不得改这一支路 |
+| LTDC | 锁定PLLSAIN=192、PLLSAIR=5、PLLSAI DivR=4：9.6 MHz；所有图层与有效引脚模式RGB565；音频不得改这一支路 |
 | SAI2预留 | 选择RCC_SAI2CLKSOURCE_PLLI2S；PLLI2SN/Q/DivQ按采样率单独确定，不使用PLLSAI |
 | 电源/Flash | 在CubeMX按实际3.3 V和200 MHz配置电压档位、必要的OverDrive及Flash延时；不凭本表跳过时钟校验 |
 
@@ -257,19 +260,31 @@ ST部分示例代码使用 `HSE_ON`；这里依据上传B-04原理图选择有�
 
 | 项目 | CubeMX/初始化建议 |
 | --- | --- |
-| LTDC物理接口 | RGB888；按第4.1节固定引脚，AF推挽、No Pull、高/很高速度；PG12为AF9 |
+| LTDC引脚模式 | **RGB565**，第4.1节20个有效信号AF推挽、No Pull、高/很高速度；PG12/AF9；G3/PJ10；8个低位GPIO按L0推挽/低电平/低速 |
 | 面板有效区 | 480×272 |
-| 水平参数（实际长度） | HSYNC=41，HBP=13，HFP=32 |
-| 垂直参数（实际长度） | VSYNC=10，VBP=2，VFP=2 |
-| HAL寄存器字段核对 | HorizontalSync=40；VerticalSync=9；AccumulatedHBP=53；AccumulatedVBP=11；AccumulatedActiveW=533；AccumulatedActiveH=283；TotalWidth=565；TotalHeigh=285 |
+| 水平参数（实际长度） | **HSYNC=1，HBP=43，HFP=8**，采用GUI测试项目时序 |
+| 垂直参数（实际长度） | **VSYNC=10，VBP=12，VFP=4** |
+| HAL寄存器字段核对 | HorizontalSync=0；VerticalSync=9；AccumulatedHBP=43；AccumulatedVBP=21；AccumulatedActiveW=523；AccumulatedActiveH=293；TotalWidth=531；TotalHeigh=297 |
 | 极性 | HS/VS/DE：Active Low；Pixel Clock：IPC，按BSP选择输入像素时钟极性（通常界面对应正常/上升沿），核对生成的 `LTDC_PCPOLARITY_IPC` |
-| 图层固定约定 | 用户指定一层RGB565、480×272；起址0xC0000000、Alpha=255、背景黑；HAL字段必须为LTDC_PIXEL_FORMAT_RGB565。图层内存布局与绘图代码一致 |
+| 图层固定约定 | 一层RGB565、480×272，起址0xC0000000，Alpha=255、Alpha0=0、背景黑，Blend1/2均CA；HAL字段LTDC_PIXEL_FORMAT_RGB565 |
+| DMA2D | 输出DMA2D_OUTPUT_RGB565；使用输入图像时InputColorMode为RGB565；图像/业务颜色用uint16_t，无32位帧缓冲 |
 | 缓冲大小 | RGB565每帧480×272×2=261120字节；双缓冲522240字节；可将第二缓冲放0xC0040000，两块按256 KiB间距预留 |
 | GPIO控制 | PI12=LCD_DISP，PK3=LCD_BL_CTRL；推挽、No Pull、低速，初始低；SDRAM和LTDC图层准备好后再拉高 |
 
-CubeMX有的界面填写实际长度，有的显示累计值；以表中两套值区分，避免重复减1。时序来源[S5] LCD BSP及[S7] RK043FN48H组件参数，不是仅凭MCU数据手册推测。
+CubeMX有的界面填写实际长度、有的显示累计字段，按表核对，避免重复减1。时序取本机GUI项目[S10]；官方BSP的41/13/32与10/2/2只作为资料对照，不是本项目第二套可选配置。GUI用户报告已点亮，本次未复测；移植中将GUI的10 MHz改为团队锁定的9.6 MHz、修正G3并使用外部SDRAM，仍必须重新验证显示。
 
-RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP的 `BSP_LCD_LayerDefaultInit()` 默认ARGB8888；当前公开BSP另有 `BSP_LCD_LayerRgb565Init()`，若采用BSP须核对团队版本并统一初始化所有权。不得在CubeMX设置RGB565后又调用ARGB8888默认初始化覆盖。原始RGB565颜色：黑0x0000、白0xFFFF、红0xF800、绿0x07E0、蓝0x001F；内存像素使用uint16_t。BSP/DMA2D不同绘图函数对颜色参数的约定可能不同，须确认是否需要RGB888到RGB565转换，不能直接混用32位LCD_COLOR_*常量。详细颜色和图层设置见 `CubeMX_Step1.md`。
+**业务与配置都统一RGB565。** 默认 `BSP_LCD_Init()/BSP_LCD_MspInit()` 和ARGB8888图层初始化不得覆盖CubeMX的20个AF+8个恒低GPIO方案。绘图/图像内存均为uint16_t；SDK某个控制参数若要求内部其它编码，只在单一BSP包装内转换，不改变业务数据、帧缓冲或DMA2D的565配置。
+
+| 项目 | 已读取的GUI测试工程 | SBCG唯一目标 |
+| --- | --- | --- |
+| 引脚模式/图层 | 两者都是RGB565 | 同样全部RGB565；有效G3从PH14纠正为板上PJ10，低8位GPIO输出0 |
+| 水平时序 | 1 / 43 / 8 | 1 / 43 / 8 |
+| 垂直时序 | 10 / 12 / 4 | 10 / 12 / 4 |
+| 像素时钟 | PLLSAIN200/R5/DivR4 → 10 MHz | PLLSAIN192/R5/DivR4 → 9.6 MHz，保持团队时钟约定 |
+| 帧缓冲 | 0x20010400，内部SRAM | 0xC0000000，完成FMC/SDRAM与MPU配置后使用 |
+| SDRAM CKE连线 | GUI.ioc选PH2 | 板上实际CKE为PC3；不照搬PH2 |
+
+配置完成后验证黑/白/红/绿/蓝、灰阶和渐变、整屏/边缘/刷新，以及200 MHz系统、音频采样同时运行。不能仅以“背光亮”证明颜色脚、时序、SDRAM和帧缓冲全正确。
 
 ### 5.3 S1：FMC SDRAM
 
@@ -313,34 +328,32 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 - 两板MAC必须不同。建议本地管理MAC `02:00:00:00:00:01` / `02:00:00:00:00:02`；网络团队可另行统一。
 - 无DHCP服务器的独立交换机测试网络，可约定静态IP `192.168.10.1` / `192.168.10.2`、掩码 `255.255.255.0`；均为团队建议，不是板卡固有地址。不要把普通交换机当DHCP服务器。
 - 需要ETH/LwIP中断及正确的DMA描述符/缓冲内存配置。M7 DTCM不能默认作为ETH DMA缓冲；参考当前CubeF7示例选DMA可访问区域，并处理32字节缓存行对齐与Cache维护/MPU配置。
-- RMII的50 MHz时钟不等于两板时间已经同步。满足±10 μs仍须实现板端时间同步、时间戳和偏差控制；是否采用ETH硬件时间戳、协议和收敛策略由同步模块单独设计。Ping通只证明连通性。
+- **统一时间源已经选定：ETH IEEE1588 MAC硬件时钟。** A为固定PTP主时钟，B为从时钟；采用PTPv2/UDP IPv4双向时间交换（事件端口319、一般消息320），TX/RX时刻取MAC硬件时间戳，不取LwIP任务/ETH中断到达时刻。HAL V1.17.4有HAL_ETH_USE_PTP保护的配置/取时/TX/RX时间戳接口。[S11]
+- 时间服务统一返回 `SyncTime_GetNs()`：64位PTP纳秒时间与LOCK状态；需要微秒展示时仅做整数ns/1000。采用十进制纳秒rollover，读取秒/纳秒须处理跨秒一致性。A的共同纪元不要求UTC；测量只比较同一同步纪元内的时间。
+- B通过PTP时间/增量（addend）校正跟随A；不修改200 MHz主PLL、LCD PLLSAI或音频PLLI2S来校正时间。声音到达时间由采样锚点及样本索引映射到PTP时间域，不把DMA回调时间直接当声音到达时刻；任何模块都不使用TIM2作为第二套测量时间。
+- TIM2仅把PTP秒事件送到PA15，按第5.6节执行。失锁不自动切换到TIM2软件时钟并继续声称同步。普通交换机排队/路径不对称仍进入误差预算；硬件支持1588不等于已达到±10 μs，必须实测30秒收敛和连续10次PPS边沿差。
 
-### 5.6 U1/P1：调试串口、TIM2唯一所有者与1PPS
+### 5.6 U1/P1：串口与由PTP驱动的TIM2 PPS
 
-**USART1**：Asynchronous、115200 bit/s、Word Length=8 Bits、Parity=None、Stop Bits=1、Hardware Flow Control=None、TX/RX、Oversampling=16；PA9/PB7均AF7。接CN14的ST-LINK USB，PC侧两块板对应的COM号分别记录，不能硬编码都用同一个COM号。串口接收若使用中断，启用USART1 IRQ；长日志不要在同步/采集的关键中断中阻塞发送。
+USART1仍为PA9/PB7、115200 8N1、无流控、Oversampling16，经CN14 ST-LINK VCP。默认R64接通/R63断开/R58接通；不占用PA9为USB_FS_VBUS。[S1，第48页]
 
-默认板级路由为R64接通、R63断开、R58接通，保留PA9→VCP_TX、PJ12→OTG_FS_VBUS。若把PA9改为USB_OTG_FS_VBUS，就失去VCP_TX。[S1，表11脚注，第48页] 板载VCP不需要外接USB转串口，也不需要主MCU的USB CDC。
+**TIM2只有一个主人，但不再是测量时间基准。** 统一时间服务拥有ETH/PTP和TIM2输出驱动；其它模块只调用PTP时间接口，不另初始化TIM2。原先ARR999999自由运行1 Hz并拼接TIM2时间的方案废止，避免与1588时间域并存。
 
-**1PPS首选PA15/TIM2_CH1**：SYS Debug选Serial Wire，释放PA15的JTAG功能；AF1推挽、No Pull、低/中速度，从CN7-2 / D9接示波器。建议使用硬件输出比较/定时器边沿，避免任务调度决定上升沿。
-
-| 项目 | 配置/核对 |
+| 参数 | 唯一目标配置 |
 | --- | --- |
-| 定时器 | **同步时间服务唯一管理TIM2**，Internal Clock、32位；不改作HAL时基、独立采集时基或不兼容输入捕获 |
-| 输出 | CH1 PWM Generation，PWM Mode1、Active High，用于第一阶段输出自测；正式同步按统一时间基准安排边沿 |
-| 自测计数参数 | 目标200 MHz HCLK时TIM2=100 MHz：PSC=99；若保留当前216 MHz HCLK且常规倍频，TIM2=108 MHz：PSC=107。两者均得到1 MHz；ARR=999999、CCR1=100 → 1秒周期、100 μs高电平 |
-| 通用公式 | fCNT=fTIM/(PSC+1)；周期=(ARR+1)/fCNT；PWM1高电平时长=CCR1/fCNT |
-| 信号别名 | PPS_OUT；业务侧可使用pps_timer指向实际htim2，不改生成句柄 |
-| 启动状态 | 未同步时保持低或明确标注未收敛；输出启动/首次脉冲不能被误认为共同整秒 |
+| 输出 | PA15 / CN7-2 / D9，TIM2_CH1，AF1，标签PPS_OUT |
+| TIM2输入/计数 | 目标HCLK200 MHz、APB1定时器100 MHz；PSC=99，计数1 MHz；其它模块禁止改分频 |
+| 触发源 | ETH MAC每PTP秒的内部PPS事件 → TIM2 ITR1，HAL映射常量TIM_TIM2_ETH_PTP；不使用板上PB5作外部跳线 |
+| TIM2工作方式 | 内部时钟，Slave Reset Mode由该PTP事件清零计数；CH1 PWM1正脉冲，CCR1=100（100 μs） |
+| ARR | **0xFFFFFFFF**，避免定时器自行每秒溢出产生另一组脉冲；1秒周期来自PTP触发，不来自ARR999999 |
+| 启动/失锁 | 有效同步锁定后才开启验收PPS；初始化时确保输出低、CNT不落在脉冲区；失锁停止有效PPS并显示状态 |
+| 到达时刻 | SyncTime_GetNs() / 采样锚点转换返回PTP时间；禁止读TIM2 CNT当绝对或同步时间 |
 
-**TIM2只能有一个主人。** 采用目标200 MHz HCLK后，唯一配置为TIM2输入100 MHz、PSC=99、计数1 MHz、ARR=999999；表中的PSC=107只解释迁移前216 MHz工程，不是给另一模块随意更换的配置。CubeMX统一生成一次初始化，由同步时间服务/BSP统一启动和管理；网络同步、PPS、声音检测与测距模块均不得再次调用TIM2初始化、另改PSC/ARR或直接重置CNT。
+V1.17.4 TIM扩展头文件包含TIM_TIM2_ETH_PTP，ST资料说明PTP PPS可连TIM2；具体CubeMX内部映射、触发极性、重置与PWM边沿必须在该版本及实物验证。[S11] 参数由统一负责人通过CubeMX配置；如果界面不能表示该映射，记录为未完成配置并按AGENTS安全扩展规则处理，不手改.ioc或偷偷改生成初始化。
 
-声音到达时刻通过统一时间服务获取，例如拟定接口 `SyncTime_GetUs()`，返回同一同步时间域的64位微秒时间戳及同步状态；该API是后续实现约定，不是当前已经存在的代码。TIM2每1秒回绕，服务必须统一处理秒计数、回绕与读取一致性，不能把裸CNT当绝对到达时间。时钟偏差/相位校正由该服务内部统一处理；需要变更硬件时先共同评审并通过CubeMX生成，不能让各模块各自重新初始化。
+PPS验收时每个上升沿表示PTP共同整秒，而不是复位后的本板自由运行整秒。须验证没有启动伪脉冲、PTP校时重复脉冲、提前ARR溢出脉冲，且100 μs脉宽与连续10次±10 μs边沿差均合格。
 
-以上固定PWM只用于验证接口、频率和脉宽。正式验收时必须把**同步后的共同整秒时刻**转换成各板硬件计数值，安排上升沿和下降沿，并随同步算法校正相位/频率。两板从各自复位时刻自由跑1 Hz，即使频率准确，也不满足同步要求。不得用 `HAL_Delay(1000)` 或普通RTOS延时生成验收脉冲。
-
-若教师要求严格GPIO_Output，PG6/CN4-3可作为备选，初始低、推挽、No Pull，由同一同步时基的定时器中断/允许的硬件路径控制；但ISR延迟会进入误差预算，必须在网络、LCD和音频同时运行时验证。PA15和PG6两个方案不能混用为默认。
-
-**示波器接入**：CH1探头尖端接A板CN7-2，CH2接B板CN7-2；两探头地夹分别接本板CN6-6或CN6-7的GND。确认两板供电/测量地允许共地；不把地夹接3V3、5V或VIN。用高阻/10×探头，观察0～3.3 V正脉冲，以A板上升沿触发。两板PPS信号线不互接；示波器只观察，不作为同步时钟源。
+示波器CH1尖端接A板CN7-2、CH2接B板CN7-2，地夹各接本板CN6-6/7 GND；确认供电允许共地，高阻/10×探头观察0～3.3 V。PPS信号线不互接，示波器不是同步源。
 
 ### 5.7 X1：DHT11 GPIO与时序设置
 
@@ -354,24 +367,73 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 | 读取节奏 | 建议每5秒读取一次，所有重试也保持间隔>2秒；不为快速显示而每100 ms读取 |
 | 响应/位宽 | 验证响应与40位波形，设置超时；按实际版本识别短/长高电平位，不能假设每个厂家的典型值完全相同 |
 | 帧校验 | 5字节，高位先出；前4字节之和取低8位等于第5字节才接受 |
-| 变量 | environment_temperature_c、relative_humidity_pct、temperature_valid、temperature_sample_age_ms、temperature_source |
+| 变量 | environment_temperature_milli_c、relative_humidity_pct、temperature_valid、temperature_sample_age_ms、temperature_source；environment_temperature_c仅显示 |
 | 数据时效 | 返回的是上一次测量；长时间停读后按正常>2秒间隔预读/再读，不用无间隔的两连读绕过采样限制 |
 
 默认保持GPIO开漏输出模式即可释放总线并读取引脚输入，不需要反复把生成的GPIO初始化改成输入/推挽。若后续选EXTI或定时器捕获，先明确新的CubeMX配置和驱动所有权，不能在现有生成代码里偷偷追加AF或IRQ初始化。
 
 微秒计时不能用 `HAL_Delay()`；若使用DWT，其周期计数换算依据实际 `SystemCoreClock`，目标200 MHz和当前216 MHz不可混用。**读取DHT11时不全局关闭中断数毫秒**，以免破坏±10 μs同步、ETH服务或音频DMA。带中断的短轮询在高负载下仍可能漏掉DHT11位边沿；按响应、位宽、校验和超时检测失败，延后重试，不为温度读取阻塞时间同步。正式联调应同时刷新LCD、收发网络并采集音频；若失败率不可接受，再经CubeMX设计独立捕获方案。
 
-**两块板必须用同一个温度。** 一只DHT11接A板，A温度服务是唯一自动温度来源；B通过UDP接收，不独立读取另一只传感器。两板使用相同 `environment_temperature_c` 和相同声速算法，避免两板声速不同影响同次测量两屏距离差≤1 mm的目标；时间戳、算法、传感器精度及最终测距指标仍需实测。传感器放通风处，避开MCU、背光和稳压器热源。
+**两块板必须用同一个温度。** 一只DHT11接A板，A温度服务是唯一自动温度来源；B通过UDP接收，不独立读取另一只传感器。两板使用相同 `environment_temperature_milli_c` 整数值和第5.9节固定声速算法，避免两板声速不同影响同次测量两屏距离差≤1 mm的目标；时间戳、算法、传感器精度及最终测距指标仍需实测。传感器放通风处，避开MCU、背光和稳压器热源。
 
 - A发布经校验的温度值、temperature_version、来源和采样时效。UDP有丢包/乱序，B不采用旧版本覆盖新值；关键更新需确认接收并在双方约定的后续测量生效。
 - **同一测量锁定同一温度版本/快照**：不能A已用新温度、B仍用旧温度，也不能在同一测量计算中途更新声速。温度版本和measurement_id共同用于比对；发送/接收算法在后续协议增量实现。
 - DHT11失效、校验失败或超时，**两板均保留上次已共享的有效值**，标记HOLD_LAST/超龄；不写成0℃。UDP暂时中断也不独立产生另一温度值。首次启动尚无有效值时标记未就绪，不能伪造一次0℃采样。
 - 串口手动设温必须保留。A接收手动设温后作为唯一温度发布源同步给B；若命令从B输入，由B转交A确认后再共同生效，不各自直接改变量。手动/自动模式切换同样版本化并显式显示。
-- 温度传输使用双方约定的数值单位与解码方式（可用整数毫摄氏度保留小数），不因某些DHT11每1℃更新就把所有模块强制取整。实际读到0℃若校验有效仍是有效温度，失效状态不能用数值0表示。
+- 温度传输固定使用int32_t整数毫摄氏度 `environment_temperature_milli_c`，不因某些DHT11每1℃更新就把所有模块强制取整。实际读到0℃若校验有效仍是有效温度，失效状态不能用数值0表示。
 
 奥松V1.3手册给出约±2℃温度精度、秒级响应，测试条件包含25℃和5 V；3.3 V使用时仍需实测。因此自动获得读数不等于课程的测距温补指标已经通过。温度解码按实际器件版本确定，新版本可能含小数及符号；不要一概把第4字节忽略。[S8]
 
 内部温度只可作为诊断：ADC1_IN18与VBAT共用内部通道，不能同时启用两者并把VBAT当温度；如启用，等待至少10 μs、采样至少10 μs，并按VDDA及出厂校准值换算。[S2，第43、151页]
+
+### 5.8 A/B角色：同源同固件，以MCU UID固定识别
+
+角色机制固定为**96位MCU UID允许名单**，不用传感器是否响应、启动顺序、MAC大小或手动临时猜测角色。
+
+1. 配置前读取两块板的HAL_GetUIDw0/w1/w2，记录三个32位字；由团队指定接DHT11的实体为A，另一块为B。
+2. 在后续用户自有板级配置中放入同一张BOARD_A_UID、BOARD_B_UID映射表，两板编译/烧录同一份程序和相同映射；上电按三个字精确比较决定角色。实际UID尚未提供，本文不编造值。
+3. UID未知、两条配置相同或检测到同角色冲突时标记UNCONFIGURED/ROLE_CONFLICT；不读取DHT11、不启用验收测量，并经串口/屏幕说明。传感器故障不改变A/B角色。
+
+| 功能 | A板 | B板 |
+| --- | --- | --- |
+| PTP | 固定主时钟，建立共同纪元 | 固定从时钟，收敛到A |
+| DHT11 | 仅A的PG7接线并读取；手动设温也由A统一发布 | PG7预留，不读第二只DHT11；只接收已确认温度 |
+| IP / MAC | 192.168.10.1 / 02:00:00:00:00:01 | 192.168.10.2 / 02:00:00:00:00:02 |
+| 测距/显示 | 使用同一测量ID、两个PTP到达时刻及温度版本 | 使用完全相同字段和math_version=1公式 |
+| 串口角色输出 | role=A及本机/对端UID | role=B及本机/对端UID |
+
+上述地址用于课程独立测试网络，掩码255.255.255.0。角色表是软件板级配置，.ioc硬件基线相同；使用HAL读UID不增加GPIO。UID比较顺序固定w0/w1/w2，传输字段采用网络字节序。角色识别及UDP/PTP实现尚未写入固件。
+
+### 5.9 声速与距离：math_version=1全整数约定
+
+两板调用未来同一公共测量模块，禁止复制两套浮点/整数实现。环境温度的计算/传输规范值是 `int32_t environment_temperature_milli_c`（单位0.001℃）；名称 `environment_temperature_c` 仅作为UI的摄氏度显示，不进入测距计算。显示也可用整数商/余数格式化。
+
+采用线性近似 c=331.3+0.606T（m/s）作为本项目统一模型，不声称其包含湿度/气压全部影响；标定/提高部分另行统一修订模型版本。[S12]
+
+```text
+round_div_signed(n, d) = n>=0 ? (n+d/2)/d : -((-n+d/2)/d)
+    // d>0；整数除法向零截断；四舍五入，正负恰半均远离零
+
+sound_speed_mm_s = 331300
+                 + round_div_signed(606 * environment_temperature_milli_c, 1000)
+
+delta_ns = t_B_ns - t_A_ns
+distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
+```
+
+中间乘法用64位整数，delta_ns为int64_t。若PTP绝对时刻为uint64_t，先比较两时刻并求非负差值，检查不超过100000000 ns，再按先后转换为有符号差；不能直接无符号相减后依赖溢出或对INT64_MIN取abs。仅对同一测量ID、同一PTP纪元、已锁定且同一temperature_version的完整数据计算。统一温度模型输入范围-20000～60000毫摄氏度（实际模块测量范围另校验）；温度乘法与距离乘法均在64位范围内。此为两端声到达时间差，**不除以2**。按任务书声源位于两板基线延长线、距近板0.5～1 m布置时，c×时差对应麦克风间距；声源在其它位置时不能把声程差当板间距。[S3，第1、4页]
+
+方向：delta_ns>0为A侧、<0为B侧，=0为未定。默认结果整数mm；屏幕cm/m文本由这个共同distance_mm格式化，不另算浮点距离。DHT失效仍使用最后共同有效温度版本；新温度不在一笔测量中途生效。
+
+| 共同输入 | 两板共同结果 |
+| --- | --- |
+| T=20.000℃，20000毫摄氏度 | sound_speed_mm_s=343420 |
+| T=25.000℃，25000毫摄氏度 | sound_speed_mm_s=346450 |
+| T=-10.000℃，-10000毫摄氏度 | sound_speed_mm_s=325240 |
+| T=20.000℃，delta_ns=1000000 | distance_mm=343，A侧 |
+| T=20.000℃，delta_ns=-1000000 | distance_mm=343，B侧 |
+
+公共模型、取整规则及版本相同可消除两边算法表示差异，不能代替时间同步、声音检测、标定和≤1 mm两屏差的实测验证。
 
 ## 6. 分步CubeMX配置指南
 
@@ -380,14 +442,14 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 3. **SYS/RCC/Clock Configuration。** Debug选Serial Wire，保留PA13/PA14；配置HSE25 MHz及第5.1节基线。确认SYSCLK/HCLK、APB时钟、TIM2、SDCLK和LTDC时钟实际显示值，无时钟错误。暂不启用主MCU USB。
 4. **固定GPIO和标签。** 按第4节逐脚选择功能和User Label；对自动分配到错误焊接位置的引脚，在图形界面重新选择、必要时锁定。重点检查PG12/AF9、SDCKE0/PC3、SDNE0/PH3、USART1_RX/PB7、ETH_TXD0/PG13和ETH_TXD1/PG14。
 5. **FMC。** 启用SDRAM Bank1，16位、8列、12行、4内部Bank和第5.3节参数；确认全部38个FMC引脚。生成后的应用还需SDRAM命令序列和刷新设置，不能只打开FMC就使用外部内存。
-6. **LTDC。** 配置28个RGB/时序引脚，输入面板时序和极性；设置一层RGB565及缓冲地址。添加PI12/PK3两个控制GPIO。先验证屏幕纯色和文字，之后再考虑DMA2D、双缓冲或波形显示。
+6. **LTDC。** 选择RGB565引脚模式，按第4.1节配置20个有效AF及8个低位GPIO恒零；G3选PJ10。输入第5.2节唯一时序1/43/8和10/12/4，图层/帧缓冲/DMA2D均565。完成SDRAM/MPU再验证整屏颜色。
 7. **I2C3/触控。** 选择PH7/PH8，100 kHz、7位寻址；PI13先输入轮询。接入与当前软件包相符的FT5336/BSP驱动；屏幕触控方向实测后再启用EXTI。复位不增加GPIO。
 8. **USART1。** Asynchronous，手动核对PA9 TX和PB7 RX，填入U1参数；选择需要的RX中断。两块板分别经CN14接电脑，测试发送和设温命令。不要选择PC6/PC7来代替VCP。
 9. **ETH/LwIP。** RMII、LAN8742、E1参数，核对全部固定引脚和PG2占用；设置不同MAC/IP，选择适合应用的LwIP运行方式及NVIC。按所用CubeF7/HAL版本处理描述符、链接脚本和Cache，保留同步模块的时间戳设计位置。
-10. **TIM2/PPS。** 统一时间服务负责人维护PA15/TIM2_CH1和PPS_OUT；目标计数固定1 MHz、周期1秒，200 MHz系统时PSC=99。声音到达/同步/PPS均走第5.6节统一时间服务，禁止另一模块另改分频或初始化。先测脉冲再验证同步。
+10. **PTP/TIM2 PPS。** 先落实ETH硬件PTP唯一时钟，再将其内部秒事件映射到TIM2 ITR1；PA15计数1 MHz、CCR100、ARR0xFFFFFFFF按第5.6节输出脉冲。声音时间戳取PTP，TIM2仅执行输出，禁止另一模块另改分频或初始化。
 11. **DHT11。** 一只DHT11仅接A板PG7，由A温度服务经UDP发布到B；共享基线中PG7可在B保留但不采样。Pinout选择PG7为GPIO_Output；在System Core → GPIO配置Output Open Drain、Output Level High、No Pull、Low Speed、User Label=`DHT11_DATA`，保存并Generate Code。预期main.h生成DHT11_DATA_Pin/DHT11_DATA_GPIO_Port，GPIO初始化开启GPIOG并设置PG7开漏/初始释放；独立GPIO文件模式时对应gpio.c/gpio.h。不用打开I2C1/ADC3，不更改TIM2/NVIC/DMA。基础手动设温保留。
 12. **保存与生成。** 仅点击CubeMX保存`.ioc`、Generate Code；配置保留USER CODE区。检查生成的GPIO AF、外设初始化与时钟值，业务逻辑放USER CODE区或独立文件。SDRAM命令、触控驱动、PHY管理、时间同步并非全部由CubeMX自动完成。
-13. **队友共用。** 两板使用同一已审核`.ioc`基线与软件包版本；仅在业务配置中区分board_role、MAC/IP和实测校准，不改物理引脚表。运行验收前核对第8节清单。
+13. **队友共用。** 两板使用同一.ioc基线、固件及BOARD_A_UID/BOARD_B_UID角色表；上电UID查表确定角色。两端共用第5.9节math_version=1整数模块和测量快照，运行验收前核对第8节清单。
 
 本轮记录用户已完成的NG器件/1024K工程基线并交付可审核配置指南；PG7、目标时钟、FMC和LTDC尚未在CubeMX配置。按SBCG/AGENTS.md第4节，用户在CubeMX完成本里程碑的设置并重新生成后，再核查生成代码、开展DHT11驱动实现和硬件测试。此处不通过手写HAL初始化替代生成过程。
 
@@ -405,7 +467,7 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 | PG12：LTDC_B4 | AF9，其他所选LCD脚大多AF14；逐脚核对 |
 | PG2：PHY RXER/地址strap | 有硬连线，即使RMII界面只显示9根常用线，也不可当空闲GPIO输出 |
 | PA15：PPS与JTAG/SPI | SYS只选Serial Wire；不再选JTAG、SPI片选或另一课程模块同脚 |
-| TIM2：PPS与采集/系统时基 | 统一时间服务唯一所有者，1 MHz/1秒周期固定；其它模块只取同步时间，不另初始化、改PSC/ARR或重置CNT |
+| 时间域与TIM2 | ETH/PTP为唯一测量时间；TIM2 1 MHz只执行PTP秒脉冲，取消ARR999999自由秒时钟；所有者唯一 |
 | PB5：ETH_PPS_OUT候选与USB_HS_ULPI_D7 | 板上PB5连USB PHY，且不是已核实的Arduino输出口；不默认用PB5替代本方案PPS接口 |
 | PI1：Arduino D13与板载LD1 | D13带LED负载；不是优先选择的验收PPS接口 |
 | Arduino A4/A5与D14/D15 | CN5-5/6通过SB4/SB5、SB1/SB3在PF7/PF6与PB9/PB8之间选择；检查[S1]图26和桥位实物，不能同时视为独立信号 |
@@ -433,7 +495,9 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 - [ ] SDRAM上电命令、刷新、内存区域和Cache方案已统一；LCD图层像素格式与绘图程序一致。
 - [ ] 触控型号、7位地址及方向已确认；共享I2C3访问不存在重复初始化。
 - [ ] PHY地址/标识、50 MHz参考时钟、自动协商和拔插网线恢复已确认。
-- [ ] 已指定TIM2唯一负责人/统一时间服务；声音到达时刻不另初始化TIM2，1 MHz/1秒回绕处理一致。
+- [ ] 已指定统一时间服务负责人；声音/网络都在ETH/PTP时间域，TIM2仅执行内部PTP秒事件，未另建TIM2测量时钟。
+- [ ] 已读两板UID、固定A/B角色表；A单只DHT11、B只接收共享温度，角色/IP/MAC重启后不互换。
+- [ ] 两端都调用math_version=1整数公式，同一测量使用相同毫摄氏度、t_A_ns/t_B_ns和取整规则。
 - [ ] 已保留PH15和PD6，核对V1.17.4 BSP与实物原理图的差异，SAI/DMA事件路径与GPIO事件分开。
 - [ ] 音频时钟源为PLLI2S，PLLSAI N192/R5/DivR4及LCD9.6 MHz保持锁定。
 
@@ -443,7 +507,7 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 - [ ] 双板通过交换机，在LCD刷新、串口输出、音频采集同时运行时，上电30秒内收敛。
 - [ ] 收敛后连续记录10个上升沿差 `Δt=tB−tA`，保存符号及最大绝对值，要求每次 `abs(Δt)≤10 μs`；不只取平均值。
 - [ ] 显示/串口能区分未同步、正在收敛、已收敛，示波器结果与软件偏差记录一致。
-- [ ] A板串口手动设温经UDP共同生效；两板每次测量绑定相同temperature_version和environment_temperature_c，显示温度/声速一致。
+- [ ] A板串口手动设温经UDP共同生效；两板每次测量绑定相同temperature_version和environment_temperature_milli_c，显示温度/声速一致。
 - [ ] 模拟DHT11失效及UDP丢包/乱序，两板保留最后共同有效值并显示状态；不把故障写成0℃。
 - [ ] DHT11为课程实际提供器件；PG7/CN4-5数据线、CN6-4电源、CN6-6/7地线及3.3 V上拉已确认。
 - [ ] 上电至少1秒、起始18～30 ms、读取间隔>2秒、完整40位及校验符合实际模块版本。
@@ -461,7 +525,8 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 | 课程DHT11小板 | 已确定单只接A、UDP共享到B；形态、上拉、厂家版本未现场确认 | 核对丝印和上拉；不使用两只独立温度参与同一测量 |
 | CubeMX系统时钟与显示配置 | 已读到6.18.1 / CubeF7 V1.17.4；NG/1024K已一致，当前仍216 MHz/HSE_ON且无LTDC | 按第一步指南核对系统时钟；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
 | 音频采样/时钟/DMA与IRQ | PLLI2S方向已定，PH15/PD6用途存在BSP/原理图差异 | 确认实物事件路径与DMA；禁止更改PLLSAI，不把BSP宏当接线证据 |
-| 时间服务实现/负责人 | 已约定TIM2单一所有者和统一微秒时间戳服务，具体人员/实现待落地 | 核对1秒回绕和校正一致性；自测PWM不能证明±10 μs同步 |
+| PTP时间服务/PPS内部映射 | 唯一时间源ETH1588、TIM2仅输出已定；协议/服务/映射尚未实现 | 验证硬件TX/RX时戳、跨秒读一致性、PTP→TIM2硬件PPS与指定交换机±10 μs |
+| 两板实际UID | UID角色机制已定，BOARD_A_UID/BOARD_B_UID值尚未读取提供 | 配置前记录真实UID，不填假值；同一固件未知UID停用测量 |
 | DHT11驱动与UDP温度版本 | 单DHT11共享、手动设温及保留最后值已定；协议尚未实现 | 实现版本确认/同次测量快照/失效状态，验证两屏差≤1 mm与温补误差 |
 | 允许的供电和示波器连接线 | 待现场器材确认 | 只使用课程提供器材，不增加未允许的电路 |
 
@@ -477,9 +542,12 @@ RGB565描述的是帧缓冲格式，板载28个LTDC引脚完整保留。ST BSP�
 | S4 | 用户提供 `STM32F746G引脚对应图.pdf`，1页 | Arduino信号与MCU端口交叉对照；CN8及5 V说明存在上述需纠正项 |
 | S5 | [ST官方32F746GDISCOVERY BSP](https://github.com/STMicroelectronics/32f746gdiscovery-bsp) | [LCD驱动](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_lcd.c)、[SDRAM驱动](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_sdram.c)、[SDRAM参数](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_sdram.h)、[板级引脚/地址](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery.h)、[FT5336触控驱动](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_ts.c) |
 | S6 | [ST官方CubeF7 Ethernet示例](https://github.com/STMicroelectronics/STM32CubeF7/blob/master/Projects/STM32746G-Discovery/Applications/LwIP/LwIP_HTTP_Server_Netconn_RTOS/Src/ethernetif.c) | HAL_ETH_MspInit引脚含PG2；LAN8742管理与协商；DMA/Cache结构参考，需匹配团队实际软件包版本 |
-| S7 | [ST官方RK043FN48H组件参数](https://github.com/STMicroelectronics/stm32-rk043fn48h/blob/main/rk043fn48h.h) | 480×272及HSYNC/HBP/HFP/VSYNC/VBP/VFP面板参数 |
+| S7 | [ST官方RK043FN48H组件参数](https://github.com/STMicroelectronics/stm32-rk043fn48h/blob/main/rk043fn48h.h) | 480×272及官方BSP时序资料对照；本项目唯一时序按S10，不混用 |
 | S8 | [奥松DHT11官方产品手册V1.3_20170331](https://www.aosong.com/userfiles/files/media/DHT11-V1_3%E8%AF%B4%E6%98%8E%E4%B9%A6%EF%BC%88%E8%AF%A6%E7%BB%86%E7%89%88%EF%BC%89.pdf) | PDF第2～6页：脚序、电压、典型4.7 kΩ上拉、>2秒采样、18～30 ms起始、40位帧及版本数据格式；实际模块仍需确认 |
 | S9 | 本机 `C:/Users/25747/STM32Cube/Repository/STM32Cube_FW_F7_V1.17.4/Drivers/BSP/STM32746G-Discovery/` 的 `stm32746g_discovery_audio.h/.c`；[ST公开音频头文件](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_audio.h)、[ST公开音频实现](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_audio.c) | 本机.h第118～132行PH15/EXTI宏；.c第650～686行SAI2使用PLLI2S，第1136～1181行PH15输入/NVIC与DMA；公开分支可变，结论优先按本机V1.17.4及实物图核查 |
+| S10 | 本机D:/electronic_design/GUI/GUI.ioc、Core/Src/main.c、stm32f7xx_hal_msp.c（本次只读） | RGB565模式/图层、H1/43/8与V10/12/4、PLLSAI200/R5/div4、G3=PH14、CKE=PH2、FB0x20010400；纠错依据仍为S1板级连线，未声称复测GUI |
+| S11 | [ST STM32F7 ETH官方培训](https://www.st.com/resource/en/product_training/STM32F7_Peripheral_ETH.pdf)第6页及本机CubeF7 V1.17.4 HAL ETH/TIM扩展头/实现 | MAC硬件PTP时间、PTP PPS到TIM2；HAL_ETH_USE_PTP/GetTime/TX/RX时戳、TIM_TIM2_ETH_PTP内部映射；本机HAL_GetUIDw0/w1/w2提供96位UID |
+| S12 | [TI超声测距设计资料](https://www.ti.com/mx/lit/pdf/tiduai8) | c=331.3+0.606T干空气线性近似；本项目自行规定整数单位/取整及双接收TDOA，不套用回波除以2 |
 
 公开资料入口：[ST产品及对应PCB原理图](https://www.st.com/en/evaluation-tools/32f746gdiscovery.html)、[UM1907公开PDF](https://www.st.com/resource/en/user_manual/dm00190424-discovery-kit-for-stm32f7-series-with-stm32f746ng-mcu-stmicroelectronics.pdf)、[DS10916公开PDF](https://www.st.com/resource/en/datasheet/stm32f746ng.pdf)。在线PDF修订可能不同于上述用户文件；不能将在线新版页码套用到上传Rev 4。BSP链接指向可更新分支，团队实施时应固定所用CubeF7版本。
 

@@ -16,14 +16,14 @@
 
 型号已经正确，直接打开现有SBCG.ioc，不重新创建工程。以下设置由用户在CubeMX完成，本次没有手改.ioc或生成的硬件初始化代码。
 
-## 1.1 配置前给队友确认的固定边界
+## 1.1 配置前四条已经固定的架构
 
-- **TIM2只能有一个主人**：统一时间服务维护1 MHz计数、1秒周期，目标200 MHz HCLK时PSC=99、ARR=999999；其它模块取同步时间戳，不改分频、不各自初始化TIM2。服务统一处理1秒回绕。
-- **两板必须用同一个温度**：一只DHT11接A板PG7，A通过UDP发布；同次测量锁定相同temperature_version/environment_temperature_c。失效保留上次共同有效值，串口手动设温也统一发布。
-- **音频不要改PLLSAI**：LCD固定PLLSAIN192、R5、DivR4，在HSE25 MHz/PLLM25下9.6 MHz；SAI2时钟源选PLLI2S。采样率相关PLLI2S参数后续通过CubeMX确定。
-- **PH15先预留**：本机V1.17.4 BSP把AUDIO_IN_INT定义为PH15；上传B-04图中PH15是TP3、PD6硬连WM8994 Audio_INT。两脚都保留，配SAI前核实真实IRQ事件路径；不把BSP宏直接当原理图连线。
+- **全部RGB565**：LTDC引脚模式和图层/帧缓冲/DMA2D均565。有效16颜色+4时序采用板级连线，G3/PJ10；未用8低位颜色GPIO输出0。时序固定H1/43/8、V10/12/4，PLLSAI192/R5/div4为9.6 MHz。GUI旧工程的PH14 G3、PH2 CKE和10 MHz不直接照搬。
+- **时间从ETH1588来**：MAC硬件PTP为唯一时间源，A主/B从，统一时间服务通过SyncTime_GetNs()返回纳秒时间及锁定状态。TIM2只把内部PTP秒事件变成PA15的100 μs脉冲，不再拼接TIM2时间；1 MHz、PSC99、ARR0xFFFFFFFF、CCR100由该服务唯一管理。
+- **测距全整数**：两板共用math_version=1及同一测量的temperature_version，温度用int32_t毫摄氏度；sound_speed_mm_s=331300+round_div_signed(606*environment_temperature_milli_c,1000)，单位mm/s。distance_mm=(sound_speed_mm_s*abs(delta_ns)+500000000)/1000000000；delta_ns为有符号t_B_ns-t_A_ns。取整、范围与安全求差按资源文档第5.9节，使用64位中间值，不除以2。
+- **A/B按UID固定**：两板同固件、同BOARD_A_UID/BOARD_B_UID表，上电96位UID查表；A读一只DHT11并发布温度，B只接收。实际UID待配置前读取，不编造；传感器故障不换角色。
 
-这些是团队目标配置约定，当前工程仍未启用TIM2/SAI/LTDC。详细证据和接口边界见《Hardware_Resources.md》第3.1、4.7、5.6、5.7节。
+显示/音频继续分别使用PLLSAI/PLLI2S；PH15和PD6按已核实的软件/原理图差异共同预留。当前SBCG尚未实现上述服务，先按《Hardware_Resources.md》第4.1、5.2、5.5～5.9节共同审核，再配CubeMX。
 
 ## 2. 第一步现在执行：SYS、RCC与系统时钟
 
@@ -90,7 +90,7 @@ cmake --build --preset Debug
 
 **RGB565表示帧缓冲颜色格式：R占5位、G占6位、B占5位，每像素16位、2字节，可表示65536种颜色。** 这是本项目选定格式，不再以ARGB8888作为默认图层。
 
-DISCO的屏与MCU之间已焊接24根RGB数据线和4根时序线。RGB565内存格式由LTDC读取并输出到该屏，保留《Hardware_Resources.md》第4.1节的完整引脚分配。CubeMX的RGB输出引脚模式与图层Pixel Format是两个设置：本板保留完整RGB888物理输出，而**图层选RGB565**。
+**CubeMX也选择RGB565引脚模式**，图层Pixel Format、帧缓冲和DMA2D输入/输出全部565。使用R3～R7、G2～G7、B3～B7及4个时序信号，共20个AF；G3按板级连线选择PJ10。屏另8个已焊接低位颜色线由原MCU脚推挽恒低，不浮空、不新增电路。硬件连线仍是24颜色+4时序，但不配置28个RGB888 AF。
 
 ### 3.1 LTDC图层设置
 
@@ -107,7 +107,7 @@ DISCO的屏与MCU之间已焊接24根RGB数据线和4根时序线。RGB565内存
 | Constant Alpha | 255 |
 | Default Alpha / Alpha0 | 0 |
 | 背景R/G/B | 0 / 0 / 0 |
-| Blending Factor 1/2 | PA×CA，对应BSP的PAxCA配置；RGB565没有像素Alpha，保持常量Alpha为255 |
+| Blending Factor 1/2 | CA/CA，常量Alpha255；两板同一设置 |
 
 生成代码中的关键核对字段：
 
@@ -119,6 +119,22 @@ pLayerCfg.ImageHeight = 272;
 ```
 
 变量名可能不同；检查含义和值，不把示例粘到生成函数里。ST BSP的默认 `BSP_LCD_LayerDefaultInit()` 为ARGB8888；公开版本还提供 `BSP_LCD_LayerRgb565Init()`。如果采用BSP，必须确认团队V1.17.4版本中的API和初始化所有权，避免重新覆盖CubeMX图层配置。[ST官方LCD BSP](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_lcd.c)
+
+### 3.1.1 同一套引脚与时序
+
+有效RGB565脚和8个恒低GPIO按《Hardware_Resources.md》第4.1节。GUI报告点亮的测试项目采用H1/43/8、V10/12/4，本项目统一沿用该时序；像素时钟按团队约定9.6 MHz，迁移后须复测。CubeMX实际长度与生成累计字段统一如下：
+
+| 参数 | GUI设置/生成字段 |
+| --- | --- |
+| HSYNC/HBP/HFP | 1 / 43 / 8 |
+| VSYNC/VBP/VFP | 10 / 12 / 4 |
+| HorizontalSync / VerticalSync | 0 / 9 |
+| AccumulatedHBP / VBP | 43 / 21 |
+| AccumulatedActiveW / H | 523 / 293 |
+| TotalWidth / TotalHeigh | 531 / 297 |
+| DMA2D | 输出DMA2D_OUTPUT_RGB565；输入图像层选择RGB565 |
+
+低位GPIO为PI15/R0、PJ0/R1、PJ1/R2、PJ7/G0、PJ8/G1、PE4/B0、PJ13/B1、PJ14/B2，推挽/初始Low/No Pull/Low Speed。避免BSP默认初始化把它们重新改成RGB888 AF。SDK内部控制参数的编码由单一BSP包装处理，业务图像和颜色始终16位565。
 
 ### 3.2 帧缓冲布局
 
@@ -172,7 +188,7 @@ BSP/DMA2D函数的颜色参数可能是RGB888/ARGB8888，再由内部转换输�
 - [ ] HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz，生成代码与GUI一致。
 - [ ] 工程从CubeMX保存/生成，现有Debug构建通过。
 - [ ] 两板共用同一配置基线及软件包；记录实物启动检查结果。
-- [ ] 队友已确认TIM2单一所有者、单DHT11 UDP温度快照及PLLSAI锁定；PH15和PD6均未分配给其他功能。
-- [ ] 团队已统一后续图层RGB565、2字节像素、261120字节帧缓冲；完整LCD接线保留。
+- [ ] 队友已确认ETH/PTP唯一时间、TIM2只做PPS、同一整数测距公式及UID角色表；单DHT11 UDP温度快照、PLLSAI锁定不变，PH15/PD6预留。
+- [ ] 团队已统一LTDC模式/图层/帧缓冲/DMA2D全部RGB565、20有效AF+8恒低GPIO和同一组时序；2字节像素、261120字节帧缓冲。
 
 本指南完成的是第一步系统配置操作和后续RGB565约定。屏幕显示、温度、PPS、网络和声音采集仍按《Hardware_Resources.md》的顺序分增量配置和验证，不以编译通过代替硬件验收。
