@@ -1,0 +1,10 @@
+build/
+.cache/
+.codex/
+Logs/
+Data/Raw/
+compile_commands.json
+*.elf
+*.bin
+*.hex
+*.map
