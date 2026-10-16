@@ -10,7 +10,7 @@
 
 ## 2. 环境和配置
 
-以SBCG根目录打开VS Code，按`.vscode/extensions.json`推荐安装CMake Tools、C/C++、clangd、Cortex-Debug。C/C++扩展保留GCC问题匹配器，代码提示由clangd负责，避免两个语言服务同时工作。
+以SBCG根目录打开VS Code，按`.vscode/extensions.json`推荐安装相关扩展，代码提示由clangd负责，避免两个语言服务同时工作。Debug、Release及主机诊断构建任务均内置独立GCC问题匹配器，不依赖C/C++扩展注册`$gcc`；安装或禁用该扩展不会影响这些任务的匹配器引用。
 
 - CMake使用已有Debug/Release预设，不增加构建系统，不修改生成CMake文件。
 - clangd显式读取`build/Debug/compile_commands.json`，保留本机已知编译器路径。使用Release构建不自动切换clangd数据库。
@@ -102,7 +102,7 @@ Logs已由Git忽略。报告记录动作、预设、工具路径、各阶段命�
 | clangd | 使用build/Debug数据库和现有query-driver检查Core/Src/main.c，退出0 |
 | 地址定位 | 从Debug ELF查询main符号，成功定位Core/Src/main.c:66 |
 | 配置与报告 | JSON及任务依赖有效；报告均保留NOT_RUN/false硬件状态；日志及Python缓存由Git忽略 |
-| 烧录 / 调试 / 实物运行 | 主机工作流初次验收未执行；后续仅连接诊断见第8节，未烧录当前固件，不能据此验收M0.1 |
+| 烧录 / 调试 / 实物运行 | 主机工作流初次验收未执行；后续连接诊断见第8节、用户烧录校验成功反馈见第9节，M0.1启动运行仍待验收 |
 
 本机验证不代表其它电脑的工具安装、VS Code扩展运行或实际ST-LINK连接已验证；相关工具路径和实物操作按前文分别检查。
 
@@ -123,4 +123,16 @@ Logs已由Git忽略。报告记录动作、预设、工具路径、各阶段命�
 
 芯片脚本的reset-start等事件仍可能请求2000 kHz，日志中显示探针改用1800 kHz属于支持档位提示，本次并非致命错误。Cortex-M7硬件勘误提示由OpenOCD输出，工具已声明相应处理；不通过屏蔽提示判断连接成功。
 
-原始诊断日志保存在`Logs/OpenOCD/cpuid-20261016T034733/`，由Git忽略。连接验证只说明当前板卡恢复了调试访问：本次未烧录、未擦除、未修改选项字节，不能据此证明200 MHz ELF已在板上运行。下一步由用户重新执行STM32: Flash，再按CubeMX第一步指南记录启动验收结果。
+原始诊断日志保存在`Logs/OpenOCD/cpuid-20261016T034733/`，由Git忽略。该连接诊断阶段未烧录、未擦除、未修改选项字节，不能据此证明200 MHz ELF已在板上运行。用户随后提供的实际烧录结果见第9节。
+
+## 9. GCC任务匹配器与用户烧录反馈
+
+2026-10-16用户报告`problemMatcher 引用无效: $gcc`。三个构建任务引用了由C/C++扩展贡献的匹配器；本机扩展虽已安装，但用户会话未能解析该引用。具体禁用或激活状态未独立确认，不能将`C_Cpp.intelliSenseEngine=disabled`等同于整个扩展被禁用。参考[VS Code官方问题匹配器说明](https://code.visualstudio.com/docs/debugtest/tasks#_defining-a-problem-matcher)，现改为完整内联匹配器，无`base`或命名模式依赖。
+
+匹配器捕获文件、行、可选列、warning/error及消息，支持Windows盘符、带空格的路径和fatal error。绝对路径直接定位；相对路径分别按`build/Debug`、`build/Release`解析，与CMake编译工作目录一致。独立的`sbcg-gcc`诊断所有者避免覆盖clangd诊断。无源码位置的链接器错误仍需查看终端，构建失败由进程退出码判断。
+
+用户同次提供的`STM32: Flash`日志包含`Programming Finished`、`Verified OK`及`Resetting Target`，可确认该次指定ELF的编程与校验成功。未提供ELF哈希、SystemCoreClock、uwTick或主循环观察，M0.1仍为实物启动待验收。OpenOCD的2000/8000 kHz请求分别回退至探针支持的1800/4000 kHz，未阻止该次烧录校验完成。
+
+本次配置修复不修改固件或OpenOCD连接策略，不连接硬件、不重复烧录。保存后重新执行`STM32: Build`；如旧提示仍保留，可执行`Developer: Reload Window`后重试。预期不再出现`$gcc`引用无效；这一步VS Code界面结果仍需用户确认。
+
+本地验证：修改前三个任务均未通过“无外部匹配器依赖”检查；修改后用Node的实际JavaScript正则引擎逐任务验证5种诊断格式、2种非诊断行及Debug/Release相对路径，全部通过。所有VS Code JSON可解析；`python -B Tools/Monitor/autodebug.py build`配置/构建成功，10项现有主机测试通过，`git diff --check`通过。这些检查未直接操作VS Code任务界面。

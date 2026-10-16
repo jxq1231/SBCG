@@ -27,9 +27,19 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "problemMatcher": [
-                "$gcc"
-            ],
+            "problemMatcher": {
+                "owner": "sbcg-gcc",
+                "source": "GCC",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/build/Debug"],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+)(?::(\\d+))?:\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -100,9 +110,19 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "problemMatcher": [
-                "$gcc"
-            ],
+            "problemMatcher": {
+                "owner": "sbcg-gcc",
+                "source": "GCC",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/build/Debug"],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+)(?::(\\d+))?:\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
             "detail": "仅配置、构建并保存诊断报告；不烧录或连接硬件。"
         },
         {
@@ -133,9 +153,19 @@
             },
             "dependsOn": "STM32: Configure Release",
             "dependsOrder": "sequence",
-            "problemMatcher": [
-                "$gcc"
-            ],
+            "problemMatcher": {
+                "owner": "sbcg-gcc",
+                "source": "GCC",
+                "fileLocation": ["autoDetect", "${workspaceFolder}/build/Release"],
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+)(?::(\\d+))?:\\s+(?:fatal\\s+)?(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            },
             "group": "build"
         },
         {
