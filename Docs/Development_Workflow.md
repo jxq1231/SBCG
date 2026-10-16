@@ -16,7 +16,7 @@
 - clangd显式读取`build/Debug/compile_commands.json`，保留本机已知编译器路径。使用Release构建不自动切换clangd数据库。
 - GDB、OpenOCD和clangd保留现有本机路径；CMake/Ninja/GCC及Python须在VS Code继承的PATH中。修改系统PATH后应重启VS Code。
 - 调试和烧录明确使用`SBCG.elf`，与CMake目标一致，不再依赖文件夹名称。
-- 保留原有烧录/运行1800 kHz参数和调试复位策略；未照搬GUI的1000 kHz及复位下连接设置。
+- 烧录、运行和F5共用`.vscode/openocd-stm32f746.cfg`：芯片脚本加载后设置初始1800 kHz，并使用硬件复位下连接。该设置已通过当前实物的连接、复位/暂停和寄存器读取验证，见第8节；未验证Flash写入。
 - CubeMX的Trace Asynchronous Sw保留PA13/PA14/PB3；当前launch未开启SWO接收。
 
 ## 3. VS Code入口
@@ -102,6 +102,25 @@ Logs已由Git忽略。报告记录动作、预设、工具路径、各阶段命�
 | clangd | 使用build/Debug数据库和现有query-driver检查Core/Src/main.c，退出0 |
 | 地址定位 | 从Debug ELF查询main符号，成功定位Core/Src/main.c:66 |
 | 配置与报告 | JSON及任务依赖有效；报告均保留NOT_RUN/false硬件状态；日志及Python缓存由Git忽略 |
-| 烧录 / 调试 / 实物运行 | 本次未执行，不能据此验收M0.1硬件功能 |
+| 烧录 / 调试 / 实物运行 | 主机工作流初次验收未执行；后续仅连接诊断见第8节，未烧录当前固件，不能据此验收M0.1 |
 
 本机验证不代表其它电脑的工具安装、VS Code扩展运行或实际ST-LINK连接已验证；相关工具路径和实物操作按前文分别检查。
+
+## 8. OpenOCD连接故障与修复记录
+
+2026-10-16用户报告烧录前出现`Cortex-M CPUID: 0x1a is unrecognized`及`Unable to reset target`。构建正常，错误发生在目标识别阶段，尚未写入当前固件。
+
+用户授权连接、复位/暂停和寄存器读取，明确暂不写入固件。使用本机xPack OpenOCD 0.12.0-7、ST-LINK V2J33M25对照测试：
+
+| 连接设置 | 观察结果 |
+| --- | --- |
+| 原配置：速度设置在芯片脚本前，无硬件复位声明 | 复现CPUID=0x1a，识别失败；脚本将请求速度覆盖为2000 kHz，探针实际使用1800 kHz |
+| 芯片脚本后设置1000 kHz，仍不声明硬件复位 | 实际950 kHz，仍以CPUID=0x1a失败；单独降速无效 |
+| 1000 kHz，硬件复位下连接 | Cortex-M7 r0p1识别和复位/暂停成功 |
+| 保留1800 kHz，硬件复位下连接 | 同样成功，CPUID=0x410fc271、DBGMCU_ID=0x10016449；读取后恢复运行 |
+
+修复采用共享配置文件，防止Flash、Run和F5的速度、复位策略再次分离。其`reset_config srst_only srst_nogate connect_assert_srst`依赖板载ST-LINK到NRST的实际连接；不要将该配置未经检查复制到不接NRST的自制板。
+
+芯片脚本的reset-start等事件仍可能请求2000 kHz，日志中显示探针改用1800 kHz属于支持档位提示，本次并非致命错误。Cortex-M7硬件勘误提示由OpenOCD输出，工具已声明相应处理；不通过屏蔽提示判断连接成功。
+
+原始诊断日志保存在`Logs/OpenOCD/cpuid-20261016T034733/`，由Git忽略。连接验证只说明当前板卡恢复了调试访问：本次未烧录、未擦除、未修改选项字节，不能据此证明200 MHz ELF已在板上运行。下一步由用户重新执行STM32: Flash，再按CubeMX第一步指南记录启动验收结果。

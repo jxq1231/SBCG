@@ -43,13 +43,7 @@
             "command": "openocd",
             "args": [
                 "-f",
-                "interface/stlink.cfg",
-                "-c",
-                "transport select swd",
-                "-c",
-                "adapter speed 1800",
-                "-f",
-                "target/stm32f7x.cfg",
+                "${workspaceFolder}/.vscode/openocd-stm32f746.cfg",
                 "-c",
                 "program {build/Debug/SBCG.elf} verify reset exit"
             ],
@@ -67,13 +61,7 @@
             "command": "openocd",
             "args": [
                 "-f",
-                "interface/stlink.cfg",
-                "-c",
-                "transport select swd",
-                "-c",
-                "adapter speed 1800",
-                "-f",
-                "target/stm32f7x.cfg",
+                "${workspaceFolder}/.vscode/openocd-stm32f746.cfg",
                 "-c",
                 "init; reset run; shutdown"
             ],

@@ -44,6 +44,12 @@
 
 当前未实现PTP、声音采集、声音检测、温度UDP或测距算法。尚无烧录/运行通过、PPS精度或最终测距指标的实测记录。
 
+## 已确认的调试连接问题
+
+2026-10-16已在用户授权下复现OpenOCD的CPUID=0x1a识别失败。单独降速仍失败，采用硬件复位下连接后恢复正常，读取CPUID=0x410fc271、DBGMCU_ID=0x10016449；1800 kHz下亦通过。Flash、Run和F5现共用`.vscode/openocd-stm32f746.cfg`，详细证据见`Development_Workflow.md`第8节。
+
+本次仅连接、复位/暂停、读寄存器并恢复运行，没有写Flash、擦除或改选项字节。当前200 MHz生成快照仍待用户烧录并验证，不将调试连接成功计为M0.1启动通过。
+
 ## 构建、烧录与观察入口
 
 - 构建：`python -B Tools/Monitor/autodebug.py build`，复用现有CMake预设。
