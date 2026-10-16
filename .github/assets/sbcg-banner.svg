@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">SBCG — Distributed Acoustic Ranging</title>
+  <desc id="desc">A dark blue project banner with a cyan acoustic waveform and the words Sync, Sense, Measure.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#0b1226"/>
+      <stop offset="1" stop-color="#122f49"/>
+    </linearGradient>
+    <linearGradient id="wave">
+      <stop stop-color="#38bdf8" stop-opacity="0.12"/>
+      <stop offset="0.5" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0.1"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#7dd3fc" stroke-opacity="0.06"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="320" rx="20" fill="url(#background)"/>
+  <rect width="1280" height="320" rx="20" fill="url(#grid)"/>
+  <rect x="56" y="46" width="4" height="22" rx="2" fill="#5eead4"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="74" y="62" font-size="14" letter-spacing="3" fill="#b6d3e9">STM32F746 · TEAM ENGINEERING</text>
+    <text x="52" y="163" font-size="94" font-weight="700" letter-spacing="3" fill="#f0f9ff">SBCG</text>
+    <text x="58" y="203" font-size="20" letter-spacing="2" fill="#8fdce9">DISTRIBUTED ACOUSTIC RANGING</text>
+    <text x="58" y="268" font-size="14" letter-spacing="4" fill="#b6d3e9">SYNC / SENSE / MEASURE</text>
+  </g>
+  <path d="M668 158H710L723 151L736 165L749 139L762 177L775 122L788 196L801 99L814 222L827 73L840 244L853 57L866 260L879 75L892 243L905 99L918 220L931 122L944 196L957 138L970 178L983 148L996 168L1009 154L1022 162H1220" fill="none" stroke="url(#wave)" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="864" cy="158" r="112" fill="none" stroke="#5eead4" stroke-opacity="0.09"/>
+  <circle cx="864" cy="158" r="144" fill="none" stroke="#5eead4" stroke-opacity="0.05"/>
+  <path d="M58 292H1222" stroke="#7dd3fc" stroke-opacity="0.15"/>
+</svg>
