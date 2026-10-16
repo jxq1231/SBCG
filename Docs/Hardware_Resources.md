@@ -1,6 +1,6 @@
 # 分布式声波测距系统：STM32F746G-DISCO 硬件资源与 CubeMX 配置约定
 
-日期：2026-10-13。适用：课程提供的两块 STM32F746G-DISCO / 32F746GDISCOVERY，MCU 为 **STM32F746NGH6，TFBGA216**。
+修订日期：2026-10-16。适用：课程提供的两块 STM32F746G-DISCO / 32F746GDISCOVERY，MCU 为 **STM32F746NGH6，TFBGA216**。
 
 **本文件已核查四份用户提供的 PDF；引脚映射以 UM1907 Rev 4 中的 MB1191 B-04 原理图及 I/O 分配表为依据。用户已确认温度传感器为DHT11；实际两板的PCB修订、焊桥/电阻状态、DHT11小板引脚顺序及板载上拉尚未现场确认。以下“推荐参数”是团队统一配置建议，不是已经在两块实物上验证通过的配置。**
 
@@ -21,6 +21,10 @@
 | 生成GPIO | 仅开启GPIOA/B/H时钟，未定义DHT11/PPS标签 | CubeMX分配PG7及其他目标引脚后再生成GPIO初始化和标签宏 |
 
 第一步操作见同目录 `CubeMX_Step1.md`。本地AGENTS.md第4节要求硬件变化由CubeMX完成，并在未经授权操作该流程时等待用户重新生成。因此本次没有改 `.ioc`、`SystemClock_Config()`、`MX_GPIO_Init()`、链接脚本、DMA/NVIC或固件调用链；配置差异和预期生成变化均写入第6节。
+
+**本轮推进边界：下一次CubeMX操作只做Serial Wire、HSE Bypass 25 MHz、HCLK 200 MHz和相应总线分频。** 屏幕、网口、TIM2及音频DMA先不启用；第4～6节是后续分阶段目标，不是本轮一次完成的配置清单。
+
+**共用工程尚未落实。** 本机只读确认的是SBCG / CubeMX 6.18.1 / CubeF7 V1.17.4 / CMake。用户审查提到另一侧SBCJ / 6.15 / CubeIDE，但该工程尚未取得；不能写成两侧已共用同一.ioc或同一固件。配置前先约定主工程和工具/固件包版本，并读取两板真实UID、指定A/B。详细记录方法见第一步指南第1.2节；不把ST-LINK USB序列号当目标MCU UID。PTP到TIM2由SBCG负责人先验证单板，再同步已验证方案到队友工程。
 
 ## 1. 先统一的结论
 
@@ -62,7 +66,7 @@
 
 | 资源 | 本项目唯一选择 | 其它模块的访问方式 |
 | --- | --- | --- |
-| 显示 | **全部RGB565**：LTDC的RGB565引脚模式、图层/帧缓冲、DMA2D输入/输出与业务16位颜色一致；有效引脚按板级原理图，时序采用GUI测试项目的1/43/8、10/12/4，像素时钟按团队约定9.6 MHz | 第5.2节是唯一目标；不混用另一组RGB888 AF和官方BSP41/13/32时序 |
+| 显示 | **全部RGB565**：LTDC的RGB565引脚模式、图层/帧缓冲、DMA2D输入/输出与业务16位颜色一致；有效引脚按板级原理图，时序按本次用户约定1/43/8、10/12/4，像素时钟9.6 MHz | 第5.2节是唯一目标；不混用另一组RGB888 AF和官方BSP41/13/32时序；GUI历史/现状分开记录 |
 | 同步时间 | **ETH IEEE1588 MAC硬件时钟是唯一时间源**：A主时钟、B从时钟；时间服务输出64位PTP纳秒时间 | 网络与声音到达时间戳都在PTP时间域；不从TIM2拼接测量时间 |
 | TIM2 / PA15 PPS | 同一时间服务唯一管理；TIM2计数1 MHz，仅执行PTP每秒触发的100 μs脉冲 | 其它模块不得初始化、改分频或读CNT作到达时刻；原自由运行ARR999999方案废止 |
 | 环境温度/算法 | 一只DHT11在A板；UDP共享整数毫摄氏度和temperature_version；**math_version=1统一整数公式** | 同次测量两板使用同一温度、t_A_ns/t_B_ns和公式，禁止一侧浮点另一侧整数 |
@@ -76,7 +80,7 @@
 
 ### 4.1 屏幕统一RGB565：20个LTDC AF信号与8个低位GPIO
 
-板上实际连线来自[S1]图29、图33、表11与[S2]表12。RGB565有效颜色线为R3～R7、G2～G7、B3～B7，加CLK/HSYNC/VSYNC/DE，共20个LTDC AF信号；G3必须是板上PJ10，不照搬GUI项目误选的PH14。其它8根已焊接的低位颜色线用对应MCU GPIO推挽输出0（L0），避免屏幕输入浮空；不增加电路。**28是屏幕信号总数，不是28根RGB颜色数据线；其中24颜色+4时序。** 不调用默认BSP_Msp把全部28脚重新设成RGB888 AF。
+板上实际连线来自[S1]图29、图33、表11与[S2]表12。RGB565有效颜色线为R3～R7、G2～G7、B3～B7，加CLK/HSYNC/VSYNC/DE，共20个LTDC AF信号；G3必须是板上PJ10，不照搬2026-10-13 GUI历史快照误选的PH14。其它8根已焊接的低位颜色线用对应MCU GPIO推挽输出0（L0），避免屏幕输入浮空；不增加电路。**28是屏幕信号总数，不是28根RGB颜色数据线；其中24颜色+4时序。** 不调用默认BSP_Msp把全部28脚重新设成RGB888 AF。
 
 | 原始 MCU Pin（球位） | 板级物理接口/网络 | 复用功能 | 推荐 User Label | 参数 | 占用与待验证项 |
 | --- | --- | --- | --- | --- | --- |
@@ -237,6 +241,19 @@ PG7在[S1]表11和图26中只接Arduino D4；与第4.1～4.5节的LTDC、FMC、R
 
 PH15先不给其它GPIO输出、PPS或课程模块使用；PD6同样保留。启用采集前核对实际板修订、codec配置和所用BSP示例的事件路径；需要时用课程允许的测量工具验证实际电平。SAI DMA的缓冲半满/满回调与codec/PH15 GPIO事件应分别处理。若以后启用PH15/EXTI15，它与触控PI13/EXTI13共用EXTI15_10 IRQ处理入口，须按线路分发，不能覆盖触控回调。
 
+### 4.8 音频DMA预留：尚未启用
+
+以下映射已核查本机CubeF7 V1.17.4 `stm32746g_discovery_audio.h`；团队先预留，后续经CubeMX配置并核对生成结果。当前只做时钟，不新增这些DMA或IRQ。[S9]
+
+| 功能/外设 | 方向 | DMA映射 | IRQ入口 | 当前状态 |
+| --- | --- | --- | --- | --- |
+| 录音 / SAI2_Block_B | 外设到内存 | **DMA2 Stream7 Channel 0** | DMA2_Stream7_IRQHandler | 音频输入预留，未启用 |
+| 放音 / SAI2_Block_A | 内存到外设 | **DMA2 Stream4 Channel 3** | DMA2_Stream4_IRQHandler | 音频输出预留，未启用；只录音时不启用此DMA |
+
+同一个Stream不能因Channel不同就同时分给两个外设。后续采集里程碑再确定采样率、数据宽度、缓冲地址/长度、循环模式、半满/满回调、Cache策略与IRQ优先级，不直接照抄BSP默认优先级或让CubeMX自动分配后未经审核合入。
+
+**ETH有专用DMA，不占用DMA2 Stream4/7。** 音频应防止与其他通用DMA2外设发生Stream重复分配；与网口/LTDC的并发风险主要是总线/内存带宽、Cache一致性和中断负载，不能称为网口抢同一DMA2 Stream。[S2，第40页第2.31节]；[ST架构说明](https://www.st.com/en/microcontrollers-microprocessors/stm32f7-series.html)
+
 ## 5. 两板统一的初始化参数
 
 ### 5.1 时钟基线（建议值，不是唯一可行方案）
@@ -262,7 +279,7 @@ ST部分示例代码使用 `HSE_ON`；这里依据上传B-04原理图选择有�
 | --- | --- |
 | LTDC引脚模式 | **RGB565**，第4.1节20个有效信号AF推挽、No Pull、高/很高速度；PG12/AF9；G3/PJ10；8个低位GPIO按L0推挽/低电平/低速 |
 | 面板有效区 | 480×272 |
-| 水平参数（实际长度） | **HSYNC=1，HBP=43，HFP=8**，采用GUI测试项目时序 |
+| 水平参数（实际长度） | **HSYNC=1，HBP=43，HFP=8**，团队选定值，源自2026-10-13 GUI历史快照 |
 | 垂直参数（实际长度） | **VSYNC=10，VBP=12，VFP=4** |
 | HAL寄存器字段核对 | HorizontalSync=0；VerticalSync=9；AccumulatedHBP=43；AccumulatedVBP=21；AccumulatedActiveW=523；AccumulatedActiveH=293；TotalWidth=531；TotalHeigh=297 |
 | 极性 | HS/VS/DE：Active Low；Pixel Clock：IPC，按BSP选择输入像素时钟极性（通常界面对应正常/上升沿），核对生成的 `LTDC_PCPOLARITY_IPC` |
@@ -271,11 +288,11 @@ ST部分示例代码使用 `HSE_ON`；这里依据上传B-04原理图选择有�
 | 缓冲大小 | RGB565每帧480×272×2=261120字节；双缓冲522240字节；可将第二缓冲放0xC0040000，两块按256 KiB间距预留 |
 | GPIO控制 | PI12=LCD_DISP，PK3=LCD_BL_CTRL；推挽、No Pull、低速，初始低；SDRAM和LTDC图层准备好后再拉高 |
 
-CubeMX有的界面填写实际长度、有的显示累计字段，按表核对，避免重复减1。时序取本机GUI项目[S10]；官方BSP的41/13/32与10/2/2只作为资料对照，不是本项目第二套可选配置。GUI用户报告已点亮，本次未复测；移植中将GUI的10 MHz改为团队锁定的9.6 MHz、修正G3并使用外部SDRAM，仍必须重新验证显示。
+CubeMX有的界面填写实际长度、有的显示累计字段，按表核对，避免重复减1。所选时序源自2026-10-13读取的GUI历史快照[S10]；官方BSP的41/13/32与10/2/2不是本项目第二套可选配置。用户曾报告GUI已点亮，本次未复测；SBCG目标为9.6 MHz、G3/PJ10和外部SDRAM，必须独立验证显示，不能继承另一版本GUI的实测结论。
 
 **业务与配置都统一RGB565。** 默认 `BSP_LCD_Init()/BSP_LCD_MspInit()` 和ARGB8888图层初始化不得覆盖CubeMX的20个AF+8个恒低GPIO方案。绘图/图像内存均为uint16_t；SDK某个控制参数若要求内部其它编码，只在单一BSP包装内转换，不改变业务数据、帧缓冲或DMA2D的565配置。
 
-| 项目 | 已读取的GUI测试工程 | SBCG唯一目标 |
+| 项目 | 2026-10-13 GUI历史快照 | SBCG唯一目标 |
 | --- | --- | --- |
 | 引脚模式/图层 | 两者都是RGB565 | 同样全部RGB565；有效G3从PH14纠正为板上PJ10，低8位GPIO输出0 |
 | 水平时序 | 1 / 43 / 8 | 1 / 43 / 8 |
@@ -283,6 +300,8 @@ CubeMX有的界面填写实际长度、有的显示累计字段，按表核对�
 | 像素时钟 | PLLSAIN200/R5/DivR4 → 10 MHz | PLLSAIN192/R5/DivR4 → 9.6 MHz，保持团队时钟约定 |
 | 帧缓冲 | 0x20010400，内部SRAM | 0xC0000000，完成FMC/SDRAM与MPU配置后使用 |
 | SDRAM CKE连线 | GUI.ioc选PH2 | 板上实际CKE为PC3；不照搬PH2 |
+
+**2026-10-16重新核对GUI现状**：GUI.ioc已采用H41/13/32、V10/2/2，PLLSAI192/R5/div4为9.6 MHz，G3/PJ10、CKE/PC3、帧缓冲0xC0000000；生成main.c也采用对应累计时序。它与上表历史快照不同，与本次用户指定的SBCG目标也不是同一组时序。本轮保留SBCG的1/43/8、10/12/4约定，后续显示里程碑再共同审核配置版本；本次对GUI全程只读，不宣称新GUI已实测通过。
 
 配置完成后验证黑/白/红/绿/蓝、灰阶和渐变、整屏/边缘/刷新，以及200 MHz系统、音频采样同时运行。不能仅以“背光亮”证明颜色脚、时序、SDRAM和帧缓冲全正确。
 
@@ -349,7 +368,9 @@ USART1仍为PA9/PB7、115200 8N1、无流控、Oversampling16，经CN14 ST-LINK 
 | 启动/失锁 | 有效同步锁定后才开启验收PPS；初始化时确保输出低、CNT不落在脉冲区；失锁停止有效PPS并显示状态 |
 | 到达时刻 | SyncTime_GetNs() / 采样锚点转换返回PTP时间；禁止读TIM2 CNT当绝对或同步时间 |
 
-V1.17.4 TIM扩展头文件包含TIM_TIM2_ETH_PTP，ST资料说明PTP PPS可连TIM2；具体CubeMX内部映射、触发极性、重置与PWM边沿必须在该版本及实物验证。[S11] 参数由统一负责人通过CubeMX配置；如果界面不能表示该映射，记录为未完成配置并按AGENTS安全扩展规则处理，不手改.ioc或偷偷改生成初始化。
+V1.17.4 TIM扩展头文件包含TIM_TIM2_ETH_PTP，ST资料说明PTP PPS可连TIM2；具体CubeMX内部映射、触发极性、重置与PWM边沿必须在该版本及实物验证。[S11] 参数由统一负责人通过CubeMX配置；如果界面不能表示该映射，暂停PPS路径，由团队重新评审保持ETH/PTP唯一时间源的方案，不手改.ioc或偷偷改生成初始化，也不退回TIM2自由计满1秒。
+
+**先过SBCG单板验证关卡，再同步到另一工程。** PTP时间初始化/锁定后，观察PA15是否在每个PTP整秒仅输出一次100 μs正脉冲；记录生成配置、触发来源、PTP状态与示波器结果，确认相位由PTP驱动。只看到1 Hz波形不算证明。此关卡与后续双板经交换机连续10次±10 μs验收分开，当前均未执行。
 
 PPS验收时每个上升沿表示PTP共同整秒，而不是复位后的本板自由运行整秒。须验证没有启动伪脉冲、PTP校时重复脉冲、提前ARR溢出脉冲，且100 μs脉宽与连续10次±10 μs边沿差均合格。
 
@@ -378,7 +399,7 @@ PPS验收时每个上升沿表示PTP共同整秒，而不是复位后的本板�
 
 - A发布经校验的温度值、temperature_version、来源和采样时效。UDP有丢包/乱序，B不采用旧版本覆盖新值；关键更新需确认接收并在双方约定的后续测量生效。
 - **同一测量锁定同一温度版本/快照**：不能A已用新温度、B仍用旧温度，也不能在同一测量计算中途更新声速。温度版本和measurement_id共同用于比对；发送/接收算法在后续协议增量实现。
-- DHT11失效、校验失败或超时，**两板均保留上次已共享的有效值**，标记HOLD_LAST/超龄；不写成0℃。UDP暂时中断也不独立产生另一温度值。首次启动尚无有效值时标记未就绪，不能伪造一次0℃采样。
+- DHT11失效、校验失败或超时，**两板均保留上次已共享的有效值**，标记HOLD_LAST/超龄；不写成0℃。UDP暂时中断也不独立产生另一温度值。首次启动尚无已共享并确认的有效温度时，temperature_ready=false，显示“温度未就绪”，**不生成距离，不设默认25°C**，也不能伪造一次0℃采样。已有共同有效值后HOLD_LAST不等于首次未就绪；有效手动设温经A确认、共享后也可使temperature_ready=true。
 - 串口手动设温必须保留。A接收手动设温后作为唯一温度发布源同步给B；若命令从B输入，由B转交A确认后再共同生效，不各自直接改变量。手动/自动模式切换同样版本化并显式显示。
 - 温度传输固定使用int32_t整数毫摄氏度 `environment_temperature_milli_c`，不因某些DHT11每1℃更新就把所有模块强制取整。实际读到0℃若校验有效仍是有效温度，失效状态不能用数值0表示。
 
@@ -481,13 +502,14 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | PD6与PH15的音频IRQ命名 | B-04的PD6硬连Audio_INT，PH15为TP3；V1.17.4 BSP宏AUDIO_IN_INT指PH15。两脚保留并核实，不当作同一信号 |
 | 两板有相同硬件配置 | 相同配置不自动实现同步；MAC/IP唯一，共同时间服务、协议及同一测量温度快照一致 |
 
-**为完整课程任务提前保留音频资源**：[S1]图24、表11中PI4/PI5/PI6/PI7/PG10为SAI2相关、PD6为原理图Audio_INT，PH15须按第4.7节为BSP音频相关信号保留，PH7/PH8用于音频控制；板载U20/U21麦克风的MIC_DATA/MIC_CLK经WM8994编解码器路径处理，不是可随意指定为ADC输入的麦克风接口。本文件未替采集模块确定采样率/SAI子块/DMA配置，但不把上述脚列为空闲，避免显示和温度配置占用后无法采集声音。
+**为完整课程任务提前保留音频资源**：[S1]图24、表11中PI4/PI5/PI6/PI7/PG10为SAI2相关、PD6为原理图Audio_INT，PH15须按第4.7节为BSP音频相关信号保留，PH7/PH8用于音频控制；板载U20/U21麦克风的MIC_DATA/MIC_CLK经WM8994编解码器路径处理，不是可随意指定为ADC输入的麦克风接口。第4.8节预留BSP对应的输入/输出DMA映射；采样率、缓冲与具体采集配置仍待音频里程碑确定，尚未启用。
 
 ## 8. 两板联调与待验证清单
 
 ### 8.1 配置/接线检查
 
 - [ ] A/B板PCB修订与B-04图一致，或已对照对应ST原理图更新差异。
+- [ ] 已落实SBCG/SBCJ的共用工程、生成工具与版本；跨工程共享仍未完成时不标为已统一。
 - [ ] 对照实物确认CN7-2是D9/PA15，CN6-6/7是GND；不是根据PDF图的观看方向猜针序。
 - [ ] 确认PA9 VCP路由电阻状态、两块板各自COM号。
 - [ ] 固定外设合计：LCD/触控33个普通I/O、SDRAM38个、ETH10个、VCP2个、PPS1个、DHT11 1个；共85个**不同**I/O分配（其中B板PG7仅预留），不含NRST、SWD、RCC及第4.7节额外音频预留。按生成代码核对没有重复分配。
@@ -500,15 +522,19 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 - [ ] 两端都调用math_version=1整数公式，同一测量使用相同毫摄氏度、t_A_ns/t_B_ns和取整规则。
 - [ ] 已保留PH15和PD6，核对V1.17.4 BSP与实物原理图的差异，SAI/DMA事件路径与GPIO事件分开。
 - [ ] 音频时钟源为PLLI2S，PLLSAI N192/R5/DivR4及LCD9.6 MHz保持锁定。
+- [ ] 音频输入DMA2 Stream7 Channel 0、输出Stream4 Channel 3预留已审核；未与其它通用DMA2外设重复分配，ETH专用DMA另核对。
 
 ### 8.2 验收相关测量
 
 - [ ] 单板PPS高电平脉宽≥1 μs，建议100 μs；信号0～3.3 V，无启动异常脉冲误判。
+- [ ] SBCG单板PTP整秒到TIM2/PA15路径已证明，随后再同步到队友工程；未用TIM2自由1秒假充PTP整秒。
+- [ ] 9.6 MHz、H1/43/8、V10/12/4已重新点亮，纯色/渐变/边缘/刷新通过；未沿用10 MHz测试结论。
 - [ ] 双板通过交换机，在LCD刷新、串口输出、音频采集同时运行时，上电30秒内收敛。
 - [ ] 收敛后连续记录10个上升沿差 `Δt=tB−tA`，保存符号及最大绝对值，要求每次 `abs(Δt)≤10 μs`；不只取平均值。
 - [ ] 显示/串口能区分未同步、正在收敛、已收敛，示波器结果与软件偏差记录一致。
 - [ ] A板串口手动设温经UDP共同生效；两板每次测量绑定相同temperature_version和environment_temperature_milli_c，显示温度/声速一致。
 - [ ] 模拟DHT11失效及UDP丢包/乱序，两板保留最后共同有效值并显示状态；不把故障写成0℃。
+- [ ] 首次温度未就绪不生成距离，不设默认25°C；共同有效手动温度和HOLD_LAST路径行为一致。
 - [ ] DHT11为课程实际提供器件；PG7/CN4-5数据线、CN6-4电源、CN6-6/7地线及3.3 V上拉已确认。
 - [ ] 上电至少1秒、起始18～30 ms、读取间隔>2秒、完整40位及校验符合实际模块版本。
 - [ ] 同时运行网络、LCD和音频时，DHT11读取不屏蔽实时中断；PPS仍满足±10 μs，失败重试和超龄状态可观察。
@@ -524,7 +550,8 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | 实物U4速度等级/最小时序 | 现有表格取ST BSP参考值 | 获取对应SDRAM器件资料，复核tRAS/tRC/CAS及实际SDCLK |
 | 课程DHT11小板 | 已确定单只接A、UDP共享到B；形态、上拉、厂家版本未现场确认 | 核对丝印和上拉；不使用两只独立温度参与同一测量 |
 | CubeMX系统时钟与显示配置 | 已读到6.18.1 / CubeF7 V1.17.4；NG/1024K已一致，当前仍216 MHz/HSE_ON且无LTDC | 按第一步指南核对系统时钟；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
-| 音频采样/时钟/DMA与IRQ | PLLI2S方向已定，PH15/PD6用途存在BSP/原理图差异 | 确认实物事件路径与DMA；禁止更改PLLSAI，不把BSP宏当接线证据 |
+| SBCG与SBCJ共用工程 | 本机确认SBCG/CMake/6.18.1；另一侧6.15/CubeIDE来自用户审查，工程尚未取得 | 先落实主工程、工具与包版本，未迁移前不能声称共用同一.ioc |
+| 音频采样/时钟/DMA与IRQ | PLLI2S及第4.8节BSP DMA预留已定；PH15/PD6用途存在BSP/原理图差异 | 确认采样/缓冲/IRQ与实际生成DMA；禁止更改PLLSAI，不把BSP宏当接线证据 |
 | PTP时间服务/PPS内部映射 | 唯一时间源ETH1588、TIM2仅输出已定；协议/服务/映射尚未实现 | 验证硬件TX/RX时戳、跨秒读一致性、PTP→TIM2硬件PPS与指定交换机±10 μs |
 | 两板实际UID | UID角色机制已定，BOARD_A_UID/BOARD_B_UID值尚未读取提供 | 配置前记录真实UID，不填假值；同一固件未知UID停用测量 |
 | DHT11驱动与UDP温度版本 | 单DHT11共享、手动设温及保留最后值已定；协议尚未实现 | 实现版本确认/同次测量快照/失效状态，验证两屏差≤1 mm与温补误差 |
@@ -537,7 +564,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | 编号 | 文件/官方来源 | 本文用到的位置 |
 | --- | --- | --- |
 | S1 | 用户提供 `en.DM00190424.pdf`，UM1907 / DocID027942 **Rev 4，June 2017，51页** | 第19页ETH/SDRAM；第21～23页连接器；图22第30页ST-LINK；图24第32页音频；图26第34页Arduino；图27第35页SDRAM；图29第37页MCU连接；图31第39页PHY；图33第41页LCD；表11第42～48页球位/网络及VCP路由 |
-| S2 | 用户提供 `DS10916.pdf`，DocID027590 **Rev 4，227页** | 第43页内部温度；第4章Pinouts/表12第75～88页AF映射（PA15在第77页、PG12在第84页）；第151页温度采样参数；第186页SDRAM时钟条件 |
+| S2 | 用户提供 `DS10916.pdf`，DocID027590 **Rev 4，227页** | 第40页ETH专用DMA/PTP；第43页内部温度；第4章Pinouts/表12第75～88页AF映射（PA15在第77页、PG12在第84页）；第151页温度采样参数；第186页SDRAM时钟条件 |
 | S3 | 用户提供《嵌入式系统课程设计-分布式声波测距系统-设计任务书（V1.0）》5页 | 第2页交换机/1PPS/同步验收；第3页手动与自动温度补偿；第4页器材限制与麦克风距离；第5页电脑限制 |
 | S4 | 用户提供 `STM32F746G引脚对应图.pdf`，1页 | Arduino信号与MCU端口交叉对照；CN8及5 V说明存在上述需纠正项 |
 | S5 | [ST官方32F746GDISCOVERY BSP](https://github.com/STMicroelectronics/32f746gdiscovery-bsp) | [LCD驱动](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_lcd.c)、[SDRAM驱动](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_sdram.c)、[SDRAM参数](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_sdram.h)、[板级引脚/地址](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery.h)、[FT5336触控驱动](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_ts.c) |
@@ -545,7 +572,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | S7 | [ST官方RK043FN48H组件参数](https://github.com/STMicroelectronics/stm32-rk043fn48h/blob/main/rk043fn48h.h) | 480×272及官方BSP时序资料对照；本项目唯一时序按S10，不混用 |
 | S8 | [奥松DHT11官方产品手册V1.3_20170331](https://www.aosong.com/userfiles/files/media/DHT11-V1_3%E8%AF%B4%E6%98%8E%E4%B9%A6%EF%BC%88%E8%AF%A6%E7%BB%86%E7%89%88%EF%BC%89.pdf) | PDF第2～6页：脚序、电压、典型4.7 kΩ上拉、>2秒采样、18～30 ms起始、40位帧及版本数据格式；实际模块仍需确认 |
 | S9 | 本机 `C:/Users/25747/STM32Cube/Repository/STM32Cube_FW_F7_V1.17.4/Drivers/BSP/STM32746G-Discovery/` 的 `stm32746g_discovery_audio.h/.c`；[ST公开音频头文件](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_audio.h)、[ST公开音频实现](https://github.com/STMicroelectronics/32f746gdiscovery-bsp/blob/main/stm32746g_discovery_audio.c) | 本机.h第118～132行PH15/EXTI宏；.c第650～686行SAI2使用PLLI2S，第1136～1181行PH15输入/NVIC与DMA；公开分支可变，结论优先按本机V1.17.4及实物图核查 |
-| S10 | 本机D:/electronic_design/GUI/GUI.ioc、Core/Src/main.c、stm32f7xx_hal_msp.c（本次只读） | RGB565模式/图层、H1/43/8与V10/12/4、PLLSAI200/R5/div4、G3=PH14、CKE=PH2、FB0x20010400；纠错依据仍为S1板级连线，未声称复测GUI |
+| S10 | 本机D:/electronic_design/GUI/GUI.ioc、Core/Src/main.c、stm32f7xx_hal_msp.c（两次核查均只读） | 2026-10-13历史快照：RGB565、H1/43/8与V10/12/4、PLLSAI200/R5/div4、G3=PH14、CKE=PH2、FB0x20010400；2026-10-16现状：H41/13/32与V10/2/2、PLLSAI192/R5/div4、PJ10/PC3、FB0xC0000000。以S1核对连线，不声称复测GUI |
 | S11 | [ST STM32F7 ETH官方培训](https://www.st.com/resource/en/product_training/STM32F7_Peripheral_ETH.pdf)第6页及本机CubeF7 V1.17.4 HAL ETH/TIM扩展头/实现 | MAC硬件PTP时间、PTP PPS到TIM2；HAL_ETH_USE_PTP/GetTime/TX/RX时戳、TIM_TIM2_ETH_PTP内部映射；本机HAL_GetUIDw0/w1/w2提供96位UID |
 | S12 | [TI超声测距设计资料](https://www.ti.com/mx/lit/pdf/tiduai8) | c=331.3+0.606T干空气线性近似；本项目自行规定整数单位/取整及双接收TDOA，不套用回波除以2 |
 

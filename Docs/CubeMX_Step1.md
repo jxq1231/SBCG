@@ -1,6 +1,6 @@
 # CubeMX第一步：系统时钟基线与RGB565显示约定
 
-日期：2026-10-13。工程：`D:/electronic_design/SBCG/SBCG.ioc`。里程碑：M0.1——先建立两块板共用的系统配置，再按固定参数配置显示外设。
+修订日期：2026-10-16。工程：`D:/electronic_design/SBCG/SBCG.ioc`。里程碑：M0.1——先建立两块板共用的系统配置，再按固定参数配置显示外设。
 
 ## 1. 当前工程已经确认的状态
 
@@ -18,12 +18,26 @@
 
 ## 1.1 配置前四条已经固定的架构
 
-- **全部RGB565**：LTDC引脚模式和图层/帧缓冲/DMA2D均565。有效16颜色+4时序采用板级连线，G3/PJ10；未用8低位颜色GPIO输出0。时序固定H1/43/8、V10/12/4，PLLSAI192/R5/div4为9.6 MHz。GUI旧工程的PH14 G3、PH2 CKE和10 MHz不直接照搬。
+- **全部RGB565**：LTDC引脚模式和图层/帧缓冲/DMA2D均565。有效16颜色+4时序采用板级连线，G3/PJ10；未用8低位颜色GPIO输出0。SBCG按本次用户约定固定H1/43/8、V10/12/4，PLLSAI192/R5/div4为9.6 MHz。2026-10-13读取的GUI历史快照中的PH14 G3、PH2 CKE和10 MHz不直接照搬；GUI当前状态见第3.1.1节。
 - **时间从ETH1588来**：MAC硬件PTP为唯一时间源，A主/B从，统一时间服务通过SyncTime_GetNs()返回纳秒时间及锁定状态。TIM2只把内部PTP秒事件变成PA15的100 μs脉冲，不再拼接TIM2时间；1 MHz、PSC99、ARR0xFFFFFFFF、CCR100由该服务唯一管理。
 - **测距全整数**：两板共用math_version=1及同一测量的temperature_version，温度用int32_t毫摄氏度；sound_speed_mm_s=331300+round_div_signed(606*environment_temperature_milli_c,1000)，单位mm/s。distance_mm=(sound_speed_mm_s*abs(delta_ns)+500000000)/1000000000；delta_ns为有符号t_B_ns-t_A_ns。取整、范围与安全求差按资源文档第5.9节，使用64位中间值，不除以2。
 - **A/B按UID固定**：两板同固件、同BOARD_A_UID/BOARD_B_UID表，上电96位UID查表；A读一只DHT11并发布温度，B只接收。实际UID待配置前读取，不编造；传感器故障不换角色。
 
 显示/音频继续分别使用PLLSAI/PLLI2S；PH15和PD6按已核实的软件/原理图差异共同预留。当前SBCG尚未实现上述服务，先按《Hardware_Resources.md》第4.1、5.2、5.5～5.9节共同审核，再配CubeMX。
+
+## 1.2 这一步的范围和团队前置条件
+
+**本次CubeMX操作只执行第2节：Serial Wire、HSE Bypass 25 MHz、HCLK 200 MHz及相应总线分频。** 第3节为后续显示约定；此时不配置FMC、LTDC、低位颜色GPIO、DMA2D、ETH、TIM2、SAI或DHT11。完成时钟保存/生成和构建后，先记录实物启动结果，不沿着资源文档一次启用全部外设。
+
+| 项目 | 当前证据 | 配置前处理 |
+| --- | --- | --- |
+| 本机工程 | SBCG；.ioc记录CubeMX 6.18.1、CubeF7 V1.17.4、CMake | 本指南以这个现有工程为基线；Git提交范围仍只在SBCG |
+| 队友另一工程 | 用户审查反馈为SBCJ、CubeMX 6.15、CubeIDE；本机未取得该工程 | “共用一份.ioc”仍是目标，尚未完成；先约定主工程、CubeMX/固件包版本和生成工具，不将另一工程生成文件直接覆盖过来 |
+| 两板身份 | BOARD_A_UID和BOARD_B_UID实际值均未读取 | 配置前分别记录真实96位UID，指定接DHT11的实体为A；未知UID不测量，不根据传感器故障换角色 |
+
+UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程查看 `HAL_GetUIDw0/w1/w2()` 的返回值；若这些未使用函数被链接器裁掉，按当前CMSIS头文件的UID_BASE只读查看三个32位字：**0x1FF0F420、0x1FF0F424、0x1FF0F428**。ST-LINK的USB序列号不能代替目标MCU UID。当前会话未检测到ST-LINK，因此这里没有填入实际UID。
+
+后续关卡：PTP到TIM2的路径由SBCG负责人先做单板验证，确认PTP时间已初始化/锁定后，PA15在每个PTP整秒产生100 μs脉冲，再同步经过验证的配置到队友工程。CubeMX不能表示内部映射时暂停该路径并重新评审，不手改.ioc、不恢复TIM2自由计满1秒。9.6 MHz显示需重新点亮并验证，不能沿用GUI项目10 MHz的稳定性结论。
 
 ## 2. 第一步现在执行：SYS、RCC与系统时钟
 
@@ -122,7 +136,7 @@ pLayerCfg.ImageHeight = 272;
 
 ### 3.1.1 同一套引脚与时序
 
-有效RGB565脚和8个恒低GPIO按《Hardware_Resources.md》第4.1节。GUI报告点亮的测试项目采用H1/43/8、V10/12/4，本项目统一沿用该时序；像素时钟按团队约定9.6 MHz，迁移后须复测。CubeMX实际长度与生成累计字段统一如下：
+有效RGB565脚和8个恒低GPIO按《Hardware_Resources.md》第4.1节。2026-10-13读取的GUI历史快照采用H1/43/8、V10/12/4，SBCG按本次用户约定保留这组时序；像素时钟9.6 MHz，迁移后须复测。CubeMX实际长度与生成累计字段统一如下：
 
 | 参数 | GUI设置/生成字段 |
 | --- | --- |
@@ -133,6 +147,8 @@ pLayerCfg.ImageHeight = 272;
 | AccumulatedActiveW / H | 523 / 293 |
 | TotalWidth / TotalHeigh | 531 / 297 |
 | DMA2D | 输出DMA2D_OUTPUT_RGB565；输入图像层选择RGB565 |
+
+**2026-10-16重新核对GUI的现状已不同**：H41/13/32、V10/2/2，PLLSAI192/R5/div4为9.6 MHz，G3/PJ10、CKE/PC3、帧缓冲0xC0000000。不能把这份最新GUI说成与SBCG目标时序相同；也不能仅因文件已改就宣称实物复测通过。本轮不改显示目标，后续显示里程碑再共同审核版本并验证。
 
 低位GPIO为PI15/R0、PJ0/R1、PJ1/R2、PJ7/G0、PJ8/G1、PE4/B0、PJ13/B1、PJ14/B2，推挽/初始Low/No Pull/Low Speed。避免BSP默认初始化把它们重新改成RGB888 AF。SDK内部控制参数的编码由单一BSP包装处理，业务图像和颜色始终16位565。
 
@@ -180,13 +196,23 @@ BSP/DMA2D函数的颜色参数可能是RGB888/ARGB8888，再由内部转换输�
 
 在Clock Configuration中将SAI2时钟源选择为PLLI2S，按实际采样率配置PLLI2SN/Q/DivQ。保持LCD支路N192/R5/DivR4和共享PLLM25不变；生成后分别核对 `RCC_SAI2CLKSOURCE_PLLI2S` 与LTDC的PLLSAI参数，再实测LCD刷新和音频采样率。使用BSP时还需核对其时钟回调，不能让BSP与CubeMX分别改同一RCC配置。
 
+### 3.5 后续音频DMA预留与温度就绪条件
+
+已核查本机CubeF7 V1.17.4 BSP：录音SAI2_Block_B采用 **DMA2 Stream7 Channel 0**，放音SAI2_Block_A采用 **DMA2 Stream4 Channel 3**。这两条先预留给音频，后续在CubeMX人工核对，不能把自动分配直接当作团队配置；仅录音时不因此启用放音DMA。缓冲、采样率、循环模式、Cache和中断优先级在音频里程碑再落实。
+
+ETH使用自己的专用DMA，不占用上述DMA2 Stream；音频需要避免与其他通用DMA2外设复用同一Stream，并核对与ETH/LTDC共享的总线、存储器带宽、Cache和中断负载。详见资源文档第4.8节及DS10916第2.31节。
+
+首次没有已共享并确认的有效温度时，`temperature_ready=false`，显示“温度未就绪”，不生成距离；**不设默认25°C，也不把失败当0°C**。之后传感器失效可保留最后共同有效值并标记HOLD_LAST。有效的串口手动设温经A确认、共享后，同样可使温度就绪。
+
 ## 4. 第一步完成检查
 
+- [ ] 已确认实际操作工程及版本；两板真实UID、A/B指定已有记录；未把SBCJ迁移或共享.ioc标为已完成。
 - [ ] MCU保持NGH6/TFBGA216，Flash保持1024K。
 - [ ] SYS为Serial Wire，SysTick时基；PA15留给后续PPS。
 - [ ] HSE25 MHz Bypass与实物时钟电路一致。
 - [ ] HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz，生成代码与GUI一致。
 - [ ] 工程从CubeMX保存/生成，现有Debug构建通过。
+- [ ] 本增量只改SYS/RCC时钟与相应生成文件；未启用屏幕、网口、TIM2或音频DMA。
 - [ ] 两板共用同一配置基线及软件包；记录实物启动检查结果。
 - [ ] 队友已确认ETH/PTP唯一时间、TIM2只做PPS、同一整数测距公式及UID角色表；单DHT11 UDP温度快照、PLLSAI锁定不变，PH15/PD6预留。
 - [ ] 团队已统一LTDC模式/图层/帧缓冲/DMA2D全部RGB565、20有效AF+8恒低GPIO和同一组时序；2字节像素、261120字节帧缓冲。
