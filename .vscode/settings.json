@@ -1,14 +1,13 @@
 {
     "cmake.useCMakePresets": "always",
     "cmake.configureOnOpen": true,
-
     "C_Cpp.intelliSenseEngine": "disabled",
     "C_Cpp.errorSquiggles": "disabled",
-
     "clangd.path": "C:/Users/25747/AppData/Local/Microsoft/WinGet/Links/clangd.exe",
-
     "clangd.arguments": [
         "--background-index",
+        "--compile-commands-dir=${workspaceFolder}/build/Debug",
         "--query-driver=D:/arm-gnu-toolchain-13.2.Rel1-mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gcc.exe"
-    ]
+    ],
+    "cmake.sourceDirectory": "${workspaceFolder}"
 }

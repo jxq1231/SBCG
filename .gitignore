@@ -34,3 +34,7 @@ CMakeUserPresets.json
 /Logs/
 /Data/Raw/
 *.log
+
+# Python host-tool caches
+__pycache__/
+*.py[cod]

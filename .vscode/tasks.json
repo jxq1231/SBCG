@@ -1,7 +1,19 @@
 {
     "version": "2.0.0",
-
     "tasks": [
+        {
+            "label": "STM32: Configure",
+            "type": "process",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Debug"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
         {
             "label": "STM32: Build",
             "type": "process",
@@ -9,18 +21,22 @@
             "args": [
                 "--build",
                 "--preset",
-                "Debug"
+                "Debug",
+                "--parallel"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "problemMatcher": [],
+            "problemMatcher": [
+                "$gcc"
+            ],
             "group": {
                 "kind": "build",
                 "isDefault": true
-            }
+            },
+            "dependsOn": "STM32: Configure",
+            "dependsOrder": "sequence"
         },
-
         {
             "label": "STM32: Flash",
             "type": "process",
@@ -35,7 +51,7 @@
                 "-f",
                 "target/stm32f7x.cfg",
                 "-c",
-                "program build/Debug/${workspaceFolderBasename}.elf verify reset exit"
+                "program {build/Debug/SBCG.elf} verify reset exit"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -45,7 +61,6 @@
             ],
             "problemMatcher": []
         },
-
         {
             "label": "STM32: Run",
             "type": "process",
@@ -67,7 +82,6 @@
             },
             "problemMatcher": []
         },
-
         {
             "label": "STM32: Clean",
             "type": "process",
@@ -82,20 +96,114 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "problemMatcher": []
+            "problemMatcher": [],
+            "dependsOn": "STM32: Configure",
+            "dependsOrder": "sequence"
         },
-
         {
             "label": "STM32: AI Debug",
             "type": "process",
             "command": "python",
             "args": [
-                "${workspaceFolder}/tools/autodebug.py"
+                "-B",
+                "${workspaceFolder}/Tools/Monitor/autodebug.py",
+                "build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "仅配置、构建并保存诊断报告；不烧录或连接硬件。"
+        },
+        {
+            "label": "STM32: Configure Release",
+            "type": "process",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Release"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": []
+        },
+        {
+            "label": "STM32: Build Release",
+            "type": "process",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "--preset",
+                "Release",
+                "--parallel"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "STM32: Configure Release",
+            "dependsOrder": "sequence",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "STM32: Check Environment",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "-B",
+                "${workspaceFolder}/Tools/Monitor/autodebug.py",
+                "doctor"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "STM32: Resolve Address",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "-B",
+                "${workspaceFolder}/Tools/Monitor/autodebug.py",
+                "symbolize",
+                "${input:firmwareAddress}"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "STM32: Test Host Tools",
+            "type": "process",
+            "command": "python",
+            "args": [
+                "-B",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "Tools/Monitor/tests",
+                "-v"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "firmwareAddress",
+            "type": "promptString",
+            "description": "输入与当前Debug固件对应的PC或函数地址（0x开头）",
+            "default": "0x08000000"
         }
     ]
 }
