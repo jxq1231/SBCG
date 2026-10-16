@@ -9,12 +9,14 @@
 | 器件/封装 | STM32F746NGH6，TFBGA216，型号已修正 |
 | Flash | STM32F746xx_FLASH.ld为1024K，与开发板一致 |
 | 软件 | CubeMX 6.18.1、CubeF7 V1.17.4、GCC/CMake |
-| 当前系统时钟 | HSE25 MHz，HSE_ON；PLLM25、PLLN432、PLLP2；HCLK216 MHz |
-| 当前调试 | SWD+SWO，PA13/PA14/PB3 |
+| 当前系统时钟 | HSE25 MHz，HSE Bypass；PLLM25、PLLN400、PLLP2；HCLK200 MHz；PCLK1 50 MHz、PCLK2 100 MHz |
+| 当前调试 | 按老师推荐保留Trace Asynchronous Sw（SWD+SWO），PA13/PA14/PB3；时基SysTick，PA15未分配 |
+| PLLQ与电源/Flash | 实际PLLQ=2，Q输出200 MHz；Scale1、OverDrive、FLASH_LATENCY_6；USB/RNG/SDMMC未启用 |
+| 验证状态 | 2026-10-16已核对.ioc与生成代码，Debug构建通过且无编译警告；未烧录，实物启动待验证，M0.1尚未验收 |
 | 当前外设 | 尚未启用FMC、LTDC、USART1、ETH、I2C3、TIM2；暂无DHT11/PPS标签 |
 | 显示格式要求 | 用户指定RGB565；下文作为两板统一约定 |
 
-型号已经正确，直接打开现有SBCG.ioc，不重新创建工程。以下设置由用户在CubeMX完成，本次没有手改.ioc或生成的硬件初始化代码。
+型号已经正确，直接打开现有SBCG.ioc，不重新创建工程。用户已通过CubeMX保存并生成本步时钟配置；下文保留操作及复核流程。本次文档更新未手改.ioc或生成初始化，现有生成变更仍未作为已验证功能提交。
 
 ## 1.1 配置前四条已经固定的架构
 
@@ -27,7 +29,7 @@
 
 ## 1.2 这一步的范围和团队前置条件
 
-**本次CubeMX操作只执行第2节：Serial Wire、HSE Bypass 25 MHz、HCLK 200 MHz及相应总线分频。** 第3节为后续显示约定；此时不配置FMC、LTDC、低位颜色GPIO、DMA2D、ETH、TIM2、SAI或DHT11。完成时钟保存/生成和构建后，先记录实物启动结果，不沿着资源文档一次启用全部外设。
+**M0.1范围：Trace Asynchronous Sw、HSE Bypass 25 MHz、HCLK 200 MHz及相应总线分频；当前已生成并构建通过，下一步先验证实物启动。** 第3节为后续显示约定；此时不配置FMC、LTDC、低位颜色GPIO、DMA2D、ETH、TIM2、SAI或DHT11，不沿着资源文档一次启用全部外设。
 
 | 项目 | 当前证据 | 配置前处理 |
 | --- | --- | --- |
@@ -35,7 +37,7 @@
 | 队友另一工程 | 用户审查反馈为SBCJ、CubeMX 6.15、CubeIDE；本机未取得该工程 | “共用一份.ioc”仍是目标，尚未完成；先约定主工程、CubeMX/固件包版本和生成工具，不将另一工程生成文件直接覆盖过来 |
 | 两板身份 | BOARD_A_UID和BOARD_B_UID实际值均未读取 | 配置前分别记录真实96位UID，指定接DHT11的实体为A；未知UID不测量，不根据传感器故障换角色 |
 
-UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程查看 `HAL_GetUIDw0/w1/w2()` 的返回值；若这些未使用函数被链接器裁掉，按当前CMSIS头文件的UID_BASE只读查看三个32位字：**0x1FF0F420、0x1FF0F424、0x1FF0F428**。ST-LINK的USB序列号不能代替目标MCU UID。当前会话未检测到ST-LINK，因此这里没有填入实际UID。
+UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程查看 `HAL_GetUIDw0/w1/w2()` 的返回值；若这些未使用函数被链接器裁掉，按当前CMSIS头文件的UID_BASE只读查看三个32位字：**0x1FF0F420、0x1FF0F424、0x1FF0F428**。ST-LINK的USB序列号不能代替目标MCU UID。本次未连接设备读取UID，实际值仍待补录。
 
 后续关卡：PTP到TIM2的路径由SBCG负责人先做单板验证，确认PTP时间已初始化/锁定后，PA15在每个PTP整秒产生100 μs脉冲，再同步经过验证的配置到队友工程。CubeMX不能表示内部映射时暂停该路径并重新评审，不手改.ioc、不恢复TIM2自由计满1秒。9.6 MHz显示需重新点亮并验证，不能沿用GUI项目10 MHz的稳定性结论。
 
@@ -51,15 +53,16 @@ UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程�
 
 在 **Pinout & Configuration → System Core → SYS**：
 
-- Debug选择 **Serial Wire**，保留PA13/SWDIO和PA14/SWCLK。
+- Debug按老师推荐选择 **Trace Asynchronous Sw**，保留PA13/SWDIO、PA14/SWCLK和PB3/SWO。
 - Timebase保持 **SysTick**。
-- 当前SWO不是后续功能必需；改为Serial Wire后PB3会释放。PA15留给后续PPS，不选择完整JTAG。
+- PB3保留给SWO，不分配其它功能；该模式不占用PA15，PA15留给后续PPS，不选择完整JTAG。此前释放PB3的Serial Wire建议已由此约定替代。
+- 选中此模式不自动产生SWO日志；后续需单独配置程序输出和调试器接收。当前VS Code调试配置未启用SWO接收，不作为本步启动验收条件。
 
 ### 2.3 RCC外部时钟
 
 在 **System Core → RCC**，将HSE选择 **Bypass Clock Source**，输入频率按板载时钟填写 **25 MHz**。
 
-依据用户上传UM1907 Rev4图29，MB1191 B-04的X2是有源25 MHz振荡器，经R30接PH0，同时给Ethernet PHY供参考时钟。因此本方案采用Bypass。实物若是其他修订，先与对应原理图核对。当前生成代码的HSE_ON是读取到的现状，并不是本指南已经修改好的结果。
+依据用户上传UM1907 Rev4图29，MB1191 B-04的X2是有源25 MHz振荡器，经R30接PH0，同时给Ethernet PHY供参考时钟。因此本方案采用Bypass。实物若是其他修订，先与对应原理图核对。当前生成代码已为RCC_HSE_BYPASS；此前HSE_ON属于修改前的历史状态，实物启动仍待验证。
 
 ### 2.4 Clock Configuration
 
@@ -78,13 +81,13 @@ UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程�
 | APB1 Prescaler / PCLK1 | /4 → 50 MHz |
 | APB2 Prescaler / PCLK2 | /2 → 100 MHz |
 | 常规定时器倍频路径 | APB1定时器100 MHz，APB2定时器200 MHz；以GUI显示为准 |
-| PLLQ | 可用/8，输出50 MHz；当前不使用需要48 MHz的USB/RNG/SDMMC域 |
+| PLLQ | 当前实际/2，Q输出200 MHz；USB/RNG/SDMMC未启用，本增量不依赖该输出 |
 
 算式：25 MHz / 25 × 400 / 2 = 200 MHz。电源电压按实际3.3 V；让CubeMX按200 MHz确定电压档位、必要的OverDrive及Flash等待周期，并检查时钟页面的错误提示。
 
-ST-LINK VCP来自独立ST-LINK芯片，不需要主MCU的USB时钟。将来启用主MCU USB或其它48 MHz域时，要重新规划该域，不能把上面的50 MHz当48 MHz。
+ST-LINK VCP来自独立ST-LINK芯片，不需要主MCU的USB时钟。此前建议的PLLQ=/8仅得到50 MHz，并非当前实际设置，也不是可用的USB FS 48 MHz时钟。将来启用USB/RNG/SDMMC前须按各自要求重新规划该时钟域；当前200 MHz Q输出不能直接用于这些外设。修改须通过CubeMX完成。
 
-后续FMC使用HCLK/2得到100 MHz；不要把当前216 MHz直接/2当成100 MHz。若团队以后选择保留216 MHz，需要重新确定FMC分频和时序，不能照搬100 MHz的SDRAM表格。
+后续FMC计划使用当前HCLK200 MHz的/2得到100 MHz；FMC尚未启用，当前没有已运行的SDRAM时钟。若团队以后改回216 MHz，需要重新确定FMC分频和时序，不能照搬100 MHz的SDRAM表格。
 
 ### 2.5 保存、生成与检查
 
@@ -96,9 +99,21 @@ ST-LINK VCP来自独立ST-LINK芯片，不需要主MCU的USB时钟。将来启�
 cmake --build --preset Debug
 ```
 
-4. 记录编译结果。只有烧录并观察启动正常后，才可认定新时钟在实物上工作；本次只检查了用户现有216 MHz基线的构建，没有测试未来200 MHz配置。
+4. 2026-10-16已对当前200 MHz生成代码执行上述构建，结果通过且无编译警告。只有烧录并观察启动正常后，才可认定新时钟在实物上工作；当前未烧录，未取得实物运行结果。
 
 这一增量的预期变化是SBCG.ioc及系统时钟/调试相关生成文件；不新增业务调用链、IRQ或DMA。若工具自动调整相关生成元数据，应一并检查。
+
+### 2.6 实物启动验收：尚待执行
+
+在用户执行或明确授权烧录/调试后，使用现有VS Code的STM32: Flash及STM32F7: Debug流程，核对：
+
+1. 在SystemClock_Config()之后的MX_GPIO_Init()调用处设断点，确认时钟初始化正常返回。
+2. 观察SystemCoreClock=200000000，并结合RCC寄存器核对HSE Bypass、PLL和总线分频；SystemCoreClock是软件计算值，不等于独立测频。
+3. 继续运行后暂停，确认进入主循环；在两段运行之间检查uwTick持续增加。
+4. 确认未进入Error_Handler()或异常处理函数；记录板卡、烧录结果和观察值。
+5. 分别读取两板真实UID并固定A/B。另一板未验证时，不把本机结果推广为两板均通过。
+
+当前调用链为main() → MPU_Config() → HAL_Init() → SystemClock_Config() → MX_GPIO_Init() → 空主循环。SysTick_Handler()仅维护HAL tick；没有新增外设IRQ、DMA关系或Cache策略变化。取得实物结果后，再检查生成差异并提交M0.1功能增量；文档提交不代表硬件验收通过。
 
 ## 3. RGB565固定约定：下一阶段配置FMC/LTDC时采用
 
@@ -207,12 +222,13 @@ ETH使用自己的专用DMA，不占用上述DMA2 Stream；音频需要避免与
 ## 4. 第一步完成检查
 
 - [ ] 已确认实际操作工程及版本；两板真实UID、A/B指定已有记录；未把SBCJ迁移或共享.ioc标为已完成。
-- [ ] MCU保持NGH6/TFBGA216，Flash保持1024K。
-- [ ] SYS为Serial Wire，SysTick时基；PA15留给后续PPS。
+- [x] MCU保持NGH6/TFBGA216，Flash保持1024K。
+- [x] SYS为Trace Asynchronous Sw，PA13/PA14/PB3保留，SysTick时基；PA15未分配，留给后续PPS。
 - [ ] HSE25 MHz Bypass与实物时钟电路一致。
-- [ ] HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz，生成代码与GUI一致。
-- [ ] 工程从CubeMX保存/生成，现有Debug构建通过。
-- [ ] 本增量只改SYS/RCC时钟与相应生成文件；未启用屏幕、网口、TIM2或音频DMA。
+- [x] .ioc与生成代码表达HSE25 MHz Bypass、HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；GUI时钟截图对应总线频率一致。
+- [x] 工程从CubeMX保存/生成，现有Debug构建通过且无编译警告；实际PLLQ=/2已记录，不用于USB/RNG/SDMMC。
+- [x] 本增量只涉及SYS/RCC时钟与相应生成文件；未启用屏幕、网口、TIM2或音频DMA。
+- [ ] 已烧录并完成第2.6节启动检查，记录SystemCoreClock、uwTick及异常状态；M0.1功能提交待该结果。
 - [ ] 两板共用同一配置基线及软件包；记录实物启动检查结果。
 - [ ] 队友已确认ETH/PTP唯一时间、TIM2只做PPS、同一整数测距公式及UID角色表；单DHT11 UDP温度快照、PLLSAI锁定不变，PH15/PD6预留。
 - [ ] 团队已统一LTDC模式/图层/帧缓冲/DMA2D全部RGB565、20有效AF+8恒低GPIO和同一组时序；2字节像素、261120字节帧缓冲。

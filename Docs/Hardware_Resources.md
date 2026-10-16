@@ -6,9 +6,9 @@
 
 ## 0. SBCG工程现状与本次范围
 
-项目根目录：`D:/electronic_design/SBCG`。本次里程碑为 **M0——硬件资源规划修订**，更新 `Docs/Hardware_Resources.md` 与第一步指南 `Docs/CubeMX_Step1.md`。工程源码和构建配置基线已在前序提交记录；本次只提交这两份文档。Git通过.gitignore排除build、.codex、compile_commands.json、对象文件、固件二进制及其它编译副产物，使其不出现在常规更改列表；保留Core/Drivers源码、.ioc、启动/链接脚本、CMake构建配置、共享VS Code配置及设计文档。Git作者/提交者按项目AGENTS.md使用jxq，邮箱由用户指定；不改全局身份。
+项目根目录：`D:/electronic_design/SBCG`。当前里程碑为 **M0.1——系统时钟基线**，已生成200 MHz配置并通过构建，实物启动待验证。本次仅更新并提交 `Docs/Hardware_Resources.md` 与 `Docs/CubeMX_Step1.md`，不将现有生成代码和VS Code设置变化混入文档提交。源码、.ioc、启动/链接脚本及共享构建配置保持纳入版本控制；build、缓存、固件二进制及原始日志由现有.gitignore排除。Git作者/提交者按项目规则使用jxq及用户指定邮箱，不改全局身份。
 
-已只读核对 `SBCG.ioc`、`Core/Inc/main.h`、`Core/Src/main.c`、顶层CMake及链接脚本，发现下列差异。**下文表格是目标分配，不代表当前工程已经启用这些外设。**
+已只读核对 `SBCG.ioc`、`Core/Inc/main.h`、`Core/Src/main.c`、顶层CMake及链接脚本。下表记录当前配置；第4～6节的后续外设表格仍为目标分配，不代表已启用或已通过实物测试。
 
 | 项目 | SBCG当前配置 | 目标/处理 |
 | --- | --- | --- |
@@ -16,13 +16,15 @@
 | Flash | **链接脚本1024K，即1 MiB** | 已与NG目标一致；本轮未改链接脚本 |
 | 软件版本 | CubeMX 6.18.1、DB.6.0.181、CubeF7 V1.17.4 | 两板固定同一版本；本文件BSP参数须对照该版本核查 |
 | 显示格式约定 | **用户指定RGB565，每像素16位/2字节** | 后续CubeMX的LTDC图层、帧缓冲和绘图代码按第5.2节统一；当前未启用LTDC；目标LTDC模式和DMA2D同为RGB565 |
-| 已启用资源 | SYS/RCC/NVIC/CORTEX_M7；SWD+SWO，PB3/PA13/PA14及HSE脚 | 未启用LTDC/FMC/ETH/USART1/I2C3/TIM2；DHT11的PG7未分配 |
-| 时钟 | HCLK216 MHz、PCLK1 54 MHz、APB1定时器108 MHz；HSE_ON、25 MHz | 第5.1节200 MHz为建议目标，须通过CubeMX调整；不能照抄PSC=99到当前216 MHz时钟 |
+| 已启用资源 | SYS/RCC/NVIC/CORTEX_M7；按老师推荐保留Trace Asynchronous Sw（SWD+SWO），PB3/PA13/PA14及HSE脚；时基SysTick | PA15未分配；未启用LTDC/FMC/ETH/USART1/I2C3/TIM2；DHT11的PG7未分配 |
+| 时钟 | HSE Bypass 25 MHz，M25/N400/P2；HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；APB1/APB2定时器分支100/200 MHz | 已与生成代码一致；FMC/TIM2尚未启用，SDRAM100 MHz及TIM2 1 MHz计数仍是后续目标 |
+| PLLQ与电源/Flash | PLLQ=2，Q输出200 MHz；Scale1、OverDrive、FLASH_LATENCY_6 | USB/RNG/SDMMC均未启用；启用前须重新规划相关时钟域 |
+| 验证 | 2026-10-16执行cmake --build --preset Debug通过，无编译警告 | 未烧录，SystemCoreClock、uwTick及实物启动结果待记录；M0.1未验收、未作为已验证功能提交 |
 | 生成GPIO | 仅开启GPIOA/B/H时钟，未定义DHT11/PPS标签 | CubeMX分配PG7及其他目标引脚后再生成GPIO初始化和标签宏 |
 
-第一步操作见同目录 `CubeMX_Step1.md`。本地AGENTS.md第4节要求硬件变化由CubeMX完成，并在未经授权操作该流程时等待用户重新生成。因此本次没有改 `.ioc`、`SystemClock_Config()`、`MX_GPIO_Init()`、链接脚本、DMA/NVIC或固件调用链；配置差异和预期生成变化均写入第6节。
+第一步操作及实物验收见同目录 `CubeMX_Step1.md`第2节。本地AGENTS.md第4节要求硬件变化由CubeMX完成。用户已保存并生成本步配置，本次仅只读核对并更新文档，未手改.ioc、生成初始化、链接脚本、DMA/NVIC或固件调用链。
 
-**本轮推进边界：下一次CubeMX操作只做Serial Wire、HSE Bypass 25 MHz、HCLK 200 MHz和相应总线分频。** 屏幕、网口、TIM2及音频DMA先不启用；第4～6节是后续分阶段目标，不是本轮一次完成的配置清单。
+**本轮推进边界：Trace Asynchronous Sw、HSE Bypass 25 MHz、HCLK 200 MHz和相应总线分频已生成并通过构建，先完成实物启动验证。** 屏幕、网口、TIM2及音频DMA先不启用；第4～6节是后续分阶段目标，不是本轮一次完成的配置清单。
 
 **共用工程尚未落实。** 本机只读确认的是SBCG / CubeMX 6.18.1 / CubeF7 V1.17.4 / CMake。用户审查提到另一侧SBCJ / 6.15 / CubeIDE，但该工程尚未取得；不能写成两侧已共用同一.ioc或同一固件。配置前先约定主工程和工具/固件包版本，并读取两板真实UID、指定A/B。详细记录方法见第一步指南第1.2节；不把ST-LINK USB序列号当目标MCU UID。PTP到TIM2由SBCG负责人先验证单板，再同步已验证方案到队友工程。
 
@@ -197,8 +199,9 @@
 | PB7（B5） | VCP_RX ← STLINK_TX ← CN14 USB | USART1_RX / AF7 | DEBUG_UART_RX；huart1 | U1 | 已连VCP；不是PB6/PA10默认组合 |
 | **PA15（A13）** | **CN7-2 / Arduino D9** | **TIM2_CH1 / AF1** | **PPS_OUT；htim2** | P1 | 原为扩展脚，本方案占用；不要再用于JTAG/SPI/其他模块 |
 | PG6（J15） | CN4-3 / Arduino D2 | GPIO_Output（备选） | PPS_OUT（仅选备选时） | P1备选 | 未默认分配；若要求严格GPIO_Output可改此脚，需实测中断抖动 |
-| PA13（A15） | SWDIO，板载ST-LINK | SYS_SWDIO | 保留SYS原名 | Serial Wire | 已占用，不改为通用GPIO |
-| PA14（A14） | SWCLK，板载ST-LINK | SYS_SWCLK | 保留SYS原名 | Serial Wire | 已占用，不改为通用GPIO |
+| PA13（A15） | SWDIO，板载ST-LINK | SYS_SWDIO | 保留SYS原名 | Trace Asynchronous Sw | 已占用，不改为通用GPIO |
+| PA14（A14） | SWCLK，板载ST-LINK | SYS_SWCLK | 保留SYS原名 | Trace Asynchronous Sw | 已占用，不改为通用GPIO |
+| PB3 | SWO调试跟踪输出 | SYS_JTDO-SWO | 保留SYS原名 | Trace Asynchronous Sw | 保留，不分配其它功能；程序输出和调试器接收尚未配置 |
 | PH0（G1） | X2 OSC_25M经R30输入 | RCC_OSC_IN | 保留RCC原名 | 第5.1节 | 已接25 MHz有源时钟；核对实物修订 |
 | PH1（H1） | OSC_OUT；B-04图中未用 | RCC_OSC_OUT/保留 | 不作为外接接口 | 第5.1节 | 不以“无连接”推定能在扩展口接入 |
 
@@ -256,14 +259,15 @@ PH15先不给其它GPIO输出、PPS或课程模块使用；PD6同样保留。启
 
 ## 5. 两板统一的初始化参数
 
-### 5.1 时钟基线（建议值，不是唯一可行方案）
+### 5.1 时钟基线（SYS/RCC已生成，后续外设时钟待配置）
 
-为使 SDRAM 初始化和刷新数与官方 BSP 的100 MHz配置一致，建议两板先采用 **SYSCLK/HCLK = 200 MHz，SDCLK = HCLK/2 = 100 MHz**；APB1 = 50 MHz，APB2 = 100 MHz，采用常规定时器倍频设置，使 TIM2 时钟为100 MHz。参数必须以 CubeMX Clock Configuration 显示值及生成代码为准。
+当前SBCG已生成 **SYSCLK/HCLK = 200 MHz、APB1 = 50 MHz、APB2 = 100 MHz**。后续FMC计划采用SDCLK = HCLK/2 = 100 MHz，便于复用官方BSP的100 MHz初始化参考；常规定时器倍频路径为TIM2提供100 MHz输入。FMC、TIM2尚未启用，上述外设时钟仍待配置和实测。两板共用基线仍待落实；参数必须以CubeMX及生成代码为准。
 
 | 设置 | 建议 |
 | --- | --- |
 | RCC HSE | Bypass Clock Source，输入25 MHz；B-04原理图X2为有源振荡器，经R30接PH0，并给PHY供25 MHz参考 |
 | 主PLL | HSE，PLLM=25、PLLN=400、PLLP=2；其它输出只按实际使用外设配置 |
+| PLLQ | 当前实际/2，Q输出200 MHz，USB/RNG/SDMMC未启用；此前/8建议仅得到50 MHz，并非当前配置，也不满足USB FS的48 MHz要求 |
 | 总线 | AHB /1，APB1 /4，APB2 /2；TIMPRE采用常规倍频路径并核对TIM2时钟 |
 | LTDC | 锁定PLLSAIN=192、PLLSAIR=5、PLLSAI DivR=4：9.6 MHz；所有图层与有效引脚模式RGB565；音频不得改这一支路 |
 | SAI2预留 | 选择RCC_SAI2CLKSOURCE_PLLI2S；PLLI2SN/Q/DivQ按采样率单独确定，不使用PLLSAI |
@@ -393,7 +397,7 @@ PPS验收时每个上升沿表示PTP共同整秒，而不是复位后的本板�
 
 默认保持GPIO开漏输出模式即可释放总线并读取引脚输入，不需要反复把生成的GPIO初始化改成输入/推挽。若后续选EXTI或定时器捕获，先明确新的CubeMX配置和驱动所有权，不能在现有生成代码里偷偷追加AF或IRQ初始化。
 
-微秒计时不能用 `HAL_Delay()`；若使用DWT，其周期计数换算依据实际 `SystemCoreClock`，目标200 MHz和当前216 MHz不可混用。**读取DHT11时不全局关闭中断数毫秒**，以免破坏±10 μs同步、ETH服务或音频DMA。带中断的短轮询在高负载下仍可能漏掉DHT11位边沿；按响应、位宽、校验和超时检测失败，延后重试，不为温度读取阻塞时间同步。正式联调应同时刷新LCD、收发网络并采集音频；若失败率不可接受，再经CubeMX设计独立捕获方案。
+微秒计时不能用 `HAL_Delay()`；若使用DWT，其周期计数换算依据实际 `SystemCoreClock`，当前200 MHz配置与此前216 MHz基线的换算参数不可混用。**读取DHT11时不全局关闭中断数毫秒**，以免破坏±10 μs同步、ETH服务或音频DMA。带中断的短轮询在高负载下仍可能漏掉DHT11位边沿；按响应、位宽、校验和超时检测失败，延后重试，不为温度读取阻塞时间同步。正式联调应同时刷新LCD、收发网络并采集音频；若失败率不可接受，再经CubeMX设计独立捕获方案。
 
 **两块板必须用同一个温度。** 一只DHT11接A板，A温度服务是唯一自动温度来源；B通过UDP接收，不独立读取另一只传感器。两板使用相同 `environment_temperature_milli_c` 整数值和第5.9节固定声速算法，避免两板声速不同影响同次测量两屏距离差≤1 mm的目标；时间戳、算法、传感器精度及最终测距指标仍需实测。传感器放通风处，避开MCU、背光和稳压器热源。
 
@@ -460,7 +464,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 
 1. **记录两板实物。** MCU型号、MB1191修订、屏幕型号、ST-LINK连接与焊接改动；记录CubeMX/CubeIDE版本和STM32CubeF7包版本。若实物与B-04不同，先用对应ST原理图核对差异；核对课程DHT11小板的引脚丝印、电压、上拉和数量。
 2. **建立一份共享硬件基线。** 优先Board Selector选STM32F746G-DISCO；若选MCU Selector，必须选STM32F746NGH6/TFBGA216。SBCG现有工程已选NG型号、链接Flash为1024K，保持这一基线；不新建替代项目，也不直接改 `.ioc` 或链接脚本。已有项目通过图形界面编辑。板默认初始化可作参考，但逐项检查默认启用的外设；不能只依赖Board Selector自动结果。
-3. **SYS/RCC/Clock Configuration。** Debug选Serial Wire，保留PA13/PA14；配置HSE25 MHz及第5.1节基线。确认SYSCLK/HCLK、APB时钟、TIM2、SDCLK和LTDC时钟实际显示值，无时钟错误。暂不启用主MCU USB。
+3. **SYS/RCC/Clock Configuration。** Debug按老师推荐保留Trace Asynchronous Sw及PA13/PA14/PB3，时基SysTick，PA15留给PPS；配置HSE25 MHz及第5.1节基线。确认SYSCLK/HCLK、APB时钟、TIM2、SDCLK和LTDC时钟实际显示值，无时钟错误。暂不启用主MCU USB。
 4. **固定GPIO和标签。** 按第4节逐脚选择功能和User Label；对自动分配到错误焊接位置的引脚，在图形界面重新选择、必要时锁定。重点检查PG12/AF9、SDCKE0/PC3、SDNE0/PH3、USART1_RX/PB7、ETH_TXD0/PG13和ETH_TXD1/PG14。
 5. **FMC。** 启用SDRAM Bank1，16位、8列、12行、4内部Bank和第5.3节参数；确认全部38个FMC引脚。生成后的应用还需SDRAM命令序列和刷新设置，不能只打开FMC就使用外部内存。
 6. **LTDC。** 选择RGB565引脚模式，按第4.1节配置20个有效AF及8个低位GPIO恒零；G3选PJ10。输入第5.2节唯一时序1/43/8和10/12/4，图层/帧缓冲/DMA2D均565。完成SDRAM/MPU再验证整屏颜色。
@@ -472,7 +476,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 12. **保存与生成。** 仅点击CubeMX保存`.ioc`、Generate Code；配置保留USER CODE区。检查生成的GPIO AF、外设初始化与时钟值，业务逻辑放USER CODE区或独立文件。SDRAM命令、触控驱动、PHY管理、时间同步并非全部由CubeMX自动完成。
 13. **队友共用。** 两板使用同一.ioc基线、固件及BOARD_A_UID/BOARD_B_UID角色表；上电UID查表确定角色。两端共用第5.9节math_version=1整数模块和测量快照，运行验收前核对第8节清单。
 
-本轮记录用户已完成的NG器件/1024K工程基线并交付可审核配置指南；PG7、目标时钟、FMC和LTDC尚未在CubeMX配置。按SBCG/AGENTS.md第4节，用户在CubeMX完成本里程碑的设置并重新生成后，再核查生成代码、开展DHT11驱动实现和硬件测试。此处不通过手写HAL初始化替代生成过程。
+当前已核对用户通过CubeMX生成的NG器件/1024K、HSE Bypass及200 MHz基线，构建通过；下一步先按第一步指南第2.6节验证启动。PG7、FMC、LTDC、ETH和TIM2仍未配置，不越过当前增量直接实现DHT11或其它外设功能。此处不通过手写HAL初始化替代生成过程。
 
 ## 7. 冲突与易错项
 
@@ -487,7 +491,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | PH7/PH8：I2C3与FMC其他候选 | 板上用于触控/音频/相机控制；SDRAM使用PC3/PH3等实际连线 |
 | PG12：LTDC_B4 | AF9，其他所选LCD脚大多AF14；逐脚核对 |
 | PG2：PHY RXER/地址strap | 有硬连线，即使RMII界面只显示9根常用线，也不可当空闲GPIO输出 |
-| PA15：PPS与JTAG/SPI | SYS只选Serial Wire；不再选JTAG、SPI片选或另一课程模块同脚 |
+| PA15：PPS与JTAG/SPI | SYS保留Trace Asynchronous Sw，PB3用于SWO、不占PA15；不选完整JTAG、SPI片选或另一课程模块同脚 |
 | 时间域与TIM2 | ETH/PTP为唯一测量时间；TIM2 1 MHz只执行PTP秒脉冲，取消ARR999999自由秒时钟；所有者唯一 |
 | PB5：ETH_PPS_OUT候选与USB_HS_ULPI_D7 | 板上PB5连USB PHY，且不是已核实的Arduino输出口；不默认用PB5替代本方案PPS接口 |
 | PI1：Arduino D13与板载LD1 | D13带LED负载；不是优先选择的验收PPS接口 |
@@ -512,7 +516,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 - [ ] 已落实SBCG/SBCJ的共用工程、生成工具与版本；跨工程共享仍未完成时不标为已统一。
 - [ ] 对照实物确认CN7-2是D9/PA15，CN6-6/7是GND；不是根据PDF图的观看方向猜针序。
 - [ ] 确认PA9 VCP路由电阻状态、两块板各自COM号。
-- [ ] 固定外设合计：LCD/触控33个普通I/O、SDRAM38个、ETH10个、VCP2个、PPS1个、DHT11 1个；共85个**不同**I/O分配（其中B板PG7仅预留），不含NRST、SWD、RCC及第4.7节额外音频预留。按生成代码核对没有重复分配。
+- [ ] 固定外设合计：LCD/触控33个普通I/O、SDRAM38个、ETH10个、VCP2个、PPS1个、DHT11 1个；共85个**不同**I/O分配（其中B板PG7仅预留），不含NRST、SWD/SWO、RCC及第4.7节额外音频预留。按生成代码核对没有重复分配。
 - [ ] 记录实际HSE、HCLK、SDCLK、LTDC像素时钟及TIM2计数时钟。
 - [ ] SDRAM上电命令、刷新、内存区域和Cache方案已统一；LCD图层像素格式与绘图程序一致。
 - [ ] 触控型号、7位地址及方向已确认；共享I2C3访问不存在重复初始化。
@@ -539,7 +543,8 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 - [ ] 上电至少1秒、起始18～30 ms、读取间隔>2秒、完整40位及校验符合实际模块版本。
 - [ ] 同时运行网络、LCD和音频时，DHT11读取不屏蔽实时中断；PPS仍满足±10 μs，失败重试和超龄状态可观察。
 - [x] 当前SBCG的NG型号/1024K链接设置已只读核对一致。
-- [ ] 按第一步指南在CubeMX调整HSE/目标时钟，并核对生成代码；随后再配置FMC、RGB565 LTDC和PPS。
+- [x] 已按第一步指南生成HSE Bypass/200 MHz配置，核对.ioc与生成代码且Debug构建通过；未提前启用后续外设。
+- [ ] 系统时钟实物启动验收：记录SystemCoreClock=200000000、uwTick持续增加及无异常；通过后提交M0.1功能增量。
 - [ ] 离线测量不依赖电脑辅助程序；示波器和串口仅观察/设参。
 
 ### 8.3 尚未确定、需要补录的信息
@@ -549,7 +554,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | 两板实际PCB版本及改动 | 未看到实物丝印/焊桥 | 提供版本和路由状态后按对应原理图核查 |
 | 实物U4速度等级/最小时序 | 现有表格取ST BSP参考值 | 获取对应SDRAM器件资料，复核tRAS/tRC/CAS及实际SDCLK |
 | 课程DHT11小板 | 已确定单只接A、UDP共享到B；形态、上拉、厂家版本未现场确认 | 核对丝印和上拉；不使用两只独立温度参与同一测量 |
-| CubeMX系统时钟与显示配置 | 已读到6.18.1 / CubeF7 V1.17.4；NG/1024K已一致，当前仍216 MHz/HSE_ON且无LTDC | 按第一步指南核对系统时钟；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
+| CubeMX系统时钟与显示配置 | 6.18.1 / CubeF7 V1.17.4；NG/1024K、HSE Bypass/200 MHz、Trace Asynchronous Sw已生成并构建通过；无LTDC | 先完成系统时钟实物启动验收；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
 | SBCG与SBCJ共用工程 | 本机确认SBCG/CMake/6.18.1；另一侧6.15/CubeIDE来自用户审查，工程尚未取得 | 先落实主工程、工具与包版本，未迁移前不能声称共用同一.ioc |
 | 音频采样/时钟/DMA与IRQ | PLLI2S及第4.8节BSP DMA预留已定；PH15/PD6用途存在BSP/原理图差异 | 确认采样/缓冲/IRQ与实际生成DMA；禁止更改PLLSAI，不把BSP宏当接线证据 |
 | PTP时间服务/PPS内部映射 | 唯一时间源ETH1588、TIM2仅输出已定；协议/服务/映射尚未实现 | 验证硬件TX/RX时戳、跨秒读一致性、PTP→TIM2硬件PPS与指定交换机±10 μs |
@@ -578,4 +583,4 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 
 公开资料入口：[ST产品及对应PCB原理图](https://www.st.com/en/evaluation-tools/32f746gdiscovery.html)、[UM1907公开PDF](https://www.st.com/resource/en/user_manual/dm00190424-discovery-kit-for-stm32f7-series-with-stm32f746ng-mcu-stmicroelectronics.pdf)、[DS10916公开PDF](https://www.st.com/resource/en/datasheet/stm32f746ng.pdf)。在线PDF修订可能不同于上述用户文件；不能将在线新版页码套用到上传Rev 4。BSP链接指向可更新分支，团队实施时应固定所用CubeF7版本。
 
-本次交付为**资料核查与配置指南**，未连接实物、未运行CubeMX生成工程、未修改`.ioc`，也未声称硬件或验收已经通过。所有需实测的事项已列入第8节。
+本次交付为**当前配置与验证状态的文档更新**。用户已通过CubeMX生成200 MHz配置；本次未连接实物、未操作CubeMX、未修改.ioc或固件，未声称硬件验收通过。当前生成变更及VS Code设置变化仍未混入文档提交。所有需实测的事项已列入第8节。
