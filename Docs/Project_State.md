@@ -9,11 +9,11 @@
 | 仓库 | https://github.com/jxq1231/SBCG |
 | 主工程 | SBCG，STM32F746NGH6 / TFBGA216，Flash 1024 KiB |
 | 工具版本 | CubeMX 6.18.1，CubeF7 V1.17.4，GCC/CMake/Ninja，VS Code |
-| master | 共享文档与主机工作流；固件仍是原216 MHz/HSE_ON生成基线，未取得实物验收记录 |
+| master | 已通过PR #1合并200 MHz/HSE Bypass生成快照（7117489）；合并不代表实物启动验收 |
 | jxq/m0-clock-review | 本次共享的200 MHz/HSE Bypass生成快照，仅供审阅和上板验收，不代表功能完成 |
 | 双板共用工程 | 仍待落实；另一侧SBCJ版本信息来自此前审查，尚未核对其完整工程 |
 
-原有`CubeMX_Step1.md`及`Hardware_Resources.md`中的“当前200 MHz”指待验收生成快照；在master阅读时应同时查看本表。其“未作为已验证功能提交”仍成立；上传审阅快照不替代硬件验收。
+原有`CubeMX_Step1.md`及`Hardware_Resources.md`中的“当前200 MHz”指待验收生成快照。其“未作为已验证功能提交”仍成立；快照已合并，用户已提供烧录校验成功日志，启动运行仍待验收。
 
 ## 已完成并有证据的工作
 
@@ -36,13 +36,23 @@
 
 ## 尚缺的证据与下一步
 
-1. 用户执行或明确授权烧录/调试后，验证200 MHz快照能越过SystemClock_Config()并进入主循环。
+1. 用户已提供烧录校验成功日志，下一步验证固件能越过SystemClock_Config()并进入主循环；本次匹配器修复不重复烧录。
 2. 记录SystemCoreClock=200000000、uwTick持续增加及无错误/异常；软件时钟值需结合RCC配置核对，不代替独立测频。
 3. 分别记录两板真实96位UID及A/B指定；不要使用ST-LINK USB序列号代替MCU UID。
-4. 补齐板卡修订、实际工具版本、固件提交/ELF校验值和观察结果，审核通过后再讨论合并时钟快照。
+4. 补齐板卡修订、实际工具版本、已烧录固件提交/ELF校验值和观察结果，记录M0.1启动验收结论。
 5. 停在当前增量；后续FMC/SDRAM、显示或网络按团队确认的下一项独立目标开展。
 
-当前未实现PTP、声音采集、声音检测、温度UDP或测距算法。尚无烧录/运行通过、PPS精度或最终测距指标的实测记录。
+当前未实现PTP、声音采集、声音检测、温度UDP或测距算法。已有用户提供的烧录校验通过日志；尚无启动运行通过、PPS精度或最终测距指标的实测记录。
+
+## 已确认的调试连接问题
+
+2026-10-16已在用户授权下复现OpenOCD的CPUID=0x1a识别失败。单独降速仍失败，采用硬件复位下连接后恢复正常，读取CPUID=0x410fc271、DBGMCU_ID=0x10016449；1800 kHz下亦通过。Flash、Run和F5现共用`.vscode/openocd-stm32f746.cfg`，详细证据见`Development_Workflow.md`第8节。
+
+此前连接诊断仅复位/暂停、读寄存器并恢复运行，没有写Flash、擦除或改选项字节。用户随后提供`Programming Finished`、`Verified OK`及`Resetting Target`日志，确认该次烧录校验成功；不将其计为M0.1启动运行通过。
+
+## 构建任务匹配器修复
+
+2026-10-16用户报告`$gcc`匹配器引用无效。三个构建任务已改为独立内联GCC匹配器，捕获源码位置和warning/error，不再要求C/C++扩展注册命名匹配器。细节和VS Code界面复验步骤见`Development_Workflow.md`第9节。本次不修改CubeMX配置、固件、IRQ、DMA或缓存，不连接硬件。
 
 ## 构建、烧录与观察入口
 
