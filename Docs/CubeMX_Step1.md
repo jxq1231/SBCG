@@ -52,7 +52,7 @@ cmake --build --preset Debug --parallel
 
 地址与数值对应本次已比对ELF；完整哈希、寄存器、日志及限制见[M0_1_Startup.md](Milestones/M0_1_Startup.md)。当前板通过的是调试复位和短时运行，不是第二板、冷启动或独立测频。
 
-上述实测ELF调用链为`main → MPU_Config → HAL_Init → SystemClock_Config → MX_GPIO_Init → 空主循环`。后续M0.2工作区已在GPIO之后加入USART1初始化，但其新ELF尚未运行验证。现有SysTick仅维护HAL tick，无新增IRQ、DMA或缓存维护。
+上述实测ELF调用链为`main → MPU_Config → HAL_Init → SystemClock_Config → MX_GPIO_Init → 空主循环`。后续M0.2工作区已在GPIO之后加入USART1初始化、App_Init和主循环App_Process调用；启动/心跳新ELF已构建，用户日志已确认本板发送通过，见[M0.2报告](Milestones/M0_2_Serial.md)。现有SysTick仅维护HAL tick，无新增IRQ、DMA或缓存维护。
 
 ## 4. 以后复验时的操作边界
 
@@ -70,4 +70,4 @@ cmake --build --preset Debug --parallel
 - [x] 用户烧录校验成功；后续只读Flash比对与单板启动观察通过。
 - [ ] 冷启动、独立测频未执行；其它硬件性能按其里程碑单独验收。
 
-后续目标按完整路线确定；USART1当前只完成生成配置及构建，尚无收发实测；显示、网络、音频和温度功能未实现。
+后续目标按完整路线确定；USART1启动信息/每秒心跳已接入并通过主机行为测试和构建，用户实物启动/心跳发送验收通过，MCU接收未实现；显示、网络、音频和温度功能未实现。

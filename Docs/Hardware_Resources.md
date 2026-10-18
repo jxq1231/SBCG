@@ -10,13 +10,13 @@
 | --- | --- |
 | 当前实测 | 本板200 MHz系统基线、主循环、HAL时基和调试复位启动，见[报告](Milestones/M0_1_Startup.md) |
 | 板级参考 | 历史按UM1907 Rev4的MB1191 B-04原理图/I/O表、DS10916及本机CubeF7 V1.17.4 BSP核对的连线；当前PCB修订与改动未现场确认 |
-| 设计目标 | 以下FMC/LTDC、ETH/PTP、SAI/DMA和DHT11配置当前尚未启用；USART1已在当前工作区生成并构建，串口实测仍待完成 |
+| 设计目标 | 以下FMC/LTDC、ETH/PTP、SAI/DMA和DHT11配置当前尚未启用；USART1已在当前工作区生成并构建，启动/心跳发送实测已通过，MCU接收未实现 |
 
 任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。用户确认课程模块为DHT11，但模块脚序、电压、上拉和具体版本仍需在自动温补阶段核对。当前不检查第二板；双板共用基线与角色在后续联调阶段落实。
 
 当前SYS/RCC为HSE Bypass、M25/N400/P2、HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；PLLQ实际/2，不提供48 MHz。其余外设参数一律按后续目标理解。所有硬件修改由CubeMX完成，不手改`.ioc`或生成初始化。
 
-USART1本次生成值已核对为PA9/TX、PB7/RX、115200 8N1、PCLK2、无UART IRQ/DMA；应用收发尚未实现。串口工具按用户指定采用[SerialWeb](SerialWeb.md)，这里只记录配置，不声明板级VCP收发已通过。
+USART1本次生成值已核对为PA9/TX、PB7/RX、115200 8N1、PCLK2、无UART IRQ/DMA；启动信息和每秒心跳代码已接入并通过主机行为测试；用户实物接收日志已确认启动/心跳发送通过，MCU接收未实现。串口工具按用户指定采用[SerialWeb](SerialWeb.md)，板级VCP发送证据见[M0.2报告](Milestones/M0_2_Serial.md)，不据此声明MCU接收通过。
 
 ## 1. 先统一的结论
 

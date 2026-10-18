@@ -46,7 +46,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | --- | --- | --- |
 | 工程与工具链 | STM32F746NGH6 / TFBGA216，CubeMX 6.18.1，CubeF7 V1.17.4 | [工程配置](SBCG.ioc) |
 | 主机开发工作流 | 环境检查、Debug/Release构建、日志报告、地址定位已完成 | [操作指南](Docs/Development_Workflow.md) |
-| M0.2串口观测 | 当前工作区USART1配置和Debug构建通过，收发应用/实测待完成 | [SerialWeb使用与配置核对](Docs/SerialWeb.md) |
+| M0.2串口观测 | 启动信息/每秒心跳代码、5项主机行为测试和Debug构建通过；用户已提供BOOT及21条心跳，板端发送通过 | [SerialWeb使用与配置核对](Docs/SerialWeb.md) |
 | M0.1系统时钟 | 200 MHz / HSE Bypass，**当前单板调试复位启动通过** | [实物报告](Docs/Milestones/M0_1_Startup.md) |
 | 两板UID与角色 | 已读当前单板真实UID；第二板及A/B指定待补录 | [当前状态](Docs/Project_State.md) |
 | 显示 / 网络 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
@@ -55,7 +55,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 | 里程碑 | 验收目标 | 当前状态 |
 | --- | --- | --- |
-| M0 | 资源规划与系统基线 | 本板启动通过；M0.2 USART1已生成并构建，尚无收发实测 |
+| M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收未实现 |
 | M1 | 以太网链路与双向UDP通信 | 未开始 |
 | M2 | 时间同步及PPS精度验证 | 未开始 |
 | M3 | 音频DMA采集 | 未开始 |

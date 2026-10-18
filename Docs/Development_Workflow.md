@@ -89,6 +89,6 @@ python -B -m unittest discover -s Tools/Monitor/tests -v
 
 按用户指定使用[SerialWeb](https://conductance-lab.xyz/SerialWeb/)。本轮已在Edge打开并检查页面，Web Serial API可用；本机ST-LINK Virtual COM Port枚举为COM3。页面设置115200、8N1、无RTS/CTS流控、UTF-8，点击“连接设备”后由用户选择当前ST-LINK串口。
 
-本轮页面曾记录`SerialPort.open`失败，当前未成功连接。网站提示端口可能被占用，实际原因尚未确认；首轮关闭自动重连，关闭其它占用同一端口的串口窗口，再手动连接。不要把网页能打开或端口已枚举当作收发通过。
+此前页面曾记录`SerialPort.open`失败，原因尚未追溯确定；用户现已回传BOOT及21条心跳，发送路径通过。若以后重现，关闭自动重连及其它占用同一端口的串口窗口，再手动连接。不要把网页能打开或端口已枚举当作收发通过。
 
-USART1的PA9/TX、PB7/RX、PCLK2及生成参数已核对，Debug构建通过。但新UART版本尚未在本轮烧录，固件没有发送、接收或命令解析应用，页面无数据不代表配置错误。具体操作、检查表及ELF边界见[SerialWeb.md](SerialWeb.md)。当前COM编号只代表这台电脑的枚举，不写死为所有人的端口。
+USART1的PA9/TX、PB7/RX、PCLK2及生成参数已核对，Debug构建通过。本次启动信息/每秒心跳已接入，5项应用主机行为测试通过；用户实物日志已确认本版本启动信息和21条心跳接收正常；MCU接收和命令解析未实现。以后复验应先烧录相应固件、连接网页后复位再检查输出。具体操作、检查表及ELF边界见[SerialWeb.md](SerialWeb.md)。当前COM编号只代表这台电脑的枚举，不写死为所有人的端口。
