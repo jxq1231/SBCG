@@ -50,12 +50,16 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/app_main.c
     App/BSP/bsp_console.c
+    App/BSP/bsp_ethernet.c
+    App/Network/ethernet_monitor.c
+    Drivers/BSP/Components/lan8742/lan8742.c
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     App
+    Drivers/BSP/Components/lan8742
 )
 
 # Add project symbols (macros)

@@ -1,10 +1,11 @@
 #include "app_main.h"
 #include "BSP/bsp_console.h"
+#include "Network/ethernet_monitor.h"
 
 #include <inttypes.h>
 #include <stdio.h>
 
-#define APP_FIRMWARE_ID "SBCG-M0.2"
+#define APP_FIRMWARE_ID "SBCG-M1.1"
 #define APP_HEARTBEAT_PERIOD_MS 1000U
 #define APP_LOG_LINE_CAPACITY 160U
 
@@ -41,23 +42,22 @@ void App_Init(void)
         info.core_clock_hz, info.uid_words[0], info.uid_words[1], info.uid_words[2]);
     SendLine(line, length);
     last_heartbeat_ms = BSP_Console_GetTickMs();
+    EthernetMonitor_Init(last_heartbeat_ms, SendLine);
 }
 
 void App_Process(void)
 {
     const uint32_t now_ms = BSP_Console_GetTickMs();
-    if ((uint32_t)(now_ms - last_heartbeat_ms) < APP_HEARTBEAT_PERIOD_MS)
+    if ((uint32_t)(now_ms - last_heartbeat_ms) >= APP_HEARTBEAT_PERIOD_MS)
     {
-        return;
+        /* Skip missed periods instead of flooding after a delayed loop. */
+        last_heartbeat_ms = now_ms;
+        ++heartbeat_seq;
+        char line[APP_LOG_LINE_CAPACITY];
+        const int length = snprintf(line, sizeof(line),
+            "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32 "\r\n",
+            heartbeat_seq, now_ms, (uint32_t)app_tx_error_count);
+        SendLine(line, length);
     }
-
-    /* Unsigned subtraction handles tick wrap. Skip missed periods instead of
-       flooding the UART after a delayed main loop or an unsuccessful write. */
-    last_heartbeat_ms = now_ms;
-    ++heartbeat_seq;
-    char line[APP_LOG_LINE_CAPACITY];
-    const int length = snprintf(line, sizeof(line),
-        "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32 "\r\n",
-        heartbeat_seq, now_ms, (uint32_t)app_tx_error_count);
-    SendLine(line, length);
+    EthernetMonitor_Process(BSP_Console_GetTickMs());
 }
