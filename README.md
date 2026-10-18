@@ -40,7 +40,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**截至2026-10-18：主机工具已验证；200 MHz基线已在当前连接的一块板通过调试复位启动与短时运行检查。第二块板、冷启动和后续功能仍待验收。**
+**截至2026-10-18：用户确认Build正常；200 MHz基线已在当前板通过调试复位启动与短时运行检查。当前不检查第二板，后续继续本板开发；整机测距仍未实现。**
 
 | 内容 | 状态 | 入口 |
 | --- | --- | --- |
@@ -50,11 +50,11 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | 两板UID与角色 | 已读当前单板真实UID；第二板及A/B指定待补录 | [当前状态](Docs/Project_State.md) |
 | 显示 / 网络 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
 
-**分支与证据分开记录：** `master`已通过PR #1合并200 MHz生成快照；`jxq/m0-clock-review`继续保存连接/构建诊断修复和当前单板启动证据。主分支的合并状态不代替实物记录；单板启动通过也不代表测距仪完成，详细区别见[项目状态](Docs/Project_State.md)。
+完整要求及实施顺序见[任务书路线与验收矩阵](Docs/Project_Roadmap.md)，当前实测范围见[项目状态](Docs/Project_State.md)。路线优先建立观测、网络与统一时间，再完成声音检测、测距和基础LCD；基础60分闭环后推进提高功能。所有文档从[Docs入口](Docs/README.md)阅读。
 
 | 里程碑 | 验收目标 | 当前状态 |
 | --- | --- | --- |
-| M0 | 资源规划与共用硬件基线 | 进行中：单板启动通过，两板共同基线待验收 |
+| M0 | 资源规划与系统基线 | 本板启动通过；下一步建议建立USART1观测入口，尚未实施 |
 | M1 | 以太网链路与双向UDP通信 | 未开始 |
 | M2 | 时间同步及PPS精度验证 | 未开始 |
 | M3 | 音频DMA采集 | 未开始 |
@@ -101,7 +101,9 @@ VS Code中，`Ctrl+Shift+B`运行默认Debug构建；“运行任务 → STM32: 
 
 | 文档 | 内容 |
 | --- | --- |
+| [Docs入口](Docs/README.md) | 阅读顺序、资料依据与已验证/目标配置的区别 |
 | [Project State](Docs/Project_State.md) | 当前分支、已完成事项、待验收项目和下一步 |
+| [Project Roadmap](Docs/Project_Roadmap.md) | 任务书基础/提高指标、全部开发步骤、误差预算与验收方法 |
 | [CubeMX Step 1](Docs/CubeMX_Step1.md) | SYS/RCC配置、200 MHz基线及启动验收步骤 |
 | [Single-board Startup](Docs/Milestones/M0_1_Startup.md) | ELF与Flash比对、时钟寄存器、主循环、HAL时基及单板验收范围 |
 | [Hardware Resources](Docs/Hardware_Resources.md) | 引脚、时钟、DMA、显示、同步、温度和测距约定 |

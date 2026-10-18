@@ -26,7 +26,7 @@
 | MCU UIDw2 | `0x36363631` |
 | 板卡身份边界 | PCB修订和A/B角色尚未指定；上述为真实MCU UID，不是ST-LINK USB序列号 |
 
-先解析ELF的Flash加载段，再用OpenOCD的`dump_image`只读回0x08000000起的5500字节，逐段对照ELF数据。未使用可能在目标RAM运行校验算法的验收路径。
+先解析ELF的Flash加载段，再用OpenOCD的`dump_image`只读回0x08000000起的5500字节，逐段对照ELF数据。
 
 | Flash加载地址 | 长度 | 比对 |
 | --- | --- | --- |
@@ -84,10 +84,10 @@
 - `startup-readonly.tcl`、`startup-readonly.log`、`runtime-report.json`：实际观察命令、输出及解析结果。
 - 构建报告：`Logs/AutoDebug/20261018T085152-1791357a/report.json`。
 
-日志中的两条`no breakpoint ... found`来自对已删除的时钟/主循环断点重复清理，非目标异常；其余监视断点清理完成，`FINAL_RESUME_OK`和`STARTUP_SCRIPT_COMPLETE`均已记录，OpenOCD退出0。初次临时脚本缺少右括号的解析失败发生在该脚本的目标初始化前，保留在`startup-script-parse-error.log`，不计为固件启动失败。
+日志中的两条`no breakpoint ... found`来自对已删除的时钟/主循环断点重复清理，非目标异常；其余监视断点清理完成，`FINAL_RESUME_OK`和`STARTUP_SCRIPT_COMPLETE`均已记录，OpenOCD退出0。
 
-验收标记：`PASS_SINGLE_BOARD_DEBUG_RESET_STARTUP`。当前只关闭已连接板卡的调试复位启动检查；两板共用基线、第二块板UID/启动、A/B指定、PCB修订及冷启动验证仍待完成。VS Code Build界面消除匹配器提示仍需用户确认，主机构建不能代替该界面结果。
+验收标记：`PASS_SINGLE_BOARD_DEBUG_RESET_STARTUP`。本报告只关闭已连接板卡的调试复位启动检查；不推广为两板、冷启动或独立测频通过。
 
-停在当前增量。后续另行确认独立目标；若继续显示路线，先通过CubeMX配置FMC/SDRAM及所需MPU区域并完成读写验收，再让LTDC访问帧缓冲。本轮未开展这些外设配置。
+验收后用户已确认VS Code Build正常，并要求当前不检查第二板。两板共用基线、角色及另一板的实测在后续联调阶段处理；当前板的后续目标以[完整路线](../Project_Roadmap.md)为准，不从本实验记录另开一套待办。本报告的固件、哈希与实测数值保持原样。
 
 命令语义依据：[OpenOCD通用命令](https://openocd.org/doc/html/General-Commands.html)、[OpenOCD寄存器读取](https://openocd.org/doc-release/html/CPU-Configuration.html)。实际地址、寄存器位及结果以当前ELF、CMSIS头文件和上述本机日志为准。
