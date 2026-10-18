@@ -1,0 +1,14 @@
+#ifndef SBCG_UDP_CONFIG_H
+#define SBCG_UDP_CONFIG_H
+
+/* Application destination, not the CubeMX-generated address of this board. */
+#define UDP_HEARTBEAT_DEST_A 192U
+#define UDP_HEARTBEAT_DEST_B 168U
+#define UDP_HEARTBEAT_DEST_C 10U
+#define UDP_HEARTBEAT_DEST_D 100U
+#define UDP_HEARTBEAT_LOCAL_PORT 5005U
+#define UDP_HEARTBEAT_DEST_PORT 5005U
+#define UDP_HEARTBEAT_PERIOD_MS 1000U
+#define UDP_HEARTBEAT_PACKET_BYTES 28U
+
+#endif

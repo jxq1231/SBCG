@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M1.2%20%7C%20LwIP%20Ping-0f766e?style=flat-square" alt="M1.2，单板LwIP基本ping通过，UDP待实现">
+  <img src="https://img.shields.io/badge/Stage-M1.2%20%7C%20UDP%201Hz-0f766e?style=flat-square" alt="M1.2，单板逐秒UDP发送通过，双向通信待实现">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -25,7 +25,7 @@
 
 SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。目标是在板端完成以太网时间同步、声音事件采集、到达时间差计算和温度补偿，并在两块板上显示一致的测量结果。
 
-这个仓库用于共享工程、审核硬件资源、跟踪实验结果和协作开发。**以下架构描述为设计目标，当前已完成单板LwIP基本ping验收，UDP及测距业务尚未实现。**
+这个仓库用于共享工程、审核硬件资源、跟踪实验结果和协作开发。**以下架构描述为设计目标，当前已完成单板LwIP基本ping和逐秒单向UDP验收；双向通信及测距业务尚未实现。**
 
 | 设计方向 | 团队约定 |
 | --- | --- |
@@ -40,7 +40,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**截至2026-10-19：当前板已通过200 MHz启动、串口心跳、PHY链路和LwIP基本ping验收。当前不检查第二板；UDP及整机测距仍未实现。**
+**截至2026-10-19：当前板已通过200 MHz启动、串口心跳、PHY链路、LwIP基本ping和逐秒单向UDP验收。电脑收到31包、序号2～32、缺口0；当前不检查第二板，整机测距仍未实现。**
 
 | 内容 | 状态 | 入口 |
 | --- | --- | --- |
@@ -50,15 +50,16 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M0.1系统时钟 | 200 MHz / HSE Bypass，**当前单板调试复位启动通过** | [实物报告](Docs/Milestones/M0_1_Startup.md) |
 | 两板UID与角色 | 已读当前单板真实UID；第二板及A/B指定待补录 | [当前状态](Docs/Project_State.md) |
 | M1.1以太网物理链路 | 用户日志确认PHY地址0、ID=0007/C131、100 Mbps全双工，DOWN→UP→DOWN→UP；最后一段98条心跳正常 | [实物验收](Docs/Milestones/M1_1_Ethernet_Setup.md#10-用户实物日志验收结果) |
-| M1.2 LwIP集成 | SBCG-M1.2-INT启动、12条连续心跳、100 Mbps全双工及ping 4/4回复通过；UDP应用未实现 | [集成与实物验收](Docs/Milestones/M1_2_UDP_Setup.md#8-用户实物验收2026-10-19) |
-| 显示 / UDP / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
+| M1.2 LwIP集成 | SBCG-M1.2-INT启动、12条连续心跳、100 Mbps全双工及ping 4/4回复通过；该版本无UDP应用 | [集成与实物验收](Docs/Milestones/M1_2_UDP_Setup.md#8-用户实物验收2026-10-19) |
+| M1.2 单向UDP | SBCG-M1.2-UDP；电脑实收31包、序号2～32、缺口/重复/乱序均0，板端tick间隔1000 ms；新版拔线恢复未测 | [实物结果与复验](Docs/Milestones/M1_2_UDP_Send.md#用户实物验收2026-10-19) |
+| 显示 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
 
 完整要求及实施顺序见[任务书路线与验收矩阵](Docs/Project_Roadmap.md)，当前实测范围见[项目状态](Docs/Project_State.md)。路线优先建立观测、网络与统一时间，再完成声音检测、测距和基础LCD；基础60分闭环后推进提高功能。所有文档从[Docs入口](Docs/README.md)阅读。
 
 | 里程碑 | 验收目标 | 当前状态 |
 | --- | --- | --- |
 | M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收未实现 |
-| M1 | 以太网链路与双向UDP通信 | 当前板PHY及LwIP基本ping通过；UDP未实现 |
+| M1 | 以太网链路与双向UDP通信 | 当前板PHY、LwIP基本ping及板→电脑逐秒UDP通过；新版拔线恢复未测，双向UDP未实现 |
 | M2 | 时间同步及PPS精度验证 | 未开始 |
 | M3 | 音频DMA采集 | 未开始 |
 | M4 | 声音事件检测 | 未开始 |

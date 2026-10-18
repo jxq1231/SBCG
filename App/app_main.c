@@ -3,13 +3,14 @@
 #include "Network/ethernet_monitor.h"
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
+#include "Network/udp_heartbeat.h"
 #endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M1.2-INT"
+#define APP_FIRMWARE_ID "SBCG-M1.2-UDP"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -50,6 +51,9 @@ void App_Init(void)
     SendLine(line, length);
     last_heartbeat_ms = BSP_Console_GetTickMs();
     EthernetMonitor_Init(last_heartbeat_ms, SendLine);
+#ifdef SBCG_USE_LWIP
+    UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
+#endif
 }
 
 void App_Process(void)
@@ -59,6 +63,9 @@ void App_Process(void)
     MX_LWIP_Process();
 #endif
     const uint32_t now_ms = BSP_Console_GetTickMs();
+#ifdef SBCG_USE_LWIP
+    UDPHeartbeat_Process(now_ms);
+#endif
     if ((uint32_t)(now_ms - last_heartbeat_ms) >= APP_HEARTBEAT_PERIOD_MS)
     {
         /* Skip missed periods instead of flooding after a delayed loop. */

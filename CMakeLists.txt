@@ -58,6 +58,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # snapshots still need the user source entry, but never compile both copies.
 if(TARGET LwIP)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_LWIP=1)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_heartbeat.c)
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Drivers/BSP/Components/lan8742/lan8742.c)
 endif()

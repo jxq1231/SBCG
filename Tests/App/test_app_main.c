@@ -1,6 +1,7 @@
 #include "app_main.h"
 #include "BSP/bsp_console.h"
 #include "Network/ethernet_monitor.h"
+#include "Network/udp_heartbeat.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -14,6 +15,24 @@ static uint32_t monitor_calls;
 static EthernetMonitor_Log monitor_log;
 static uint32_t lwip_calls;
 static uint32_t last_lwip_tick_ms;
+static uint32_t udp_calls;
+static bool udp_initialized;
+
+void UDPHeartbeat_Init(uint32_t now_ms, const uint32_t uid_words[3], UDPHeartbeat_Log log)
+{
+    assert(now_ms == tick_ms && log != NULL);
+    assert(uid_words[0] == 0x001A002DU && uid_words[1] == 0x30365105U &&
+           uid_words[2] == 0x36363631U);
+    udp_initialized = true;
+    udp_calls = 0;
+}
+
+void UDPHeartbeat_Process(uint32_t now_ms)
+{
+    assert(udp_initialized && now_ms == tick_ms);
+    assert(lwip_calls > 0U && last_lwip_tick_ms == now_ms);
+    ++udp_calls;
+}
 
 void MX_LWIP_Process(void)
 {
@@ -64,6 +83,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     tick_ms = start_ms;
     write_count = 0U;
     write_ok = initial_write_ok;
+    udp_initialized = false;
     App_Init();
 }
 
@@ -71,8 +91,9 @@ int main(void)
 {
     Reset(0U, true);
     assert(write_count == 1U);
+    assert(udp_initialized);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M1.2-INT,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M1.2-UDP,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -82,6 +103,7 @@ int main(void)
     assert(write_count == 1U);
     assert(monitor_calls == 2U);
     assert(lwip_calls == 2U);
+    assert(udp_calls == 2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);
