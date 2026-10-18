@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M0.1%20%7C%20Hardware%20Pending-d97706?style=flat-square" alt="M0.1，硬件待验收">
+  <img src="https://img.shields.io/badge/Stage-M0.1%20%7C%20Single%20Board%20Boot-0f766e?style=flat-square" alt="M0.1，单板调试复位启动通过">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -40,21 +40,21 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**截至2026-10-16：主机工具已验证；200 MHz配置已生成并在本机构建通过，实物启动尚未验收。**
+**截至2026-10-18：主机工具已验证；200 MHz基线已在当前连接的一块板通过调试复位启动与短时运行检查。第二块板、冷启动和后续功能仍待验收。**
 
 | 内容 | 状态 | 入口 |
 | --- | --- | --- |
 | 工程与工具链 | STM32F746NGH6 / TFBGA216，CubeMX 6.18.1，CubeF7 V1.17.4 | [工程配置](SBCG.ioc) |
 | 主机开发工作流 | 环境检查、Debug/Release构建、日志报告、地址定位已完成 | [操作指南](Docs/Development_Workflow.md) |
-| M0.1系统时钟 | 200 MHz / HSE Bypass生成快照，**待实物验收** | [待验收分支](https://github.com/jxq1231/SBCG/tree/jxq/m0-clock-review) |
-| 两板UID与角色 | 尚待读取真实UID、固定A/B | [当前状态](Docs/Project_State.md) |
+| M0.1系统时钟 | 200 MHz / HSE Bypass，**当前单板调试复位启动通过** | [实物报告](Docs/Milestones/M0_1_Startup.md) |
+| 两板UID与角色 | 已读当前单板真实UID；第二板及A/B指定待补录 | [当前状态](Docs/Project_State.md) |
 | 显示 / 网络 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
 
-**分支与证据分开记录：** `master`共享文档与已验证主机工具，其固件仍为原216 MHz/HSE_ON生成基线；`jxq/m0-clock-review`保存当前200 MHz/HSE Bypass生成快照，供队友审阅和完成上板测试。两者均不代表测距仪已通过硬件验收，详细区别见[项目状态](Docs/Project_State.md)。
+**分支与证据分开记录：** `master`已通过PR #1合并200 MHz生成快照；`jxq/m0-clock-review`继续保存连接/构建诊断修复和当前单板启动证据。主分支的合并状态不代替实物记录；单板启动通过也不代表测距仪完成，详细区别见[项目状态](Docs/Project_State.md)。
 
 | 里程碑 | 验收目标 | 当前状态 |
 | --- | --- | --- |
-| M0 | 资源规划与共用硬件基线 | 进行中：M0.1待启动验收 |
+| M0 | 资源规划与共用硬件基线 | 进行中：单板启动通过，两板共同基线待验收 |
 | M1 | 以太网链路与双向UDP通信 | 未开始 |
 | M2 | 时间同步及PPS精度验证 | 未开始 |
 | M3 | 音频DMA采集 | 未开始 |
@@ -71,7 +71,7 @@ git clone https://github.com/jxq1231/SBCG.git
 cd SBCG
 ```
 
-审阅本次200 MHz生成快照时，另外执行：
+审阅连接/构建诊断修复与最新单板启动记录时，另外执行：
 
 ```powershell
 git switch --track origin/jxq/m0-clock-review
@@ -103,6 +103,7 @@ VS Code中，`Ctrl+Shift+B`运行默认Debug构建；“运行任务 → STM32: 
 | --- | --- |
 | [Project State](Docs/Project_State.md) | 当前分支、已完成事项、待验收项目和下一步 |
 | [CubeMX Step 1](Docs/CubeMX_Step1.md) | SYS/RCC配置、200 MHz基线及启动验收步骤 |
+| [Single-board Startup](Docs/Milestones/M0_1_Startup.md) | ELF与Flash比对、时钟寄存器、主循环、HAL时基及单板验收范围 |
 | [Hardware Resources](Docs/Hardware_Resources.md) | 引脚、时钟、DMA、显示、同步、温度和测距约定 |
 | [Development Workflow](Docs/Development_Workflow.md) | VS Code入口、主机诊断工具、退出码和日志 |
 | [Contributing](CONTRIBUTING.md) | 分支、提交、PR、CubeMX所有权及实验记录要求 |

@@ -1,12 +1,12 @@
 # 分布式声波测距系统：STM32F746G-DISCO 硬件资源与 CubeMX 配置约定
 
-修订日期：2026-10-16。适用：课程提供的两块 STM32F746G-DISCO / 32F746GDISCOVERY，MCU 为 **STM32F746NGH6，TFBGA216**。
+修订日期：2026-10-18。适用：课程提供的两块 STM32F746G-DISCO / 32F746GDISCOVERY，MCU 为 **STM32F746NGH6，TFBGA216**。
 
 **本文件已核查四份用户提供的 PDF；引脚映射以 UM1907 Rev 4 中的 MB1191 B-04 原理图及 I/O 分配表为依据。用户已确认温度传感器为DHT11；实际两板的PCB修订、焊桥/电阻状态、DHT11小板引脚顺序及板载上拉尚未现场确认。以下“推荐参数”是团队统一配置建议，不是已经在两块实物上验证通过的配置。**
 
 ## 0. SBCG工程现状与本次范围
 
-项目根目录：`D:/electronic_design/SBCG`。当前里程碑为 **M0.1——系统时钟基线**，已生成200 MHz配置并通过构建，实物启动待验证。本次仅更新并提交 `Docs/Hardware_Resources.md` 与 `Docs/CubeMX_Step1.md`，不将现有生成代码和VS Code设置变化混入文档提交。源码、.ioc、启动/链接脚本及共享构建配置保持纳入版本控制；build、缓存、固件二进制及原始日志由现有.gitignore排除。Git作者/提交者按项目规则使用jxq及用户指定邮箱，不改全局身份。
+项目根目录：`D:/electronic_design/SBCG`。当前里程碑为 **M0.1——系统时钟基线**，200 MHz配置已生成并通过构建，2026-10-18当前单板调试复位启动检查通过，两板共用基线仍待验收。证据见[单板启动报告](Milestones/M0_1_Startup.md)。本轮只记录实物结果并同步文档，不修改生成代码或VS Code配置。源码、.ioc、启动/链接脚本及共享构建配置保持纳入版本控制；build、缓存、固件二进制及原始日志由现有.gitignore排除。Git作者/提交者按项目规则使用jxq及用户指定邮箱，不改全局身份。
 
 已只读核对 `SBCG.ioc`、`Core/Inc/main.h`、`Core/Src/main.c`、顶层CMake及链接脚本。下表记录当前配置；第4～6节的后续外设表格仍为目标分配，不代表已启用或已通过实物测试。
 
@@ -19,12 +19,12 @@
 | 已启用资源 | SYS/RCC/NVIC/CORTEX_M7；按老师推荐保留Trace Asynchronous Sw（SWD+SWO），PB3/PA13/PA14及HSE脚；时基SysTick | PA15未分配；未启用LTDC/FMC/ETH/USART1/I2C3/TIM2；DHT11的PG7未分配 |
 | 时钟 | HSE Bypass 25 MHz，M25/N400/P2；HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；APB1/APB2定时器分支100/200 MHz | 已与生成代码一致；FMC/TIM2尚未启用，SDRAM100 MHz及TIM2 1 MHz计数仍是后续目标 |
 | PLLQ与电源/Flash | PLLQ=2，Q输出200 MHz；Scale1、OverDrive、FLASH_LATENCY_6 | USB/RNG/SDMMC均未启用；启用前须重新规划相关时钟域 |
-| 验证 | 2026-10-16执行cmake --build --preset Debug通过，无编译警告 | 未烧录，SystemCoreClock、uwTick及实物启动结果待记录；M0.1未验收、未作为已验证功能提交 |
+| 验证 | 2026-10-18 Debug构建与只读Flash比对通过；当前单板SystemCoreClock=200000000、uwTick持续增加且无所监视异常 | 单板调试复位启动证据已归档；第二板、冷启动与独立测频仍待完成 |
 | 生成GPIO | 仅开启GPIOA/B/H时钟，未定义DHT11/PPS标签 | CubeMX分配PG7及其他目标引脚后再生成GPIO初始化和标签宏 |
 
 第一步操作及实物验收见同目录 `CubeMX_Step1.md`第2节。本地AGENTS.md第4节要求硬件变化由CubeMX完成。用户已保存并生成本步配置，本次仅只读核对并更新文档，未手改.ioc、生成初始化、链接脚本、DMA/NVIC或固件调用链。
 
-**本轮推进边界：Trace Asynchronous Sw、HSE Bypass 25 MHz、HCLK 200 MHz和相应总线分频已生成并通过构建，先完成实物启动验证。** 屏幕、网口、TIM2及音频DMA先不启用；第4～6节是后续分阶段目标，不是本轮一次完成的配置清单。
+**本轮推进边界：Trace Asynchronous Sw、HSE Bypass 25 MHz、HCLK 200 MHz和相应总线分频；已完成当前单板调试复位启动验证。** 屏幕、网口、TIM2及音频DMA本轮未启用；第4～6节是后续分阶段目标，不是本轮一次完成的配置清单。
 
 **共用工程尚未落实。** 本机只读确认的是SBCG / CubeMX 6.18.1 / CubeF7 V1.17.4 / CMake。用户审查提到另一侧SBCJ / 6.15 / CubeIDE，但该工程尚未取得；不能写成两侧已共用同一.ioc或同一固件。配置前先约定主工程和工具/固件包版本，并读取两板真实UID、指定A/B。详细记录方法见第一步指南第1.2节；不把ST-LINK USB序列号当目标MCU UID。PTP到TIM2由SBCG负责人先验证单板，再同步已验证方案到队友工程。
 
@@ -476,7 +476,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 12. **保存与生成。** 仅点击CubeMX保存`.ioc`、Generate Code；配置保留USER CODE区。检查生成的GPIO AF、外设初始化与时钟值，业务逻辑放USER CODE区或独立文件。SDRAM命令、触控驱动、PHY管理、时间同步并非全部由CubeMX自动完成。
 13. **队友共用。** 两板使用同一.ioc基线、固件及BOARD_A_UID/BOARD_B_UID角色表；上电UID查表确定角色。两端共用第5.9节math_version=1整数模块和测量快照，运行验收前核对第8节清单。
 
-当前已核对用户通过CubeMX生成的NG器件/1024K、HSE Bypass及200 MHz基线，构建通过；下一步先按第一步指南第2.6节验证启动。PG7、FMC、LTDC、ETH和TIM2仍未配置，不越过当前增量直接实现DHT11或其它外设功能。此处不通过手写HAL初始化替代生成过程。
+当前已核对用户通过CubeMX生成的NG器件/1024K、HSE Bypass及200 MHz基线，构建通过；当前单板已按第一步指南第2.6节完成调试复位启动验证，第二板仍待验证。PG7、FMC、LTDC、ETH和TIM2仍未配置，不越过当前增量直接实现DHT11或其它外设功能。此处不通过手写HAL初始化替代生成过程。
 
 ## 7. 冲突与易错项
 
@@ -544,7 +544,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 - [ ] 同时运行网络、LCD和音频时，DHT11读取不屏蔽实时中断；PPS仍满足±10 μs，失败重试和超龄状态可观察。
 - [x] 当前SBCG的NG型号/1024K链接设置已只读核对一致。
 - [x] 已按第一步指南生成HSE Bypass/200 MHz配置，核对.ioc与生成代码且Debug构建通过；未提前启用后续外设。
-- [ ] 系统时钟实物启动验收：记录SystemCoreClock=200000000、uwTick持续增加及无异常；通过后提交M0.1功能增量。
+- [x] 当前单板系统时钟调试复位启动验收：SystemCoreClock=200000000、uwTick持续增加且无所监视异常；已归档对应ELF与只读Flash比对，不代表第二板通过。
 - [ ] 离线测量不依赖电脑辅助程序；示波器和串口仅观察/设参。
 
 ### 8.3 尚未确定、需要补录的信息
@@ -554,11 +554,11 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | 两板实际PCB版本及改动 | 未看到实物丝印/焊桥 | 提供版本和路由状态后按对应原理图核查 |
 | 实物U4速度等级/最小时序 | 现有表格取ST BSP参考值 | 获取对应SDRAM器件资料，复核tRAS/tRC/CAS及实际SDCLK |
 | 课程DHT11小板 | 已确定单只接A、UDP共享到B；形态、上拉、厂家版本未现场确认 | 核对丝印和上拉；不使用两只独立温度参与同一测量 |
-| CubeMX系统时钟与显示配置 | 6.18.1 / CubeF7 V1.17.4；NG/1024K、HSE Bypass/200 MHz、Trace Asynchronous Sw已生成并构建通过；无LTDC | 先完成系统时钟实物启动验收；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
+| CubeMX系统时钟与显示配置 | 6.18.1 / CubeF7 V1.17.4；NG/1024K、HSE Bypass/200 MHz、Trace Asynchronous Sw已生成；当前单板调试复位启动通过，无LTDC | 补齐第二板及共用基线验收；显示图层固定RGB565，完成FMC后再启用帧缓冲读取 |
 | SBCG与SBCJ共用工程 | 本机确认SBCG/CMake/6.18.1；另一侧6.15/CubeIDE来自用户审查，工程尚未取得 | 先落实主工程、工具与包版本，未迁移前不能声称共用同一.ioc |
 | 音频采样/时钟/DMA与IRQ | PLLI2S及第4.8节BSP DMA预留已定；PH15/PD6用途存在BSP/原理图差异 | 确认采样/缓冲/IRQ与实际生成DMA；禁止更改PLLSAI，不把BSP宏当接线证据 |
 | PTP时间服务/PPS内部映射 | 唯一时间源ETH1588、TIM2仅输出已定；协议/服务/映射尚未实现 | 验证硬件TX/RX时戳、跨秒读一致性、PTP→TIM2硬件PPS与指定交换机±10 μs |
-| 两板实际UID | UID角色机制已定，BOARD_A_UID/BOARD_B_UID值尚未读取提供 | 配置前记录真实UID，不填假值；同一固件未知UID停用测量 |
+| 两板实际UID | 当前板UIDw0/w1/w2已读：001A002D / 30365105 / 36363631；第二板与A/B尚未指定 | 补录另一板并由团队指定A/B，不填假值；同一固件未知UID停用测量 |
 | DHT11驱动与UDP温度版本 | 单DHT11共享、手动设温及保留最后值已定；协议尚未实现 | 实现版本确认/同次测量快照/失效状态，验证两屏差≤1 mm与温补误差 |
 | 允许的供电和示波器连接线 | 待现场器材确认 | 只使用课程提供器材，不增加未允许的电路 |
 
@@ -583,4 +583,4 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 
 公开资料入口：[ST产品及对应PCB原理图](https://www.st.com/en/evaluation-tools/32f746gdiscovery.html)、[UM1907公开PDF](https://www.st.com/resource/en/user_manual/dm00190424-discovery-kit-for-stm32f7-series-with-stm32f746ng-mcu-stmicroelectronics.pdf)、[DS10916公开PDF](https://www.st.com/resource/en/datasheet/stm32f746ng.pdf)。在线PDF修订可能不同于上述用户文件；不能将在线新版页码套用到上传Rev 4。BSP链接指向可更新分支，团队实施时应固定所用CubeF7版本。
 
-本次交付为**当前配置与验证状态的文档更新**。用户已通过CubeMX生成200 MHz配置；本次未连接实物、未操作CubeMX、未修改.ioc或固件，未声称硬件验收通过。当前生成变更及VS Code设置变化仍未混入文档提交。所有需实测的事项已列入第8节。
+本次交付为**当前配置与验证状态的文档更新**。200 MHz生成快照已提交；2026-10-18只读Flash比对、硬件断点、复位/暂停和寄存器观察确认当前单板调试复位启动通过。本轮未写Flash、未操作CubeMX、未修改.ioc或固件，不将单板结果扩展为两板通过。原始记录和范围见单板启动报告，其余待实测事项见第8节。

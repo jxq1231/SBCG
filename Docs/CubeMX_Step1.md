@@ -1,6 +1,6 @@
 # CubeMX第一步：系统时钟基线与RGB565显示约定
 
-修订日期：2026-10-16。工程：`D:/electronic_design/SBCG/SBCG.ioc`。里程碑：M0.1——先建立两块板共用的系统配置，再按固定参数配置显示外设。
+修订日期：2026-10-18。工程：`D:/electronic_design/SBCG/SBCG.ioc`。里程碑：M0.1——当前单板调试复位启动通过，继续补齐两板共用基线，再按独立目标配置后续外设。
 
 ## 1. 当前工程已经确认的状态
 
@@ -12,11 +12,11 @@
 | 当前系统时钟 | HSE25 MHz，HSE Bypass；PLLM25、PLLN400、PLLP2；HCLK200 MHz；PCLK1 50 MHz、PCLK2 100 MHz |
 | 当前调试 | 按老师推荐保留Trace Asynchronous Sw（SWD+SWO），PA13/PA14/PB3；时基SysTick，PA15未分配 |
 | PLLQ与电源/Flash | 实际PLLQ=2，Q输出200 MHz；Scale1、OverDrive、FLASH_LATENCY_6；USB/RNG/SDMMC未启用 |
-| 验证状态 | 2026-10-16已核对.ioc与生成代码，Debug构建通过且无编译警告；未烧录，实物启动待验证，M0.1尚未验收 |
+| 验证状态 | 用户此前烧录校验成功；2026-10-18只读确认Flash加载段与Debug ELF一致，当前单板调试复位启动及HAL时基通过；第二板和冷启动待验收 |
 | 当前外设 | 尚未启用FMC、LTDC、USART1、ETH、I2C3、TIM2；暂无DHT11/PPS标签 |
 | 显示格式要求 | 用户指定RGB565；下文作为两板统一约定 |
 
-型号已经正确，直接打开现有SBCG.ioc，不重新创建工程。用户已通过CubeMX保存并生成本步时钟配置；下文保留操作及复核流程。本次文档更新未手改.ioc或生成初始化，现有生成变更仍未作为已验证功能提交。
+型号已经正确，直接打开现有SBCG.ioc，不重新创建工程。用户已通过CubeMX保存并生成本步时钟配置，快照已提交并合并；下文保留操作及复核流程。2026-10-18的单板实物结果见[启动报告](Milestones/M0_1_Startup.md)，本次未修改.ioc或生成初始化。
 
 ## 1.1 配置前四条已经固定的架构
 
@@ -29,15 +29,15 @@
 
 ## 1.2 这一步的范围和团队前置条件
 
-**M0.1范围：Trace Asynchronous Sw、HSE Bypass 25 MHz、HCLK 200 MHz及相应总线分频；当前已生成并构建通过，下一步先验证实物启动。** 第3节为后续显示约定；此时不配置FMC、LTDC、低位颜色GPIO、DMA2D、ETH、TIM2、SAI或DHT11，不沿着资源文档一次启用全部外设。
+**M0.1范围：Trace Asynchronous Sw、HSE Bypass 25 MHz、HCLK 200 MHz及相应总线分频；当前单板调试复位启动已通过，第二块板与共用基线仍待确认。** 第3节为后续显示约定；本轮不配置FMC、LTDC、低位颜色GPIO、DMA2D、ETH、TIM2、SAI或DHT11，不沿着资源文档一次启用全部外设。
 
 | 项目 | 当前证据 | 配置前处理 |
 | --- | --- | --- |
 | 本机工程 | SBCG；.ioc记录CubeMX 6.18.1、CubeF7 V1.17.4、CMake | 本指南以这个现有工程为基线；Git提交范围仍只在SBCG |
 | 队友另一工程 | 用户审查反馈为SBCJ、CubeMX 6.15、CubeIDE；本机未取得该工程 | “共用一份.ioc”仍是目标，尚未完成；先约定主工程、CubeMX/固件包版本和生成工具，不将另一工程生成文件直接覆盖过来 |
-| 两板身份 | BOARD_A_UID和BOARD_B_UID实际值均未读取 | 配置前分别记录真实96位UID，指定接DHT11的实体为A；未知UID不测量，不根据传感器故障换角色 |
+| 两板身份 | 当前板UIDw0/w1/w2已读：001A002D / 30365105 / 36363631；第二板与A/B尚未指定 | 分别记录真实96位UID，指定接DHT11的实体为A；未知UID不测量，不根据传感器故障换角色 |
 
-UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程查看 `HAL_GetUIDw0/w1/w2()` 的返回值；若这些未使用函数被链接器裁掉，按当前CMSIS头文件的UID_BASE只读查看三个32位字：**0x1FF0F420、0x1FF0F424、0x1FF0F428**。ST-LINK的USB序列号不能代替目标MCU UID。本次未连接设备读取UID，实际值仍待补录。
+UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程查看 `HAL_GetUIDw0/w1/w2()` 的返回值；若这些未使用函数被链接器裁掉，按当前CMSIS头文件的UID_BASE只读查看三个32位字：**0x1FF0F420、0x1FF0F424、0x1FF0F428**。ST-LINK的USB序列号不能代替目标MCU UID。当前板实际读数已录入上表；不能据此猜测第二板或擅自指定A/B。
 
 后续关卡：PTP到TIM2的路径由SBCG负责人先做单板验证，确认PTP时间已初始化/锁定后，PA15在每个PTP整秒产生100 μs脉冲，再同步经过验证的配置到队友工程。CubeMX不能表示内部映射时暂停该路径并重新评审，不手改.ioc、不恢复TIM2自由计满1秒。9.6 MHz显示需重新点亮并验证，不能沿用GUI项目10 MHz的稳定性结论。
 
@@ -62,7 +62,7 @@ UID按w0/w1/w2顺序记录，每字8位十六进制。可在现有调试流程�
 
 在 **System Core → RCC**，将HSE选择 **Bypass Clock Source**，输入频率按板载时钟填写 **25 MHz**。
 
-依据用户上传UM1907 Rev4图29，MB1191 B-04的X2是有源25 MHz振荡器，经R30接PH0，同时给Ethernet PHY供参考时钟。因此本方案采用Bypass。实物若是其他修订，先与对应原理图核对。当前生成代码已为RCC_HSE_BYPASS；此前HSE_ON属于修改前的历史状态，实物启动仍待验证。
+依据用户上传UM1907 Rev4图29，MB1191 B-04的X2是有源25 MHz振荡器，经R30接PH0，同时给Ethernet PHY供参考时钟。因此本方案采用Bypass。实物若是其他修订，先与对应原理图核对。当前生成代码为RCC_HSE_BYPASS，当前单板调试复位启动与RCC寄存器核对已通过；此前HSE_ON属于修改前的历史状态，PCB修订及另一板仍须独立确认。
 
 ### 2.4 Clock Configuration
 
@@ -99,13 +99,13 @@ ST-LINK VCP来自独立ST-LINK芯片，不需要主MCU的USB时钟。此前建�
 cmake --build --preset Debug
 ```
 
-4. 2026-10-16已对当前200 MHz生成代码执行上述构建，结果通过且无编译警告。只有烧录并观察启动正常后，才可认定新时钟在实物上工作；当前未烧录，未取得实物运行结果。
+4. 2026-10-16已对当前200 MHz生成代码执行上述构建，结果通过且无编译警告。2026-10-18复验Debug配置/构建通过，并确认当前板Flash加载段与该ELF一致；实物观察范围见第2.6节。
 
 这一增量的预期变化是SBCG.ioc及系统时钟/调试相关生成文件；不新增业务调用链、IRQ或DMA。若工具自动调整相关生成元数据，应一并检查。
 
-### 2.6 实物启动验收：尚待执行
+### 2.6 实物启动验收：当前单板调试复位启动通过
 
-在用户执行或明确授权烧录/调试后，使用现有VS Code的STM32: Flash及STM32F7: Debug流程，核对：
+在用户执行或明确授权烧录/调试后逐板核对。当前板已完成烧录，2026-10-18使用共享OpenOCD配置只读比对Flash、临时硬件断点、复位/暂停和寄存器读取完成下列观察，没有重复下载固件。F5 launch会下载ELF，保留不写入固件的授权范围时不要用它代替只读连接。
 
 1. 在SystemClock_Config()之后的MX_GPIO_Init()调用处设断点，确认时钟初始化正常返回。
 2. 观察SystemCoreClock=200000000，并结合RCC寄存器核对HSE Bypass、PLL和总线分频；SystemCoreClock是软件计算值，不等于独立测频。
@@ -113,7 +113,9 @@ cmake --build --preset Debug
 4. 确认未进入Error_Handler()或异常处理函数；记录板卡、烧录结果和观察值。
 5. 分别读取两板真实UID并固定A/B。另一板未验证时，不把本机结果推广为两板均通过。
 
-当前调用链为main() → MPU_Config() → HAL_Init() → SystemClock_Config() → MX_GPIO_Init() → 空主循环。SysTick_Handler()仅维护HAL tick；没有新增外设IRQ、DMA关系或Cache策略变化。取得实物结果后，再检查生成差异并提交M0.1功能增量；文档提交不代表硬件验收通过。
+当前板的实测结果：在MX_GPIO_Init入口0x08001064命中断点，随后进入0x08000F84主循环；SystemCoreClock=200000000，运行约1、2、5秒的分段tick为0→1002→3005→8006；再次复位后仍进入主循环。CFSR/HFSR均为0，RCC/电源/Flash等待周期与基线一致。具体ELF哈希、寄存器和限制见[单板启动报告](Milestones/M0_1_Startup.md)。第二板、冷启动和独立测频未执行。
+
+当前调用链为main() → MPU_Config() → HAL_Init() → SystemClock_Config() → MX_GPIO_Init() → 空主循环。SysTick_Handler()仅维护HAL tick；没有新增外设IRQ、DMA关系或Cache策略变化。本轮只提交与当前固件对应的验收记录，不重写或重复提交生成代码，不将单板结果扩展为两板通过。
 
 ## 3. RGB565固定约定：下一阶段配置FMC/LTDC时采用
 
@@ -228,7 +230,7 @@ ETH使用自己的专用DMA，不占用上述DMA2 Stream；音频需要避免与
 - [x] .ioc与生成代码表达HSE25 MHz Bypass、HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；GUI时钟截图对应总线频率一致。
 - [x] 工程从CubeMX保存/生成，现有Debug构建通过且无编译警告；实际PLLQ=/2已记录，不用于USB/RNG/SDMMC。
 - [x] 本增量只涉及SYS/RCC时钟与相应生成文件；未启用屏幕、网口、TIM2或音频DMA。
-- [ ] 已烧录并完成第2.6节启动检查，记录SystemCoreClock、uwTick及异常状态；M0.1功能提交待该结果。
+- [x] 当前连接板已烧录并完成第2.6节调试复位启动检查，SystemCoreClock、uwTick及异常状态已归档；不代表冷启动或第二板通过。
 - [ ] 两板共用同一配置基线及软件包；记录实物启动检查结果。
 - [ ] 队友已确认ETH/PTP唯一时间、TIM2只做PPS、同一整数测距公式及UID角色表；单DHT11 UDP温度快照、PLLSAI锁定不变，PH15/PD6预留。
 - [ ] 团队已统一LTDC模式/图层/帧缓冲/DMA2D全部RGB565、20有效AF+8恒低GPIO和同一组时序；2字节像素、261120字节帧缓冲。
