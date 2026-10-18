@@ -1,6 +1,6 @@
 # 硬件资源与后续配置参考
 
-更新：2026-10-18。目标硬件为课程STM32F746G-DISCO / 32F746GDISCOVERY，MCU STM32F746NGH6 / TFBGA216。
+更新：2026-10-19。目标硬件为课程STM32F746G-DISCO / 32F746GDISCOVERY，MCU STM32F746NGH6 / TFBGA216。
 
 ## 0. 使用范围与证据等级
 
@@ -8,9 +8,9 @@
 
 | 级别 | 范围 |
 | --- | --- |
-| 当前实测 | 本板系统基线、串口启动/心跳，以及[M1.1 PHY及链路观察](Milestones/M1_1_Ethernet_Setup.md#10-用户实物日志验收结果)：地址0、ID=0007/C131、100 Mbps全双工、DOWN→UP→DOWN→UP |
+| 当前实测 | 本板系统基线、串口启动/心跳、[M1.1 PHY及链路观察](Milestones/M1_1_Ethernet_Setup.md#10-用户实物日志验收结果)，以及[M1.2 LwIP基本ping](Milestones/M1_2_UDP_Setup.md#8-用户实物验收2026-10-19)：新版12条心跳、100 Mbps全双工、ping 4/4回复 |
 | 板级参考 | 历史按UM1907 Rev4的MB1191 B-04原理图/I/O表、DS10916及本机CubeF7 V1.17.4 BSP核对的连线；当前PCB修订与改动未现场确认 |
-| 设计目标 | FMC/LTDC、UDP/PTP、SAI/DMA和DHT11尚未实现；ETH/RMII已启用并通过当前板PHY链路观察，帧DMA未启动；I2C3已生成但器件通信未验证；MCU串口接收未实现 |
+| 设计目标 | FMC/LTDC、UDP/PTP、SAI/DMA和DHT11尚未实现；ETH/RMII和无RTOS LwIP已启用，ETH内部帧DMA已用于基本ping收发；I2C3已生成但器件通信未验证；MCU串口接收未实现 |
 
 任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。用户确认课程模块为DHT11，但模块脚序、电压、上拉和具体版本仍需在自动温补阶段核对。当前不检查第二板；双板共用基线与角色在后续联调阶段落实。
 
@@ -324,6 +324,7 @@ CubeMX界面与生成字段可能分别使用实际长度或累计值，按上�
 - 两板MAC必须不同。建议本地管理MAC `02:00:00:00:00:01` / `02:00:00:00:00:02`；网络团队可另行统一。
 - 无DHCP服务器的独立交换机测试网络，可约定静态IP `192.168.10.1` / `192.168.10.2`、掩码 `255.255.255.0`；均为团队建议，不是板卡固有地址。不要把普通交换机当DHCP服务器。
 - 帧收发阶段需根据ETH/LwIP运行模式设计中断及DMA描述符/缓冲内存。DMA可达性按STM32F746总线架构核实，不以“M7”统一套用其它系列的DTCM限制；本方案先采用当前CubeF7示例的SRAM2描述符布局。启用D-Cache后还须设计32字节缓存行对齐与Cache维护/MPU配置。M1.1仅轮询PHY，不启动帧DMA或ETH中断，具体操作见[M1.1配置单](Milestones/M1_1_Ethernet_Setup.md)。
+- 当前M1.2已在NO_SYS主循环轮询中使用ETH内部帧DMA，未启用ETH IRQ或DMA1/2流；MSP顶端0x20048000，固定LwIP堆保留窗16 KiB，Tx/Rx描述符和4×1536接收池位于SRAM2。布局、回调及Cache边界见[M1.2集成记录](Milestones/M1_2_UDP_Setup.md#7-m12-lwip代码集成修复)，不能沿用M1.1“未启动帧DMA”的旧状态。
 - **统一时间源已经选定：ETH IEEE1588 MAC硬件时钟。** A为固定PTP主时钟，B为从时钟；采用PTPv2/UDP IPv4双向时间交换（事件端口319、一般消息320），TX/RX时刻取MAC硬件时间戳，不取LwIP任务/ETH中断到达时刻。HAL V1.17.4有HAL_ETH_USE_PTP保护的配置/取时/TX/RX时间戳接口。[S11]
 - 时间服务统一返回 `SyncTime_GetNs()`：64位PTP纳秒时间与LOCK状态；需要微秒展示时仅做整数ns/1000。采用十进制纳秒rollover，读取秒/纳秒须处理跨秒一致性。A的共同纪元不要求UTC；测量只比较同一同步纪元内的时间。
 - B通过PTP时间/增量（addend）校正跟随A；不修改200 MHz主PLL、LCD PLLSAI或音频PLLI2S来校正时间。声音到达时间由采样锚点及样本索引映射到PTP时间域，不把DMA回调时间直接当声音到达时刻；任何模块都不使用TIM2作为第二套测量时间。

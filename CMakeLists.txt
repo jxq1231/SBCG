@@ -52,8 +52,15 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/BSP/bsp_console.c
     App/BSP/bsp_ethernet.c
     App/Network/ethernet_monitor.c
-    Drivers/BSP/Components/lan8742/lan8742.c
 )
+
+# LwIP generation registers LAN8742 in STM32_Drivers. Older PHY-only
+# snapshots still need the user source entry, but never compile both copies.
+if(TARGET LwIP)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_LWIP=1)
+else()
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE Drivers/BSP/Components/lan8742/lan8742.c)
+endif()
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

@@ -8,6 +8,7 @@ typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
 typedef struct { uint32_t MACMIIAR; } ETH_TypeDef;
 typedef struct { ETH_TypeDef *Instance; uint32_t gState; } ETH_HandleTypeDef;
 #define HAL_ETH_STATE_READY 0x10U
+#define HAL_ETH_STATE_STARTED 0x40U
 #define ETH_MACMIIAR_MB 1U
 #define READ_BIT(reg, bit) ((reg) & (bit))
 

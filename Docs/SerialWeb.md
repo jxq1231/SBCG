@@ -1,12 +1,14 @@
 # USART1配置核对与SerialWeb使用
 
-更新：2026-10-18。串口工具按用户指定采用[SerialWeb](https://conductance-lab.xyz/SerialWeb/)，作者为Conductance-lab。网址末尾不要包含中文逗号。
+更新：2026-10-19。串口工具按用户指定采用[SerialWeb](https://conductance-lab.xyz/SerialWeb/)，作者为Conductance-lab。网址末尾不要包含中文逗号。
 
 ## 1. 本次检查结论
 
 **USART1参数正确；启动信息和每秒心跳代码已接入，5项主机行为测试及Debug构建通过。用户已提供1条启动行和21条连续心跳，板端发送验收通过；MCU接收命令与回显未实现。**
 
 上述实测对应M0.2。用户现已回传`SBCG-M1.1`的`$ETH`及心跳日志，PHY地址0、100 Mbps全双工、DOWN→UP→DOWN→UP和最后一段98条心跳已核对；详见[M1.1实测结果](Milestones/M1_1_Ethernet_Setup.md#10-用户实物日志验收结果)。本页保留M0.2原始验收边界，串口参数不变；助手未执行新固件烧录。
+
+最新`SBCG-M1.2-INT`日志也已核对：HCLK=200 MHz、UID匹配、PHY识别正常、100 Mbps全双工，SEQ=1～12连续、相邻tick差1000 ms、TX_ERRORS=0；同时用户提供ping 4/4回复。详见[M1.2基本验收](Milestones/M1_2_UDP_Setup.md#8-用户实物验收2026-10-19)。串口参数保持115200、8N1；UDP与MCU串口接收仍未实现。
 
 | 项目 | .ioc / 生成代码核对值 | 结论 |
 | --- | --- | --- |

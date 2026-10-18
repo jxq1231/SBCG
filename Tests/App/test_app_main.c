@@ -12,17 +12,27 @@ static bool write_ok;
 static char last_line[160];
 static uint32_t monitor_calls;
 static EthernetMonitor_Log monitor_log;
+static uint32_t lwip_calls;
+static uint32_t last_lwip_tick_ms;
+
+void MX_LWIP_Process(void)
+{
+    ++lwip_calls;
+    last_lwip_tick_ms = tick_ms;
+}
 
 void EthernetMonitor_Init(uint32_t now_ms, EthernetMonitor_Log log_line)
 {
     assert(now_ms == tick_ms);
     monitor_calls = 0U;
+    lwip_calls = 0U;
     monitor_log = log_line;
 }
 
 void EthernetMonitor_Process(uint32_t now_ms)
 {
     assert(now_ms == tick_ms && monitor_log != NULL);
+    assert(lwip_calls > 0U && last_lwip_tick_ms == tick_ms);
     ++monitor_calls;
 }
 
@@ -62,7 +72,7 @@ int main(void)
     Reset(0U, true);
     assert(write_count == 1U);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M1.1,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M1.2-INT,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -71,6 +81,7 @@ int main(void)
     App_Process();
     assert(write_count == 1U);
     assert(monitor_calls == 2U);
+    assert(lwip_calls == 2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);

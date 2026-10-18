@@ -24,6 +24,24 @@ if(_sbcg_eth_mode)
         endif()
     endforeach()
 
+    # A fixed LwIP heap is invisible to the normal .bss/newlib heap accounting.
+    # Reserve its full 16 KiB window and move MSP below it when LwIP is enabled.
+    file(STRINGS "${_sbcg_ioc}" _sbcg_lwip REGEX "^LWIP\\.Version=")
+    if(_sbcg_lwip)
+        set(_sbcg_lwipopts "${CMAKE_CURRENT_SOURCE_DIR}/LWIP/Target/lwipopts.h")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sbcg_lwipopts}")
+        file(STRINGS "${_sbcg_lwipopts}" _sbcg_heap_address
+            REGEX "^#define[ \t]+LWIP_RAM_HEAP_POINTER[ \t]+")
+        file(STRINGS "${_sbcg_lwipopts}" _sbcg_heap_size
+            REGEX "^#define[ \t]+MEM_SIZE[ \t]+")
+        if(NOT _sbcg_heap_address MATCHES "^#define[ \t]+LWIP_RAM_HEAP_POINTER[ \t]+0x20048000$"
+           OR NOT _sbcg_heap_size MATCHES "^#define[ \t]+MEM_SIZE[ \t]+4096$")
+            message(FATAL_ERROR "LwIP heap differs from reviewed 0x20048000/4096 layout")
+        endif()
+        target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:--defsym=__sbcg_has_lwip=1")
+        set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${_sbcg_lwipopts}")
+    endif()
+
     set(_sbcg_base_script "${CMAKE_CURRENT_SOURCE_DIR}/STM32F746xx_FLASH.ld")
     set(_sbcg_eth_script "${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_eth.ld")
     set(_sbcg_base_option "-T \"${_sbcg_base_script}\"")

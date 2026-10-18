@@ -9,11 +9,16 @@
 #define LAN8742_MODEL_MASK   0xFFF0U
 
 extern ETH_HandleTypeDef heth;
+#ifdef SBCG_USE_LWIP
+/* The generated interface owns discovery and ETH start/stop. */
+extern lan8742_Object_t LAN8742;
+#endif
 
 static lan8742_Object_t phy;
 static bool io_failed;
 static bool phy_ready;
 
+#ifndef SBCG_USE_LWIP
 static int32_t PHY_IO_Init(void)
 {
     /* Do not clear a pending transaction when retrying a failed scan. */
@@ -26,6 +31,7 @@ static int32_t PHY_IO_Init(void)
     HAL_ETH_SetMDIOClockRange(&heth);
     return 0;
 }
+#endif
 
 static int32_t PHY_IO_Read(uint32_t address, uint32_t reg, uint32_t *value)
 {
@@ -50,23 +56,37 @@ static int32_t PHY_IO_Write(uint32_t address, uint32_t reg, uint32_t value)
     return -1;
 }
 
+#ifndef SBCG_USE_LWIP
 static int32_t PHY_IO_GetTick(void)
 {
     return (int32_t)HAL_GetTick();
 }
+#endif
 
 BSP_EthernetStatus BSP_Ethernet_Init(BSP_EthernetInfo *info)
 {
     phy_ready = false;
     memset(info, 0, sizeof(*info));
     info->phy_addr = UINT32_MAX;
-    if ((heth.Instance == NULL) || (heth.gState != HAL_ETH_STATE_READY))
+    if ((heth.Instance == NULL) ||
+        ((heth.gState != HAL_ETH_STATE_READY) && (heth.gState != HAL_ETH_STATE_STARTED)))
     {
         return BSP_ETH_NOT_READY;
     }
 
-    memset(&phy, 0, sizeof(phy));
     io_failed = false;
+#ifdef SBCG_USE_LWIP
+    if ((LAN8742.Is_Initialized == 0U) || (LAN8742.DevAddr > 31U))
+    {
+        return BSP_ETH_NOT_READY;
+    }
+    /* Observe the discovered device through a private, read-only view. Do not
+       reset the owner object, rescan the bus, or change its IO callbacks. */
+    phy = LAN8742;
+    phy.IO.ReadReg = PHY_IO_Read;
+    phy.IO.WriteReg = PHY_IO_Write;
+#else
+    memset(&phy, 0, sizeof(phy));
     lan8742_IOCtx_t io = {
         .Init = PHY_IO_Init, .DeInit = NULL,
         .WriteReg = PHY_IO_Write, .ReadReg = PHY_IO_Read,
@@ -80,6 +100,7 @@ BSP_EthernetStatus BSP_Ethernet_Init(BSP_EthernetInfo *info)
     {
         return io_failed ? BSP_ETH_IO_ERROR : BSP_ETH_NOT_FOUND;
     }
+#endif
 
     info->phy_addr = phy.DevAddr;
     uint32_t id1, id2, control;

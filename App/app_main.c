@@ -1,11 +1,18 @@
 #include "app_main.h"
 #include "BSP/bsp_console.h"
 #include "Network/ethernet_monitor.h"
+#ifdef SBCG_USE_LWIP
+#include "lwip.h"
+#endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
+#ifdef SBCG_USE_LWIP
+#define APP_FIRMWARE_ID "SBCG-M1.2-INT"
+#else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
+#endif
 #define APP_HEARTBEAT_PERIOD_MS 1000U
 #define APP_LOG_LINE_CAPACITY 160U
 
@@ -47,6 +54,10 @@ void App_Init(void)
 
 void App_Process(void)
 {
+#ifdef SBCG_USE_LWIP
+    /* Every loop, before logs: service RX, protocol timers and link changes. */
+    MX_LWIP_Process();
+#endif
     const uint32_t now_ms = BSP_Console_GetTickMs();
     if ((uint32_t)(now_ms - last_heartbeat_ms) >= APP_HEARTBEAT_PERIOD_MS)
     {

@@ -16,6 +16,7 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-DSBCG_USE_LWIP=1", "-I", str(root / "Tests/App/stubs"),
          "-I", str(root / "App"), str(root / "Tests/App/test_app_main.c"),
          str(root / "App/app_main.c"), "-o", str(output)], cwd=root,
         check=False,

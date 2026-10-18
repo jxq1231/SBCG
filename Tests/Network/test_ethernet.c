@@ -17,6 +17,9 @@ static uint32_t tick_ms;
 static bool fail_next_read;
 static char lines[32][160];
 static unsigned int line_count;
+#ifdef SBCG_USE_LWIP
+lan8742_Object_t LAN8742;
+#endif
 
 uint32_t HAL_GetTick(void) { return tick_ms; }
 void HAL_ETH_SetMDIOClockRange(ETH_HandleTypeDef *handle)
@@ -66,6 +69,11 @@ static void Reset(void)
     heth.gState = HAL_ETH_STATE_READY;
     read_calls = divider_calls = write_calls = tick_ms = line_count = 0U;
     fail_next_read = false;
+#ifdef SBCG_USE_LWIP
+    memset(&LAN8742, 0, sizeof(LAN8742));
+    LAN8742.DevAddr = 3U;
+    LAN8742.Is_Initialized = 1U;
+#endif
 }
 int main(void)
 {
@@ -73,8 +81,27 @@ int main(void)
     Reset();
     assert(BSP_Ethernet_Init(&info) == BSP_ETH_OK);
     assert(info.phy_addr == 3U && info.phy_id1 == 7U && info.phy_id2 == 0xC131U);
-    assert(info.autoneg_enabled && divider_calls == 1U && write_calls == 0U);
+    assert(info.autoneg_enabled && write_calls == 0U);
+#ifdef SBCG_USE_LWIP
+    assert(divider_calls == 0U && LAN8742.DevAddr == 3U);
+    assert(LAN8742.IO.ReadReg == NULL); /* Observer must not replace owner IO. */
+#else
+    assert(divider_calls == 1U);
+#endif
     puts("PASS: discovers actual address, accepts revision bits, reports IDs without PHY writes");
+
+    Reset();
+    heth.gState = HAL_ETH_STATE_STARTED;
+    assert(BSP_Ethernet_Init(&info) == BSP_ETH_OK);
+    assert(heth.gState == HAL_ETH_STATE_STARTED && write_calls == 0U);
+    puts("PASS: active frame DMA does not cause a false NOT_READY result");
+
+#ifdef SBCG_USE_LWIP
+    Reset();
+    LAN8742.Is_Initialized = 0U;
+    assert(BSP_Ethernet_Init(&info) == BSP_ETH_NOT_READY && read_calls == 0U);
+    puts("PASS: observer does not initialize a PHY owned by the generated interface");
+#endif
 
     Reset();
     phy_regs[3][LAN8742_PHYI2R] = 0xC0F0U;
@@ -83,6 +110,8 @@ int main(void)
 
     Reset();
     phy_regs[3][LAN8742_SMR] = 0xFFFFU;
+    phy_regs[3][LAN8742_PHYI1R] = 0xFFFFU;
+    phy_regs[3][LAN8742_PHYI2R] = 0xFFFFU;
     assert(BSP_Ethernet_Init(&info) == BSP_ETH_NOT_FOUND);
     assert(info.phy_id1 == 0xFFFFU && info.phy_id2 == 0xFFFFU);
     puts("PASS: an absent bus returning FFFF is not identified as a PHY");
