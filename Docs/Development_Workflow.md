@@ -48,6 +48,8 @@ python -B Tools/Monitor/autodebug.py symbolize 0x08000100
 python -B -m unittest discover -s Tools/Monitor/tests -v
 ```
 
+ETH已生成时，构建后另运行`python -B Tools/Monitor/check_eth_layout.py`；Release追加`--preset Release`。该检查需要PATH中的ARM nm/readelf，仅检查ELF和.ioc，不连接设备，失败退出1。独立链接扩展、内存边界和RAM跨度说明见[M1.1内存记录](Milestones/M1_1_Ethernet_Setup.md#8-gcc内存布局修复记录)。
+
 地址仅为格式示例，必须替换为与所用ELF一致的真实地址。symbolize不会采集设备异常或重建ELF；Thumb函数指针最低位查询前清零，报告保留输入值和查询值。Release当前为`-Os -g0`，可能只能得到函数名，没有源码行。
 
 脚本默认每阶段超时120秒，可用`--timeout 240`调整；`--project-root`可指定工程。配置失败即停止，构建失败不接受旧ELF；构建成功还须存在非空`SBCG.elf`并记录SHA256。超时或中断只终止本次启动的进程树，不自动重试。

@@ -1,6 +1,6 @@
 # M1.1 当前板以太网链路：CubeMX操作单
 
-更新：2026-10-18。状态：配置方案已核对，等待用户通过CubeMX生成；ETH尚未启用，PHY及链路尚未实测。本步只推进当前板。
+更新：2026-10-18。状态：用户已生成ETH/RMII，GCC链接布局修复及Debug/Release检查通过；PHY观察应用尚未接入，新固件尚未实测。本步只推进当前板。
 
 ## 1. 本步目标与边界
 
@@ -8,7 +8,7 @@
 
 本步选用HAL管理接口加LAN8742组件轮询。另一方案是同时引入LwIP、IP地址及帧收发，它增加DMA缓冲、协议栈和调度变量，放在后续网络增量。当前阶段不配置IP、不以ping或UDP作为验收，不启用FreeRTOS、PTP/PPS、音频或LCD。
 
-**CubeMX change required。** 当前`.ioc`只有SYS/RCC/GPIO/USART1，HAL_ETH_MODULE_ENABLED尚未启用。不得手改`.ioc`或在应用代码中补写引脚/时钟初始化。硬件配置必须先由用户生成，再审查实际结果。
+硬件配置已由用户经CubeMX生成，HAL_ETH_MODULE_ENABLED已启用。本次代码侧内存修复为**No CubeMX change required**。下文配置步骤供复核使用。不得手改`.ioc`或在应用代码中补写引脚/时钟初始化。硬件配置必须先由用户生成，再审查实际结果。
 
 ## 2. 先打开原工程
 
@@ -53,9 +53,9 @@ PHY复位共用板上NRST，不添加ETH_RESET_GPIO；网线接CN9 RJ45，另一
 | Rx Mode（如显示） | Polling Mode |
 | Rx Descriptor Length | 4 |
 | Tx Descriptor Length | 4 |
-| First Rx Descriptor Address | `0x2004C000` |
-| First Tx Descriptor Address | `0x2004C0A0` |
-| Rx Buffers Length（如显示） | 1536字节；本阶段不启动帧接收，生成后核对实际值 |
+| First Rx Descriptor Address | `0x2004C0A0`，按用户最终生成值 |
+| First Tx Descriptor Address | `0x2004C000`，按用户最终生成值 |
+| Rx Buffers Length（如显示） | 1524字节，保留本机默认；本阶段不启动帧接收，后续另审缓冲与对齐 |
 
 地址依据本机STM32F746数据库及CubeF7示例，不能填写H7的0x30000000，也不能套用F767的0x2007C000。当前芯片RAM顶端是0x20050000。
 
@@ -72,7 +72,7 @@ LwIP和FreeRTOS均保持未启用。新版本ETH界面若没有PHY型号或PHY A
 生成后需要检查：
 
 - Rx/Tx描述符的section名称及ELF/map实际地址是否匹配，是否与.bss、堆、栈重叠；后续内存保留策略依据实际生成文件通过明确的扩展实现，不手改build目录。
-- 当前F7 HAL的ETH_DMADescTypeDef为40字节，4项数组各160字节，Rx目标范围为0x2004C000～0x2004C09F，Tx为0x2004C0A0～0x2004C13F。两块相邻且起点均32字节对齐；这不表示每个40字节描述符都单独按缓存行隔离。
+- 当前F7 HAL的ETH_DMADescTypeDef为40字节，4项数组各160字节，Tx最终范围为0x2004C000～0x2004C09F，Rx为0x2004C0A0～0x2004C13F。两块相邻且起点均32字节对齐；这不表示每个40字节描述符都单独按缓存行隔离。
 - 当前I/D Cache未启用，先沿用此状态；不随机添加Cache清理调用。后续帧收发或启用D-Cache时，重新设计CPU/DMA内存所有权、MPU属性和缓存维护。
 - 现有main中的App_Init/App_Process、顶层CMake的App源文件/包含目录仍保留；USART1、系统时钟和调试引脚未被重分配。
 
@@ -90,3 +90,58 @@ LwIP和FreeRTOS均保持未启用。新版本ETH界面若没有PHY型号或PHY A
 - 本机CubeMX数据库：`D:/STM32CubeMX/db/mcu/STM32F746NGHx.xml`，ETH IP版本为ethermac110_v3_0；参数定义位于`D:/STM32CubeMX/db/mcu/IP/ETH-ethermac110_v3_0_Modes.xml`。地址已按F7x6分支核对，界面默认Rx长度可能为1524，不能把它误记为F7全部界面的1536默认值。
 - 本机CubeF7 V1.17.4的STM32746G-Discovery Ethernet示例、HAL ETH实现和LAN8742组件；在线对应[ST官方板卡示例](https://github.com/STMicroelectronics/STM32CubeF7/blob/v1.17.4/Projects/STM32746G-Discovery/Applications/LwIP/LwIP_HTTP_Server_Netconn_RTOS/Src/ethernetif.c)。只借其板级资源及驱动接口，不复制RTOS/LwIP初始化到本项目。
 - 板级连线与修订限制沿用[硬件资源第4.4、5.5节](../Hardware_Resources.md)，当前板PHY和网口尚无实测结论。
+
+
+## 8. GCC内存布局修复记录
+
+本次只完成一个可静态验证的目标：让ETH描述符实际位于.ioc指定地址，并保护普通数据、newlib堆及MSP栈。未实现PHY识别、插拔日志或帧收发，不标记M1.1链路完成。
+
+### 文件与边界
+
+- `CMakeLists.txt`：在用户拥有的顶层文件引入内存扩展。
+- `cmake/ethernet-layout.cmake`：有ETH配置时检查RMII与地址，选用用户包装脚本，注册原脚本/包装脚本/.ioc为链接依赖；无ETH的历史快照继续用原脚本。
+- `cmake/linker/stm32f746_eth.ld`：INCLUDE原版`STM32F746xx_FLASH.ld`，追加两个NOLOAD描述符段、KEEP与尺寸/内存边界ASSERT。
+- `Tools/Monitor/check_eth_layout.py`：检查真实ELF的地址、尺寸、32字节起点对齐、NOLOAD、非重叠、其它RAM段边界及向量初始MSP。
+- 本页、`Docs/Project_State.md`、`Docs/Development_Workflow.md`：更新状态、验证命令和限制。
+
+本次未修改.ioc、生成main/MSP、HAL、生成链接脚本或工具链，也未改用户新增的I2C3（PH7/SCL、PH8/SDA）。原有ETH/I2C3生成改动留工作区，等待各自实物验证；不纳入本次独立构建修复提交。
+
+### 实际结果
+
+| 项目 | Debug及Release结果 |
+| --- | --- |
+| DMATxDscrTab | 0x2004C000，160字节 |
+| DMARxDscrTab | 0x2004C0A0，160字节 |
+| 两个描述符段 | NOBITS/NOLOAD，起点32字节对齐 |
+| `_estack`及向量初始MSP | 0x2004C000 |
+| `_sstack` | 0x2004BC00，保留1024字节MSP栈 |
+| ETH区域 | SRAM2的16 KiB；当前描述符占320字节，未增加其它缓冲 |
+
+现有sysmem.c的_sbrk依据_estack减_Min_Stack_Size限制堆增长，因此堆不会增长进SRAM2。静态数据和最小堆也受链接ASSERT约束。NOLOAD描述符不由启动代码复制/清零；HAL_ETH_Init会初始化本阶段使用的描述符控制字段，后续帧收发/PTP仍需继续审查所有权和其它字段。
+
+运行调用链仍为main → MX_ETH_Init → HAL_ETH_Init，之后是现有I2C3初始化及App_Init/App_Process。无新增IRQ、回调、DMA1/DMA2配置；未启动ETH内部DMA，未改Cache/MPU或添加缓存维护。新布局使用当前MPU允许访问的内部SRAM。
+
+RAM显示95.10%是普通RAM起点到固定高地址段末尾的地址跨度，不是实际分配了约304 KiB数据。当前Debug的.data+.bss共928字节、描述符320字节，另有最小堆512字节和栈1024字节。
+
+### 验证与复验命令
+
+修复前同一地址检查因地址、NOLOAD及栈顶不符而失败；修复后Debug/Release均通过：
+
+```powershell
+python -B Tools/Monitor/autodebug.py build
+python -B Tools/Monitor/check_eth_layout.py
+python -B Tools/Monitor/autodebug.py build --preset Release
+python -B Tools/Monitor/check_eth_layout.py --preset Release
+```
+
+- Debug报告：`Logs/AutoDebug/20261018T102507-2c64038d/report.json`；Flash 18000字节。
+- Release报告：`Logs/AutoDebug/20261018T102607-303c3e30/report.json`；Flash 12104字节。
+- Debug ELF SHA256：`7fdf9699931073109dd8c149c9dcc15944ee66d00ddaf0dad62cd7be87c35190`。
+- Release ELF SHA256：`e3211ff33facf8030824eb0ad624b629226f0e2de0a7b225b26fb67c30b5030e`。
+- 在Logs下用同一项目和CMake预设做隔离负例：增加Tx段尺寸、让静态数据侵入栈/ETH区，链接均按预期ASSERT失败；证据为`Logs/EthLayout/guards/results.json`和对应build.txt，未修改项目实际源文件。
+- 独立提交兼容性：将当前Git HEAD快照与本次链接集成文件组合，在Logs下用同一Debug预设构建通过；不依赖尚未提交的ETH/I2C3生成变化。证据为`Logs/EthLayout/head-with-layout-build.txt`。
+- Flash/Runtime：NOT_RUN。M0.2旧ELF实测不能推广到本次改变了启动MSP的新ELF。
+
+本构建修复按ELF和链接保护静态验收，提交只包含上述用户拥有的文件。之后仍需接入LAN8742/MDIO观察，再按授权烧录并核对BOOT、心跳、PHY ID及插拔状态；不能仅凭地址检查通过宣布链路、UDP或PTP通过。
+
+包装脚本的NOLOAD语义参考[GNU ld官方说明](https://sourceware.org/binutils/docs/ld/Output-Section-Type.html)，并以本机实际链接结果验证。
