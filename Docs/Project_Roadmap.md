@@ -125,4 +125,4 @@ delta_ns < 0：B先收到，声源在B侧
 
 基础测距每个测试点至少保留10次原始测量，再计算有符号误差、最大绝对误差、重复性标准差及同次双屏差。开发期间可用PC离线分析，正式演示只允许观察/设参。最终报告对照B1～B5、A1～A6逐条填写，未测项目保持未测。
 
-**M0.2启动/心跳发送已通过。** CubeMX生成的PA9/PB7、115200 8N1及PCLK2配置已审查，Debug构建与5项应用主机测试通过；用户用[SerialWeb](SerialWeb.md)收到BOOT及21条连续心跳，见[M0.2报告](Milestones/M0_2_Serial.md)。本增量在提交后停止。下一建议为M1.1当前板ETH链路，先评审CubeMX资源，再经用户生成与单独验收；本轮不自动启用ETH、不检查第二板。RX命令解析按实际设参需求另立增量。此后优先验证ETH/PTP与声音时间戳主链，SDRAM/LCD按其依赖单独实施。
+**M0.2启动/心跳发送已通过，当前推进M1.1的CubeMX准备。** 用户用[SerialWeb](SerialWeb.md)收到BOOT及21条连续心跳，见[M0.2报告](Milestones/M0_2_Serial.md)。当前板ETH/RMII操作步骤见[M1.1配置单](Milestones/M1_1_Ethernet_Setup.md)：先用户生成，再审查描述符链接布局并接入PHY/插拔观察，之后单独验收。ETH尚未启用，本轮不检查第二板。RX命令解析按实际设参需求另立增量。此后优先验证ETH/PTP与声音时间戳主链，SDRAM/LCD按其依赖单独实施。

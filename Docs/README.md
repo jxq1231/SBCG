@@ -14,6 +14,7 @@
 | 5 | [硬件资源参考](Hardware_Resources.md) | 后续引脚、时钟、DMA及共享资源怎么分配？ |
 | 6 | [单板启动实测报告](Milestones/M0_1_Startup.md) | 当前单板通过结论对应哪些固件和实测值？ |
 | 7 | [M0.2启动信息与心跳](Milestones/M0_2_Serial.md) | 应用如何接入，主机测试通过了什么，如何完成板端验收？ |
+| 8 | [M1.1以太网CubeMX操作单](Milestones/M1_1_Ethernet_Setup.md) | 当前板如何配置RMII，生成后为什么先检查内存？ |
 
 仓库操作遵守根目录[AGENTS.md](../AGENTS.md)，协作方法见[CONTRIBUTING.md](../CONTRIBUTING.md)。
 
