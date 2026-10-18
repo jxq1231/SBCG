@@ -46,6 +46,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | --- | --- | --- |
 | 工程与工具链 | STM32F746NGH6 / TFBGA216，CubeMX 6.18.1，CubeF7 V1.17.4 | [工程配置](SBCG.ioc) |
 | 主机开发工作流 | 环境检查、Debug/Release构建、日志报告、地址定位已完成 | [操作指南](Docs/Development_Workflow.md) |
+| M0.2串口观测 | 当前工作区USART1配置和Debug构建通过，收发应用/实测待完成 | [SerialWeb使用与配置核对](Docs/SerialWeb.md) |
 | M0.1系统时钟 | 200 MHz / HSE Bypass，**当前单板调试复位启动通过** | [实物报告](Docs/Milestones/M0_1_Startup.md) |
 | 两板UID与角色 | 已读当前单板真实UID；第二板及A/B指定待补录 | [当前状态](Docs/Project_State.md) |
 | 显示 / 网络 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
@@ -54,7 +55,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 | 里程碑 | 验收目标 | 当前状态 |
 | --- | --- | --- |
-| M0 | 资源规划与系统基线 | 本板启动通过；下一步建议建立USART1观测入口，尚未实施 |
+| M0 | 资源规划与系统基线 | 本板启动通过；M0.2 USART1已生成并构建，尚无收发实测 |
 | M1 | 以太网链路与双向UDP通信 | 未开始 |
 | M2 | 时间同步及PPS精度验证 | 未开始 |
 | M3 | 音频DMA采集 | 未开始 |
@@ -108,6 +109,7 @@ VS Code中，`Ctrl+Shift+B`运行默认Debug构建；“运行任务 → STM32: 
 | [Single-board Startup](Docs/Milestones/M0_1_Startup.md) | ELF与Flash比对、时钟寄存器、主循环、HAL时基及单板验收范围 |
 | [Hardware Resources](Docs/Hardware_Resources.md) | 引脚、时钟、DMA、显示、同步、温度和测距约定 |
 | [Development Workflow](Docs/Development_Workflow.md) | VS Code入口、主机诊断工具、退出码和日志 |
+| [USART1 / SerialWeb](Docs/SerialWeb.md) | 串口配置审查、指定网页工具、COM口及收发验收边界 |
 | [Contributing](CONTRIBUTING.md) | 分支、提交、PR、CubeMX所有权及实验记录要求 |
 | [Project Rules](AGENTS.md) | 工程修改、生成代码保护和验证提交规则 |
 

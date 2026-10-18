@@ -16,7 +16,7 @@
 | 总线 | SYSCLK/HCLK200 MHz；AHB /1；APB1 /4为50 MHz；APB2 /2为100 MHz |
 | 电源与Flash | Scale1、OverDrive、FLASH_LATENCY_6 |
 | 当前GPIO | 仅开启A/B/H端口时钟；PA15未分配，保留后续PPS |
-| 后续外设 | FMC/LTDC/ETH/TIM2/SAI/USART1/DHT11等均未启用 |
+| 后续外设 | FMC/LTDC/ETH/TIM2/SAI/DHT11等未启用；USART1已在当前工作区生成，见[串口检查](SerialWeb.md) |
 
 按此前核查的MB1191 B-04原理图，有源25 MHz时钟进入PH0，因此选择Bypass。本板实测RCC状态与之相符，但PCB修订和绝对输入频率尚未独立测量；其它实物不能直接套用结论。
 
@@ -38,7 +38,7 @@ cmake --build --preset Debug --parallel
 
 本指南只覆盖系统基线。后续外设参数集中在[Hardware_Resources.md](Hardware_Resources.md)，开发顺序在[Project_Roadmap.md](Project_Roadmap.md)；不要在复核SYS/RCC时一次启用全部外设。
 
-## 3. 当前板实物验收结果
+## 3. M0.1已归档实物验收结果
 
 | 检查 | 实际结果 |
 | --- | --- |
@@ -52,7 +52,7 @@ cmake --build --preset Debug --parallel
 
 地址与数值对应本次已比对ELF；完整哈希、寄存器、日志及限制见[M0_1_Startup.md](Milestones/M0_1_Startup.md)。当前板通过的是调试复位和短时运行，不是第二板、冷启动或独立测频。
 
-调用链保持`main → MPU_Config → HAL_Init → SystemClock_Config → MX_GPIO_Init → 空主循环`；现有SysTick仅维护HAL tick。无新增IRQ、DMA或缓存维护。
+上述实测ELF调用链为`main → MPU_Config → HAL_Init → SystemClock_Config → MX_GPIO_Init → 空主循环`。后续M0.2工作区已在GPIO之后加入USART1初始化，但其新ELF尚未运行验证。现有SysTick仅维护HAL tick，无新增IRQ、DMA或缓存维护。
 
 ## 4. 以后复验时的操作边界
 
@@ -70,4 +70,4 @@ cmake --build --preset Debug --parallel
 - [x] 用户烧录校验成功；后续只读Flash比对与单板启动观察通过。
 - [ ] 冷启动、独立测频未执行；其它硬件性能按其里程碑单独验收。
 
-下一独立目标按完整路线确定；本步没有实施显示、网络、音频或温度功能。
+后续目标按完整路线确定；USART1当前只完成生成配置及构建，尚无收发实测；显示、网络、音频和温度功能未实现。

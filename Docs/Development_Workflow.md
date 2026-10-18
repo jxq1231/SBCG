@@ -84,3 +84,11 @@ python -B -m unittest discover -s Tools/Monitor/tests -v
 主机脚本参考[STM32_AutoDebug_Universal_Kit](https://github.com/TaoCosmo-Dev/STM32_AutoDebug_Universal_Kit/tree/8434f26644ba4c677dc7db489d3a9570db00cf71)的阶段化诊断思路，独立实现CMake/GCC适配。当前没有自动采集固件运行日志、异常现场或自动修复闭环；不能把脚本名称理解成这些功能已具备。
 
 新增外设后，先明确当前独立目标和CubeMX变化，再构建、按授权测试、记录实物证据并提交。完整顺序见[Project_Roadmap.md](Project_Roadmap.md)，不要重新按已完成的旧实施计划执行。
+
+## 6. 串口观察：SerialWeb
+
+按用户指定使用[SerialWeb](https://conductance-lab.xyz/SerialWeb/)。本轮已在Edge打开并检查页面，Web Serial API可用；本机ST-LINK Virtual COM Port枚举为COM3。页面设置115200、8N1、无RTS/CTS流控、UTF-8，点击“连接设备”后由用户选择当前ST-LINK串口。
+
+本轮页面曾记录`SerialPort.open`失败，当前未成功连接。网站提示端口可能被占用，实际原因尚未确认；首轮关闭自动重连，关闭其它占用同一端口的串口窗口，再手动连接。不要把网页能打开或端口已枚举当作收发通过。
+
+USART1的PA9/TX、PB7/RX、PCLK2及生成参数已核对，Debug构建通过。但新UART版本尚未在本轮烧录，固件没有发送、接收或命令解析应用，页面无数据不代表配置错误。具体操作、检查表及ELF边界见[SerialWeb.md](SerialWeb.md)。当前COM编号只代表这台电脑的枚举，不写死为所有人的端口。
