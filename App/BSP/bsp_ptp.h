@@ -23,5 +23,7 @@ typedef struct
 /* Main context after MX_LWIP_Init, with HAL tick running. Local time only. */
 BSP_PtpStatus BSP_PTP_Init(void);
 BSP_PtpStatus BSP_PTP_Read(BSP_PtpTime *time);
+/* Last completed frame cache: use synchronously before reading another frame. */
+BSP_PtpStatus BSP_PTP_ReadRx(BSP_PtpTime *time);
 
 #endif

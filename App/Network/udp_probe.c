@@ -1,5 +1,6 @@
 #include "udp_probe.h"
 #include "udp_config.h"
+#include "Sync/ptp_rx.h"
 #include "lwip/udp.h"
 #include "lwip/netif.h"
 #include <inttypes.h>
@@ -34,14 +35,16 @@ static void Receive(void *arg, struct udp_pcb *pcb, struct pbuf *packet,
     uint8_t data[UDP_HEARTBEAT_PACKET_BYTES];
     const int copied = packet->tot_len == sizeof(data) &&
         pbuf_copy_partial(packet, data, sizeof(data), 0) == sizeof(data);
-    pbuf_free(packet);
     if (!copied || memcmp(data, "SBCG\1\2\0\34", 8) != 0 ||
         memcmp(data + 16, uid_wire, sizeof(uid_wire)) != 0)
     {
         ++bad;
+        pbuf_free(packet);
         return;
     }
     ++valid;
+    PtpRx_Observe(data);
+    pbuf_free(packet);
     data[5] = 3;
     struct pbuf *reply = pbuf_alloc(PBUF_TRANSPORT, sizeof(data), PBUF_RAM);
     if (reply == NULL) { ++ack_errors; return; }

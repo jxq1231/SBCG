@@ -11,6 +11,16 @@ ETH_HandleTypeDef heth;
 static uint32_t tick_ms, hclk_hz, tick_calls, config_calls, read_calls;
 static bool stuck, frozen_tick, config_failure, read_failure, wrong_config;
 static unsigned int rollover_reads;
+static ETH_TimeStampTypeDef rx_stamp;
+static bool rx_failure;
+
+HAL_StatusTypeDef HAL_ETH_PTP_GetRxTimestamp(ETH_HandleTypeDef *handle, ETH_TimeStampTypeDef *time)
+{
+    assert(handle == &heth);
+    if (rx_failure) { return HAL_ERROR; }
+    *time = rx_stamp;
+    return HAL_OK;
+}
 
 uint32_t HAL_RCC_GetHCLKFreq(void) { return hclk_hz; }
 uint32_t HAL_GetTick(void)
@@ -28,9 +38,9 @@ HAL_StatusTypeDef HAL_ETH_PTP_SetConfig(ETH_HandleTypeDef *handle, ETH_PTP_Confi
     assert(c->Timestamp == ETH_PTPTSCR_TSE && c->TimestampRolloverMode == ENABLE);
     assert(c->TimestampSubsecondInc == 5 && c->TimestampUpdateMode == DISABLE);
     assert(c->TimestampUpdate == DISABLE && c->TimestampAddendUpdate == DISABLE);
-    assert(c->TimestampAll == DISABLE && c->TimestampIPv4 == DISABLE);
+    assert(c->TimestampAll == ENABLE && c->TimestampIPv4 == DISABLE);
     if (config_failure) { return HAL_ERROR; }
-    test_eth.PTPTSCR = ETH_PTPTSCR_TSE | ETH_PTPTSCR_TSSSR |
+    test_eth.PTPTSCR = ETH_PTPTSCR_TSE | ETH_PTPTSCR_TSSSR | ETH_PTPTSCR_TSSARFE |
                       ETH_PTPTSCR_TSSTI | ETH_PTPTSCR_TSSTU;
     test_eth.PTPSSIR = wrong_config ? 6 : c->TimestampSubsecondInc;
     handle->IsPtpConfigured = HAL_ETH_PTP_CONFIGURED;
@@ -64,6 +74,9 @@ static void Reset(void)
     tick_ms = config_calls = read_calls = tick_calls = 0;
     stuck = frozen_tick = config_failure = read_failure = wrong_config = false;
     rollover_reads = 0;
+    test_eth.DMABMR = ETH_DMABMR_EDE;
+    rx_stamp = (ETH_TimeStampTypeDef){500,7};
+    rx_failure = false;
 }
 int main(void)
 {
@@ -75,7 +88,7 @@ int main(void)
     assert(BSP_PTP_Read(&time) == BSP_PTP_OK && time.seconds == 2 && time.nanoseconds == 999999995);
     Reset(); heth.gState = HAL_ETH_STATE_STARTED;
     assert(BSP_PTP_Init() == BSP_PTP_OK && heth.gState == HAL_ETH_STATE_STARTED);
-    puts("PASS: local 200 MHz coarse clock uses 5 ns decimal increment without frame timestamping");
+    puts("PASS: 200 MHz coarse clock uses 5 ns decimal increment and all-frame RX timestamps");
 
     Reset(); hclk_hz = 216000000;
     assert(BSP_PTP_Init() == BSP_PTP_BAD_CLOCK && config_calls == 0);
@@ -121,5 +134,37 @@ int main(void)
     test_rcc.AHB1ENR &= ~RCC_AHB1ENR_ETHMACPTPEN;
     assert(BSP_PTP_Read(&time) == BSP_PTP_BAD_CONFIG);
     puts("PASS: invalid nanoseconds, read failure, mode loss and null output are visible");
+
+    Reset(); assert(BSP_PTP_Init() == BSP_PTP_OK);
+    heth.gState = HAL_ETH_STATE_STARTED;
+    heth.RxDescList.pRxLastRxDesc = ETH_DMARXDESC_LS | 1U;
+    assert(BSP_PTP_ReadRx(&time) == BSP_PTP_OK && time.seconds == 7 && time.nanoseconds == 500);
+    puts("PASS: RX cache uses hardware seconds/nanoseconds and extended-status bit zero is not an error");
+
+    const uint32_t invalid_status[] = {0,ETH_DMARXDESC_LS|ETH_DMARXDESC_OWN,
+                                      ETH_DMARXDESC_LS|ETH_DMARXDESC_ES};
+    time = (BSP_PtpTime){99,99};
+    for (unsigned int i=0; i<3; ++i)
+    {
+        heth.RxDescList.pRxLastRxDesc = invalid_status[i];
+        assert(BSP_PTP_ReadRx(&time) == BSP_PTP_BAD_SNAPSHOT);
+        assert(time.seconds == 99 && time.nanoseconds == 99);
+    }
+    heth.RxDescList.pRxLastRxDesc = ETH_DMARXDESC_LS;
+    rx_stamp.TimeStampLow = 1000000000;
+    assert(BSP_PTP_ReadRx(&time) == BSP_PTP_BAD_SNAPSHOT);
+    rx_stamp.TimeStampLow = rx_stamp.TimeStampHigh = UINT32_MAX;
+    assert(BSP_PTP_ReadRx(&time) == BSP_PTP_BAD_SNAPSHOT);
+    rx_failure = true;
+    assert(BSP_PTP_ReadRx(&time) == BSP_PTP_HAL_ERROR);
+    rx_failure = false;
+    test_eth.DMABMR = 0;
+    assert(BSP_PTP_ReadRx(&time) == BSP_PTP_BAD_CONFIG);
+    test_eth.DMABMR = ETH_DMABMR_EDE;
+    test_eth.PTPTSCR &= ~ETH_PTPTSCR_TSSARFE;
+    assert(BSP_PTP_ReadRx(&time) == BSP_PTP_BAD_CONFIG);
+    assert(BSP_PTP_ReadRx(NULL) == BSP_PTP_BAD_SNAPSHOT);
+    assert(time.seconds == 99 && time.nanoseconds == 99);
+    puts("PASS: RX rejects missing/owned/error/corrupt snapshots and lost configuration without changing output");
     return 0;
 }

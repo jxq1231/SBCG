@@ -55,8 +55,9 @@ BSP_PtpStatus BSP_PTP_Init(void)
     ETH_PTP_ConfigTypeDef config = {0};
     config.Timestamp = ETH_PTPTSCR_TSE;
     config.TimestampRolloverMode = ENABLE;
+    config.TimestampAll = ENABLE;
     config.TimestampSubsecondInc = PTP_INCREMENT_NS;
-    /* Coarse local clock only: no addend update or RX frame timestamping.
+    /* Coarse local clock with all-frame RX timestamps: no addend update.
        Keeping AddendUpdate disabled avoids the vendor's unbounded loop. */
     if (HAL_ETH_PTP_SetConfig(&heth, &config) != HAL_OK)
     {
@@ -109,4 +110,31 @@ BSP_PtpStatus BSP_PTP_Read(BSP_PtpTime *time)
         }
     }
     return BSP_PTP_BAD_SNAPSHOT;
+}
+
+BSP_PtpStatus BSP_PTP_ReadRx(BSP_PtpTime *time)
+{
+    if (time == NULL) { return BSP_PTP_BAD_SNAPSHOT; }
+    if (!ready || heth.Instance != ETH || heth.gState != HAL_ETH_STATE_STARTED ||
+        heth.IsPtpConfigured != HAL_ETH_PTP_CONFIGURED)
+    {
+        return BSP_PTP_NOT_READY;
+    }
+    if (!ConfigMatches() || (READ_REG(heth.Instance->PTPTSCR) & ETH_PTPTSCR_TSSARFE) == 0U ||
+        (READ_REG(heth.Instance->DMABMR) & ETH_DMABMR_EDE) == 0U)
+    {
+        return BSP_PTP_BAD_CONFIG;
+    }
+    /* This field stores RDES0's value, not an address. In enhanced mode bit
+       zero signals extended status; test ES, never its legacy error alias. */
+    const uint32_t status = heth.RxDescList.pRxLastRxDesc;
+    if ((status & (ETH_DMARXDESC_OWN | ETH_DMARXDESC_LS | ETH_DMARXDESC_ES)) != ETH_DMARXDESC_LS)
+    {
+        return BSP_PTP_BAD_SNAPSHOT;
+    }
+    ETH_TimeStampTypeDef sample;
+    if (HAL_ETH_PTP_GetRxTimestamp(&heth, &sample) != HAL_OK) { return BSP_PTP_HAL_ERROR; }
+    if (sample.TimeStampLow >= 1000000000U) { return BSP_PTP_BAD_SNAPSHOT; }
+    *time = (BSP_PtpTime){sample.TimeStampHigh, sample.TimeStampLow};
+    return BSP_PTP_OK;
 }

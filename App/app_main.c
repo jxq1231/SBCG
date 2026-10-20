@@ -6,13 +6,14 @@
 #include "Network/udp_heartbeat.h"
 #include "Network/udp_probe.h"
 #include "Sync/ptp_clock.h"
+#include "Sync/ptp_rx.h"
 #endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M2.1-CLOCK"
+#define APP_FIRMWARE_ID "SBCG-M2.1-RX"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -57,6 +58,7 @@ void App_Init(void)
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
     UDPProbe_Init(last_heartbeat_ms, info.uid_words, SendLine);
     PtpClock_Init(BSP_Console_GetTickMs(), SendLine);
+    PtpRx_Init(BSP_Console_GetTickMs(), SendLine);
 #endif
 }
 
@@ -85,5 +87,6 @@ void App_Process(void)
 #ifdef SBCG_USE_LWIP
     UDPProbe_Process(BSP_Console_GetTickMs());
     PtpClock_Process(BSP_Console_GetTickMs());
+    PtpRx_Process(BSP_Console_GetTickMs());
 #endif
 }

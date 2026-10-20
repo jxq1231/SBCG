@@ -1,4 +1,5 @@
 #include "Network/udp_probe.h"
+#include "Sync/ptp_rx.h"
 #include "lwip/udp.h"
 #include "lwip/netif.h"
 #include <assert.h>
@@ -17,6 +18,14 @@ static bool no_pcb, no_memory, short_copy;
 static err_t bind_err, copy_err, send_err;
 static unsigned char request[28], reply[28];
 static char line[160];
+static unsigned int observations;
+static bool rx_released;
+
+void PtpRx_Observe(const uint8_t data[28])
+{
+    assert(!rx_released && memcmp(data,request,28)==0);
+    ++observations;
+}
 
 static void Log(const char *data, int length)
 {
@@ -38,7 +47,7 @@ u16_t pbuf_copy_partial(const struct pbuf *p, void *dest, u16_t size, u16_t offs
 err_t pbuf_take(struct pbuf *p, const void *data, u16_t size)
 { assert(p == &tx && size == 28); memcpy(reply, data, size); return copy_err; }
 u8_t pbuf_free(struct pbuf *p)
-{ if (p == &rx) { ++rx_frees; } else { assert(p == &tx); ++tx_frees; } return 1; }
+{ if (p == &rx) { ++rx_frees; rx_released=true; } else { assert(p == &tx); ++tx_frees; } return 1; }
 err_t udp_sendto(struct udp_pcb *p, struct pbuf *buf, const ip_addr_t *address, u16_t port)
 { assert(p == &pcb && buf == &tx && address && port == 6006); ++sends; return send_err; }
 
@@ -50,6 +59,7 @@ static void Reset(void)
     gnetif.flags = NETIF_FLAG_UP | NETIF_FLAG_LINK_UP;
     UDPProbe_Init(0, uid, Log);
     attempts = removes = rx_frees = tx_frees = sends = logs = 0;
+    observations=0; rx_released=false;
     callback = NULL;
     const unsigned char wire[28] = {
         'S','B','C','G',1,2,0,28,0,0,0,7,0,0,3,232,
@@ -62,6 +72,7 @@ static void Receive(u16_t port, bool foreign)
     ip_addr_t address;
     IP_ADDR4(&address, 192,168,10,foreign ? 101 : 100);
     assert(callback != NULL);
+    rx_released=false;
     callback(callback_arg, &pcb, &rx, &address, port);
 }
 int main(void)
@@ -69,6 +80,7 @@ int main(void)
     Reset(); UDPProbe_Process(0);
     assert(callback && attempts == 1);
     Receive(6006, false);
+    assert(observations==1);
     assert(rx_frees == 1 && tx_frees == 1 && sends == 1);
     assert(memcmp(reply, "SBCG\1\3\0\34\0\0\0\7", 12) == 0);
     assert(memcmp(reply+12,request+12,4) == 0);
@@ -89,6 +101,7 @@ int main(void)
     }
     rx.tot_len = 27; Receive(6006,false);
     assert(rx_frees == 6 && sends == 0 && tx_frees == 0);
+    assert(observations==0);
     UDPProbe_Process(1000); assert(strstr(line,"BAD=6"));
     puts("PASS: invalid magic/version/type/length/UID are rejected without reply");
 
@@ -101,6 +114,7 @@ int main(void)
 
     Reset(); UDPProbe_Process(0); Receive(6006,true); Receive(6007,false);
     assert(rx_frees == 2 && sends == 0);
+    assert(observations==0);
     UDPProbe_Process(1000); assert(strstr(line,"FOREIGN=2"));
     puts("PASS: unexpected source IP/port are ignored and RX buffers released");
 

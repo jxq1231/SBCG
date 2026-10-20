@@ -12,7 +12,8 @@ def main():
         print("Native GCC is required", file=sys.stderr)
         return 1
     for name, source in [("bsp_ptp", "App/BSP/bsp_ptp.c"),
-                         ("ptp_clock", "App/Sync/ptp_clock.c")]:
+                         ("ptp_clock", "App/Sync/ptp_clock.c"),
+                         ("ptp_rx", "App/Sync/ptp_rx.c")]:
         output = root / "Logs/M2_1_PTP" / ("test_" + name + ".exe")
         output.parent.mkdir(parents=True, exist_ok=True)
         command = [gcc, "-std=c11", "-Wall", "-Wextra", "-Werror",
@@ -24,6 +25,10 @@ def main():
             command += ["-isystem", str(root / directory)]
         if name == "ptp_clock":
             command += ["-Wl,--wrap=__mingw_snprintf", "-Wl,--wrap=snprintf"]
+        if name == "ptp_rx":
+            for directory in ["LWIP/Target", "Middlewares/Third_Party/LwIP/src/include",
+                              "Middlewares/Third_Party/LwIP/system"]:
+                command += ["-I", str(root / directory)]
         command += [str(root / "Tests/Ptp" / ("test_" + name + ".c")),
                     str(root / source), "-o", str(output)]
         result = subprocess.run(command, cwd=root, check=False, timeout=30)
