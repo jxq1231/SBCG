@@ -40,6 +40,9 @@ include(cmake/ethernet-layout.cmake)
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# Keep the ETH handle layout consistent across application, HAL and LwIP.
+target_compile_definitions(stm32cubemx INTERFACE HAL_ETH_USE_PTP)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
