@@ -55,6 +55,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/BSP/bsp_console.c
     App/BSP/bsp_ethernet.c
     App/Network/ethernet_monitor.c
+    App/Sync/sync_estimator.c
 )
 
 # LwIP generation registers LAN8742 in STM32_Drivers. Older PHY-only
