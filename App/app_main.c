@@ -4,13 +4,14 @@
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
+#include "Network/udp_probe.h"
 #endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M1.2-UDP"
+#define APP_FIRMWARE_ID "SBCG-M1.3-UDP"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -53,6 +54,7 @@ void App_Init(void)
     EthernetMonitor_Init(last_heartbeat_ms, SendLine);
 #ifdef SBCG_USE_LWIP
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
+    UDPProbe_Init(last_heartbeat_ms, info.uid_words, SendLine);
 #endif
 }
 
@@ -78,4 +80,7 @@ void App_Process(void)
         SendLine(line, length);
     }
     EthernetMonitor_Process(BSP_Console_GetTickMs());
+#ifdef SBCG_USE_LWIP
+    UDPProbe_Process(BSP_Console_GetTickMs());
+#endif
 }

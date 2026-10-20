@@ -59,6 +59,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 if(TARGET LwIP)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_LWIP=1)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_heartbeat.c)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_probe.c)
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE Drivers/BSP/Components/lan8742/lan8742.c)
 endif()
