@@ -3,6 +3,7 @@
 #include "Network/ethernet_monitor.h"
 #include "Network/udp_heartbeat.h"
 #include "Network/udp_probe.h"
+#include "Sync/ptp_clock.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -20,6 +21,23 @@ static uint32_t udp_calls;
 static bool udp_initialized;
 static bool probe_initialized;
 static uint32_t probe_calls;
+static bool ptp_initialized;
+static uint32_t ptp_calls;
+
+void PtpClock_Init(uint32_t now_ms, PtpClock_Log log)
+{
+    assert(now_ms == tick_ms && log != NULL);
+    assert(udp_initialized && probe_initialized);
+    ptp_initialized = true;
+    ptp_calls = 0;
+}
+void PtpClock_Process(uint32_t now_ms)
+{
+    assert(ptp_initialized && now_ms == tick_ms);
+    assert(lwip_calls > 0 && last_lwip_tick_ms == now_ms);
+    assert(udp_calls == lwip_calls && probe_calls == lwip_calls);
+    ++ptp_calls;
+}
 
 void UDPProbe_Init(uint32_t now_ms, const uint32_t uid_words[3], UDPProbe_Log log)
 {
@@ -102,6 +120,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     write_ok = initial_write_ok;
     udp_initialized = false;
     probe_initialized = false;
+    ptp_initialized = false;
     App_Init();
 }
 
@@ -111,8 +130,9 @@ int main(void)
     assert(write_count == 1U);
     assert(udp_initialized);
     assert(probe_initialized);
+    assert(ptp_initialized);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M1.3-UDP,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M2.1-CLOCK,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -124,6 +144,7 @@ int main(void)
     assert(lwip_calls == 2U);
     assert(udp_calls == 2U);
     assert(probe_calls == 2U);
+    assert(ptp_calls == 2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);

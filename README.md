@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M1.4%20%7C%20UDP%20Recovery-0f766e?style=flat-square" alt="M1.4，当前板两路UDP断线恢复通过">
+  <img src="https://img.shields.io/badge/Stage-M2.1.1%20%7C%20Local%20Clock-0f766e?style=flat-square" alt="M2.1.1，单板本地PTP时钟验收通过，尚未同步">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -40,7 +40,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**截至2026-10-20：当前板已通过200 MHz启动、串口心跳、PHY链路、LwIP基本ping及电脑UDP通信验收。M1.3正常窗口30发30收；M1.4进一步观察到两次链路恢复后两路UDP自行继续，90条串口心跳连续。当前不检查第二板，整机测距仍未实现。**
+**截至2026-10-20：M2.1.1单板本地PTP硬件时钟验收通过。SBCG-M2.1-CLOCK启动后88条PTP状态及心跳连续、错误计数0；电脑收到70个UDP包零缺口，30次请求全部匹配应答。82项主机检查、Debug/Release构建/布局及Generate Code回归通过。时钟为LOCAL/SYNC=0，两板同步和整机测距仍未实现；当前不检查第二板。**
 
 | 内容 | 状态 | 入口 |
 | --- | --- | --- |
@@ -54,6 +54,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M1.2 单向UDP | 正常窗口31包零缺口；两组各两次拔插均恢复，最新一组已联合核对PHY、心跳与14个本地跳过时隙；序号/tick延续 | [实物结果与复验](Docs/Milestones/M1_2_UDP_Send.md#第二组拔插与串口联合验收2026-10-19) |
 | M1.3 请求/应答 | 电脑30发30收，来源/UID/序号/请求标记匹配；串口VALID=30、ACK_OK=30，心跳连续，错误项均0；71项主机检查通过 | [实物结果与复验](Docs/Milestones/M1_3_UDP_Request_Reply.md#用户实物验收2026-10-20) |
 | M1.4 双向UDP恢复 | 两次PHY断开后均恢复；41个匹配应答、19次断线窗口超时；5005的19个缺口与本地跳过对应，90条心跳连续 | [自动采集联合验收](Docs/Milestones/M1_4_UDP_Reconnect.md) |
+| M2.1.1 本地PTP时钟 | 88条LOCAL/SYNC=0单调时间；本版本UDP 70包零缺口、30/30应答；已授权烧录校验 | [代码、再生成与实物验收](Docs/Milestones/M2_1_PTP_Clock.md) |
 | 显示 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
 
 完整要求及实施顺序见[任务书路线与验收矩阵](Docs/Project_Roadmap.md)，当前实测范围见[项目状态](Docs/Project_State.md)。路线优先建立观测、网络与统一时间，再完成声音检测、测距和基础LCD；基础60分闭环后推进提高功能。所有文档从[Docs入口](Docs/README.md)阅读。
@@ -62,7 +63,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | --- | --- | --- |
 | M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收未实现 |
 | M1 | 以太网链路与双向UDP通信 | 本板与电脑正常请求/应答、两次链路恢复及5005接收已验证；两板UDP未实现 |
-| M2 | 时间同步及PPS精度验证 | 未开始 |
+| M2 | 时间同步及PPS精度验证 | M2.1.1单板本地时钟通过；收发事件时间戳、两板同步及PPS待实现 |
 | M3 | 音频DMA采集 | 未开始 |
 | M4 | 声音事件检测 | 未开始 |
 | M5 | TDOA测量及标定 | 未开始 |

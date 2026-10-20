@@ -5,13 +5,14 @@
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
 #include "Network/udp_probe.h"
+#include "Sync/ptp_clock.h"
 #endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M1.3-UDP"
+#define APP_FIRMWARE_ID "SBCG-M2.1-CLOCK"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -55,6 +56,7 @@ void App_Init(void)
 #ifdef SBCG_USE_LWIP
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
     UDPProbe_Init(last_heartbeat_ms, info.uid_words, SendLine);
+    PtpClock_Init(BSP_Console_GetTickMs(), SendLine);
 #endif
 }
 
@@ -82,5 +84,6 @@ void App_Process(void)
     EthernetMonitor_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_LWIP
     UDPProbe_Process(BSP_Console_GetTickMs());
+    PtpClock_Process(BSP_Console_GetTickMs());
 #endif
 }
