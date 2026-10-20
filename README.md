@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M2.1.2%20%7C%20RX%20Timestamp-0f766e?style=flat-square" alt="M2.1.2，RX硬件时间戳关联验收通过，尚未同步">
+  <img src="https://img.shields.io/badge/Stage-M2.1.3%20%7C%20RX%2FTX%20Timestamp-0f766e?style=flat-square" alt="M2.1.3，RX/TX硬件时间戳关联验收通过，尚未同步">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -40,7 +40,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**截至2026-10-20：M2.1.2单板RX硬件时间戳关联验收通过。SBCG-M2.1-RX的30个电脑请求分别匹配唯一DMA接收时间及ACK；70个UDP包零缺口，98条PTP状态/心跳连续，错误及溢出0。92项主机检查、Debug/Release构建/布局及Generate Code回归通过。时钟为LOCAL/SYNC=0，TX时间戳、两板同步和整机测距仍未实现；当前不检查第二板。**
+**截至2026-10-20：M2.1.3单板RX/TX硬件时间戳关联通过实物验收。SBCG-M2.1-TX经授权烧录、校验和复位，30个电脑请求各匹配唯一DMA接收时间、发送时间及ACK；70个UDP包零缺口，91条PTP状态/心跳连续，错误及溢出0。109项主机检查、Debug/Release构建/布局、实际Generate Code回归及复核通过。时钟仍为LOCAL/SYNC=0，两板同步和整机测距尚未实现；当前不检查第二板。** 见[M2.1.3实测与复验](Docs/Milestones/M2_1_PTP_TX.md)。下述旧版本结果各自保留，不直接充当新版本证据。
 
 | 内容 | 状态 | 入口 |
 | --- | --- | --- |
@@ -56,6 +56,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M1.4 双向UDP恢复 | 两次PHY断开后均恢复；41个匹配应答、19次断线窗口超时；5005的19个缺口与本地跳过对应，90条心跳连续 | [自动采集联合验收](Docs/Milestones/M1_4_UDP_Reconnect.md) |
 | M2.1.1 本地PTP时钟 | 88条LOCAL/SYNC=0单调时间；本版本UDP 70包零缺口、30/30应答；已授权烧录校验 | [代码、再生成与实物验收](Docs/Milestones/M2_1_PTP_Clock.md) |
 | M2.1.2 RX事件关联 | 30个请求各匹配唯一DMA时间及ACK，70包零缺口，98条PTP/心跳连续；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_RX.md) |
+| M2.1.3 TX事件关联 | 本版本30组唯一RX/TX/ACK，70包零缺口，91条PTP/心跳；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_TX.md) |
 | 显示 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
 
 完整要求及实施顺序见[任务书路线与验收矩阵](Docs/Project_Roadmap.md)，当前实测范围见[项目状态](Docs/Project_State.md)。路线优先建立观测、网络与统一时间，再完成声音检测、测距和基础LCD；基础60分闭环后推进提高功能。所有文档从[Docs入口](Docs/README.md)阅读。
@@ -64,7 +65,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | --- | --- | --- |
 | M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收未实现 |
 | M1 | 以太网链路与双向UDP通信 | 本板与电脑正常请求/应答、两次链路恢复及5005接收已验证；两板UDP未实现 |
-| M2 | 时间同步及PPS精度验证 | 本地时钟及RX事件关联通过；TX事件时间戳、两板同步及PPS待实现 |
+| M2 | 时间同步及PPS精度验证 | 本地时钟及RX/TX事件关联通过；两板同步及PPS待实现 |
 | M3 | 音频DMA采集 | 未开始 |
 | M4 | 声音事件检测 | 未开始 |
 | M5 | TDOA测量及标定 | 未开始 |

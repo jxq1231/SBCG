@@ -7,13 +7,14 @@
 #include "Network/udp_probe.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
+#include "Sync/ptp_tx.h"
 #endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M2.1-RX"
+#define APP_FIRMWARE_ID "SBCG-M2.1-TX"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -59,6 +60,7 @@ void App_Init(void)
     UDPProbe_Init(last_heartbeat_ms, info.uid_words, SendLine);
     PtpClock_Init(BSP_Console_GetTickMs(), SendLine);
     PtpRx_Init(BSP_Console_GetTickMs(), SendLine);
+    PtpTx_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
 #endif
 }
 
@@ -88,5 +90,6 @@ void App_Process(void)
     UDPProbe_Process(BSP_Console_GetTickMs());
     PtpClock_Process(BSP_Console_GetTickMs());
     PtpRx_Process(BSP_Console_GetTickMs());
+    PtpTx_Process(BSP_Console_GetTickMs());
 #endif
 }

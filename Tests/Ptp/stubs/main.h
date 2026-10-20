@@ -10,4 +10,13 @@ extern RCC_TypeDef test_rcc;
 #undef RCC
 #define RCC (&test_rcc)
 
+#ifdef SBCG_TEST_PTP_TX
+void PtpTx_TestBarrier(void);
+void PtpTx_TestClear(volatile uint32_t *reg, uint32_t bits);
+#undef __DMB
+#define __DMB() PtpTx_TestBarrier()
+#undef CLEAR_BIT
+#define CLEAR_BIT(REG, BITS) PtpTx_TestClear(&(REG), (BITS))
+#endif
+
 #endif

@@ -13,7 +13,9 @@ def main():
         return 1
     for name, source in [("bsp_ptp", "App/BSP/bsp_ptp.c"),
                          ("ptp_clock", "App/Sync/ptp_clock.c"),
-                         ("ptp_rx", "App/Sync/ptp_rx.c")]:
+                         ("ptp_rx", "App/Sync/ptp_rx.c"),
+                         ("bsp_ptp_tx", "App/BSP/bsp_ptp_tx.c"),
+                         ("ptp_tx", "App/Sync/ptp_tx.c")]:
         output = root / "Logs/M2_1_PTP" / ("test_" + name + ".exe")
         output.parent.mkdir(parents=True, exist_ok=True)
         command = [gcc, "-std=c11", "-Wall", "-Wextra", "-Werror",
@@ -25,7 +27,9 @@ def main():
             command += ["-isystem", str(root / directory)]
         if name == "ptp_clock":
             command += ["-Wl,--wrap=__mingw_snprintf", "-Wl,--wrap=snprintf"]
-        if name == "ptp_rx":
+        if name == "bsp_ptp_tx":
+            command += ["-DSBCG_TEST_PTP_TX"]
+        if name in ("ptp_rx", "ptp_tx"):
             for directory in ["LWIP/Target", "Middlewares/Third_Party/LwIP/src/include",
                               "Middlewares/Third_Party/LwIP/system"]:
                 command += ["-I", str(root / directory)]

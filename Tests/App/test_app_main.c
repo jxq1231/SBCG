@@ -5,6 +5,7 @@
 #include "Network/udp_probe.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
+#include "Sync/ptp_tx.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -26,6 +27,20 @@ static bool ptp_initialized;
 static uint32_t ptp_calls;
 static bool rx_initialized;
 static uint32_t rx_calls;
+static bool tx_initialized;
+static uint32_t tx_calls;
+
+void PtpTx_Init(uint32_t now_ms,const uint32_t uid_words[3],PtpTx_Log log)
+{
+    assert(rx_initialized && now_ms==tick_ms && log!=NULL);
+    assert(uid_words[0]==0x001A002D && uid_words[2]==0x36363631);
+    tx_initialized=true;tx_calls=0;
+}
+void PtpTx_Process(uint32_t now_ms)
+{
+    assert(tx_initialized && now_ms==tick_ms && rx_calls==lwip_calls);
+    ++tx_calls;
+}
 
 void PtpRx_Init(uint32_t now_ms, PtpRx_Log log)
 {
@@ -136,6 +151,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     probe_initialized = false;
     ptp_initialized = false;
     rx_initialized = false;
+    tx_initialized = false;
     App_Init();
 }
 
@@ -147,8 +163,9 @@ int main(void)
     assert(probe_initialized);
     assert(ptp_initialized);
     assert(rx_initialized);
+    assert(tx_initialized);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M2.1-RX,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M2.1-TX,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -162,6 +179,7 @@ int main(void)
     assert(probe_calls == 2U);
     assert(ptp_calls == 2U);
     assert(rx_calls == 2U);
+    assert(tx_calls == 2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);
