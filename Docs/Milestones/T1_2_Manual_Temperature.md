@@ -115,3 +115,5 @@ App_Process → 原网络/PTP → TemperatureService_Process
 分析初次因沿用旧脚本的“相邻UDP tick必须至少1000ms”断言而停止。核对现有UDPHeartbeat_Process后确认其按last_slot += slots×1000保持时隙，晚1ms后回到时隙可产生999ms间隔。分析修正为相邻间隔980～1020ms、时隙相位跨度不超过20ms、逐包同SEQ串口tick完全一致，同时保留无缺口/无错误等全部检查；没有修改固件、原始日志或重烧。初次脚本和原因保存在 analyzer-before-cadence-correction.py、cadence-check-correction.json 中。本轮实际相位跨度为1ms；该边界是调度回归检查，不是课程同步指标。
 
 证据（位于git忽略目录）：Logs/Temperature/T1_2/runtime-run.json、baseline-acceptance.json、runtime-comparison.json；原始前缀 Logs/UDP/t12-manual-1792598209136，包括串口二进制/JSONL、发送命令JSONL、3路UDP及烧录记录，联合报告保存7份原始文件的SHA256。软件最终记录 final-software-checks.json、preflash-review.json 和 regen-final/result.json。独立审查本轮未能运行；结论依据本地复核、原生测试与上述实际采集，未宣称独立审查通过。
+
+后续更新（2026-10-22）：本固件另经用户授权进行一次DHT11物理拔插，恢复功能通过；电脑端曾中断采集，未证明整段连续网络零丢包，详见[物理拔插报告](T1_1_Temperature_Replug.md)。上文90秒窗口与本轮故障观察分别保留。

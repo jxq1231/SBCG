@@ -1,5 +1,7 @@
 # 硬件资源与后续配置参考
 
+2026-10-22补充：[当前板DHT11拔插恢复](Milestones/T1_1_Temperature_Replug.md)已实测，保持3.3V/PG7-D4。未修改引脚、CubeMX或固件；故障恢复功能通过，电脑端采集中断造成的连续观测边界单独记录，不称整段网络零丢包。
+
 更新：2026-10-21。目标硬件为课程STM32F746G-DISCO / 32F746GDISCOVERY，MCU STM32F746NGH6 / TFBGA216。
 
 ## 0. 使用范围与证据等级
