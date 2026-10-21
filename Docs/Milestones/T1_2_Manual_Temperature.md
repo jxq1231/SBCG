@@ -117,3 +117,5 @@ App_Process → 原网络/PTP → TemperatureService_Process
 证据（位于git忽略目录）：Logs/Temperature/T1_2/runtime-run.json、baseline-acceptance.json、runtime-comparison.json；原始前缀 Logs/UDP/t12-manual-1792598209136，包括串口二进制/JSONL、发送命令JSONL、3路UDP及烧录记录，联合报告保存7份原始文件的SHA256。软件最终记录 final-software-checks.json、preflash-review.json 和 regen-final/result.json。独立审查本轮未能运行；结论依据本地复核、原生测试与上述实际采集，未宣称独立审查通过。
 
 后续更新（2026-10-22）：本固件另经用户授权进行一次DHT11物理拔插，恢复功能通过；电脑端曾中断采集，未证明整段连续网络零丢包，详见[物理拔插报告](T1_1_Temperature_Replug.md)。上文90秒窗口与本轮故障观察分别保留。
+
+连续补测（2026-10-22）：同一固件完成约488.9秒不间断拔插验收，488包UDP无缺口、两组30请求及真实C对照通过；故障旧值保持、15秒边界附近状态、无效查询和重新预读恢复已连续捕获。详见[PASS_CONTINUOUS_REPLUG记录](T1_1_Temperature_Replug.md)。首轮空档保留，不回填原始日志。

@@ -123,3 +123,5 @@ CONSOLE 字段 RX_ERRORS、RX_OVERFLOWS、RX_REARM_ERRORS 都是饱和 uint32 �
 本版本 FW=SBCG-T1.2-MANUAL，已完成手动保持/零温/负温/非法拒绝/分段/恢复自动及原网络联合实测，旧 UDP 协议及缓存配置未改。使用步骤与测试范围见 [T1.2](Milestones/T1_2_Manual_Temperature.md)。
 
 2026-10-22补充实测：T1.2固件完成一次DHT11物理拔插恢复观察；HOLD_LAST/STALE保留旧值与版本、ENV无效值省略、PRIMING不发布新值及后续版本持续增长均已观察。TIMEOUT累计18并在恢复后停止增长。两段主机采集之间存在空档，不能由此证明精确15秒边界或全程连续网络零丢包；见[实测边界](Milestones/T1_1_Temperature_Replug.md)。
+
+后续连续补测（2026-10-22）：T1.2同一固件已在单一约488.9秒窗口完成拔插验证，连续观察到AGE_MS=14744时HOLD_LAST、15744时STALE，ENV无效值省略、预读不发布版本、约5秒后恢复有效版本。488个UDP包序号完整，原30组请求及时间交换通过。此为约1秒日志分辨率的观察，不声称毫秒级过期切换精度；见[连续验收](Milestones/T1_1_Temperature_Replug.md)。
