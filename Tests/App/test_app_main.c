@@ -3,6 +3,7 @@
 #include "Network/ethernet_monitor.h"
 #include "Network/udp_heartbeat.h"
 #include "Network/udp_probe.h"
+#include "Network/udp_time_exchange.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
@@ -14,7 +15,7 @@
 static uint32_t tick_ms;
 static uint32_t write_count;
 static bool write_ok;
-static char last_line[160];
+static char last_line[256];
 static uint32_t monitor_calls;
 static EthernetMonitor_Log monitor_log;
 static uint32_t lwip_calls;
@@ -29,6 +30,38 @@ static bool rx_initialized;
 static uint32_t rx_calls;
 static bool tx_initialized;
 static uint32_t tx_calls;
+static bool time_initialized;
+static bool deinit_ok = true;
+static bool time_init_ok = true;
+static uint32_t deinit_calls, completed_init_calls, time_calls;
+static UDPTimeExchange_Log time_log;
+
+bool UDPTimeExchange_Deinit(void)
+{
+    ++deinit_calls;
+    if (!deinit_ok) { return false; }
+    time_initialized = false;
+    return true;
+}
+
+bool UDPTimeExchange_Init(uint32_t now_ms, const uint32_t uid_words[3],
+                          UDPTimeExchange_Tick tick, UDPTimeExchange_Log log)
+{
+    assert(tx_initialized && now_ms == tick_ms && log != NULL);
+    assert(tick != NULL && tick() == tick_ms && deinit_calls == completed_init_calls + 1U);
+    assert(uid_words[0] == 0x001A002D && uid_words[2] == 0x36363631);
+    time_initialized = time_init_ok;
+    time_log = log;
+    time_calls = 0;
+    ++completed_init_calls;
+    return time_init_ok;
+}
+
+void UDPTimeExchange_Process(uint32_t now_ms)
+{
+    assert(now_ms == tick_ms && tx_calls == lwip_calls);
+    ++time_calls;
+}
 
 void PtpTx_Init(uint32_t now_ms,const uint32_t uid_words[3],PtpTx_Log log)
 {
@@ -55,6 +88,7 @@ void PtpRx_Process(uint32_t now_ms)
 
 void PtpClock_Init(uint32_t now_ms, PtpClock_Log log)
 {
+    assert(deinit_calls == completed_init_calls + 1U);
     assert(now_ms == tick_ms && log != NULL);
     assert(udp_initialized && probe_initialized);
     ptp_initialized = true;
@@ -152,6 +186,9 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     ptp_initialized = false;
     rx_initialized = false;
     tx_initialized = false;
+    time_initialized = false;
+    deinit_calls = 0U;
+    completed_init_calls = 0U;
     App_Init();
 }
 
@@ -164,8 +201,9 @@ int main(void)
     assert(ptp_initialized);
     assert(rx_initialized);
     assert(tx_initialized);
+    assert(time_initialized);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M2.1-TX,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M2.2-IO,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -180,6 +218,7 @@ int main(void)
     assert(ptp_calls == 2U);
     assert(rx_calls == 2U);
     assert(tx_calls == 2U);
+    assert(time_calls == 2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);
@@ -228,5 +267,44 @@ int main(void)
     App_Process();
     assert(strstr(last_line, "TX_ERRORS=2\r\n") != NULL);
     puts("PASS: failures are counted and recovery remains rate limited");
+
+    Reset(0U, true);
+    char longest_line[257];
+    memset(longest_line, 'X', sizeof(longest_line));
+    longest_line[253] = '\r'; longest_line[254] = '\n'; longest_line[255] = '\0';
+    time_log(longest_line, 255);
+    assert(write_count == 2U && strlen(last_line) == 255U);
+    time_log(longest_line, 256);
+    assert(write_count == 2U);
+    tick_ms = 1000U; App_Process();
+    assert(strstr(last_line, "TX_ERRORS=1\r\n") != NULL);
+    puts("PASS: 255-byte statistics fit and truncated 256-byte lines count an error");
+
+    Reset(0U, true);
+    App_Process();
+    assert(time_initialized && time_calls == 1U);
+    App_Init();
+    assert(deinit_calls == 2U && completed_init_calls == 2U && time_initialized);
+    assert(write_count == 2U && time_calls == 0U && tx_calls == 0U);
+    App_Process();
+    assert(time_calls == 1U && tx_calls == 1U && lwip_calls == 1U);
+    puts("PASS: whole application can reinitialize a running service and preserve scheduling");
+
+    const uint32_t writes_before = write_count;
+    const uint32_t tx_before = tx_calls;
+    deinit_ok = false;
+    App_Init();
+    assert(write_count == writes_before + 1U && tx_calls == tx_before);
+    assert(strcmp(last_line, "$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n") == 0);
+    deinit_ok = true;
+    puts("PASS: lost wrapper ownership stops application reinitialization");
+
+    time_init_ok = false;
+    Reset(0U, true);
+    assert(strcmp(last_line, "$TS_INIT,RESULT=INIT_ERROR\r\n") == 0);
+    tick_ms = 1000U; App_Process();
+    assert(tx_calls == 1U && time_calls == 1U);
+    time_init_ok = true;
+    puts("PASS: service initialization failure leaves original business scheduling active");
     return 0;
 }

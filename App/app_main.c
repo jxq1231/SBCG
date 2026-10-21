@@ -5,6 +5,7 @@
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
 #include "Network/udp_probe.h"
+#include "Network/udp_time_exchange.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
@@ -14,12 +15,14 @@
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M2.1-TX"
+#define APP_FIRMWARE_ID "SBCG-M2.2-IO"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
 #define APP_HEARTBEAT_PERIOD_MS 1000U
-#define APP_LOG_LINE_CAPACITY 160U
+#define APP_LOG_LINE_CAPACITY 256U
+/* BOOT/heartbeat remain short; allow longer service logs without larger locals. */
+#define APP_STATUS_LINE_CAPACITY 160U
 
 static uint32_t last_heartbeat_ms;
 static uint32_t heartbeat_seq;
@@ -42,8 +45,17 @@ static void SendLine(const char *line, int length)
 
 void App_Init(void)
 {
+#ifdef SBCG_USE_LWIP
+    /* Remove the outer wrapper before the existing observers capture pointers. */
+    if (!UDPTimeExchange_Deinit())
+    {
+        static const char error[] = "$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n";
+        SendLine(error, (int)(sizeof(error) - 1U));
+        return;
+    }
+#endif
     BSP_ConsoleInfo info;
-    char line[APP_LOG_LINE_CAPACITY];
+    char line[APP_STATUS_LINE_CAPACITY];
 
     heartbeat_seq = 0U;
     app_tx_error_count = 0U;
@@ -61,6 +73,12 @@ void App_Init(void)
     PtpClock_Init(BSP_Console_GetTickMs(), SendLine);
     PtpRx_Init(BSP_Console_GetTickMs(), SendLine);
     PtpTx_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
+    if (!UDPTimeExchange_Init(BSP_Console_GetTickMs(), info.uid_words,
+                             BSP_Console_GetTickMs, SendLine))
+    {
+        static const char error[] = "$TS_INIT,RESULT=INIT_ERROR\r\n";
+        SendLine(error, (int)(sizeof(error) - 1U));
+    }
 #endif
 }
 
@@ -79,7 +97,7 @@ void App_Process(void)
         /* Skip missed periods instead of flooding after a delayed loop. */
         last_heartbeat_ms = now_ms;
         ++heartbeat_seq;
-        char line[APP_LOG_LINE_CAPACITY];
+        char line[APP_STATUS_LINE_CAPACITY];
         const int length = snprintf(line, sizeof(line),
             "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32 "\r\n",
             heartbeat_seq, now_ms, (uint32_t)app_tx_error_count);
@@ -91,5 +109,6 @@ void App_Process(void)
     PtpClock_Process(BSP_Console_GetTickMs());
     PtpRx_Process(BSP_Console_GetTickMs());
     PtpTx_Process(BSP_Console_GetTickMs());
+    UDPTimeExchange_Process(BSP_Console_GetTickMs());
 #endif
 }
