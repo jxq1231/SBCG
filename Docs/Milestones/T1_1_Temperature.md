@@ -59,7 +59,18 @@ Release deb8768b37c8219cd26adc089002ed24979a01fb5457f889084ebeb56b45c550
 - `Tests/Temperature/test_sound_speed.c`
 - `Tests/Temperature/test_temperature_service.c`
 
-文档更新：本文件、Docs/Project_State.md、Docs/Protocol.md及两份T1.1设计/执行计划。生成的三个PG7文件属于用户本次CubeMX工作，保留原改动；许可证恢复后与HEAD一致。
+本次还更新以下8个文档，与上面21个源码/配置/测试文件合计29个功能提交文件：
+
+- `Docs/Milestones/T1_1_Temperature.md`
+- `Docs/Project_State.md`
+- `Docs/Protocol.md`
+- `Docs/Hardware_Resources.md`
+- `Docs/Plans/2026-10-21_Temperature_Integration_Design.md`
+- `Docs/Plans/2026-10-21_Temperature_Integration_Implementation.md`
+- `Docs/README.md`
+- `README.md`
+
+生成的三个PG7文件属于用户本次CubeMX工作，保留原改动；许可证恢复后与功能基线一致。
 
 ## 实物验收要求
 
@@ -139,3 +150,10 @@ R1 Release 9f48e0a4ebf4fca87ae6d599e778ba3ab341dc5d1dd8011af95b48cd768e548f
 用户在正常窗口通过后明确要求“先不做拔插测试”。未启动拔插采集、未要求用户拔线、未改动接线；不继续该测试，也不自动推进新里程碑。`delivery-scope.json`记录`fault_recovery_status=DEFERRED_BY_USER`及`full_T1_1_complete=false`。
 
 本次正常采样子增量可作为团队复现基线记录：3.3V、S→PG7/D4，COM3/115200 8N1，观察FW=SBCG-T1.1-TEMP-R1及TEMP/温度版本/统计。原UDP/PTP功能只覆盖上述正常窗口。以后恢复测试需重新采集并核对HOLD_LAST→STALE、原值/版本保留、重预读和正式恢复；当前单元测试覆盖这些逻辑，但未把它们记为实物通过。
+
+
+## Git交付与停止点
+
+正常采样子增量功能提交：`913a02c581841f7c9b2d492983f57b33a5074129`，消息`feat: add verified single-board temperature sampling`，作者/提交者均为jxq，邮箱沿用仓库原配置。已正常推送origin的`jxq/m0-clock-review`，并读取远程引用核对该功能提交。未合并master、未改写历史；本次文档交付记录另用docs提交保存。
+
+最终Debug ELF仍为5ee566f1d7c1572aea152182e49a7fb46a2acfbb7703edd60c6d26949c543444，代码与正常窗口实测版本一致；原始Logs不进Git。本次停在已验证的单板正常温度观测，不运行用户延后的拔插测试，不推进下一里程碑。
