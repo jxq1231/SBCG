@@ -17,6 +17,7 @@ from udp_monitor import ipv4, uid_words
 
 WIRE = struct.Struct("!4sBBHIIIIIQ")
 REPORT_WIRE = struct.Struct("!4sBBHIIIIIQIIII")
+OBSERVATION_WIRE = struct.Struct("!4sBBHIIIIIQQQ")
 NSEC_PER_SEC = 1000000000
 COUNTERS = ("send_errors", "socket_errors", "invalid", "wrong_source", "wrong_key",
             "wrong_session", "wrong_uid", "wrong_sequence", "wrong_tick", "late",
@@ -69,16 +70,32 @@ def decode_message(data):
     return packet
 
 
-def run_probe(sock, target, uid, count, interval_s, timeout_s, emit):
+def encode_observation(sequence, tick_ms, uid, session, t1_ns, t4_ns):
+    """Submit the original request/first-ACK PC_SW times, never a new reading."""
+    if not all(isinstance(value, int) for value in (sequence, tick_ms, session, t1_ns, t4_ns, *uid)):
+        raise ValueError("observation key and PC timestamps must be integers")
+    if not (0 <= t1_ns <= 0xFFFFFFFFFFFFFFFF and t1_ns <= t4_ns <= 0xFFFFFFFFFFFFFFFF):
+        raise ValueError("PC timestamps must be unsigned 64-bit values with t4 at least t1")
+    if tick_ms != ((t1_ns // 1000000) & 0xFFFFFFFF):
+        raise ValueError("client tick must match the original t1 PC_SW timestamp")
+    # Reuse the request identity validation without changing the legacy frame.
+    encode_request(sequence, tick_ms, uid, session)
+    return OBSERVATION_WIRE.pack(b"SBCG", 1, 7, OBSERVATION_WIRE.size,
+                                 sequence, tick_ms, *uid, session, t1_ns, t4_ns)
+
+
+def run_probe(sock, target, uid, count, interval_s, timeout_s, emit, submit_observation=False):
     """Keep one request pending and observe its entire fixed receive window.
 
     Continuing to its deadline after a sample permits duplicate detection even
     for the final request. Arrival of any packet never extends this deadline.
+    Optional submission reports only local UDP send acceptance, never board receipt.
     """
     uid = tuple(uid)
     session = new_session()
     counters = dict.fromkeys(COUNTERS, 0)
     sent = samples = 0
+    observations_submitted = observation_send_errors = 0
     rtt_ns_values = []
     previous_rx_ns = previous_tx_ns = None
     start_ns = next_send_ns = time.monotonic_ns()
@@ -91,7 +108,8 @@ def run_probe(sock, target, uid, count, interval_s, timeout_s, emit):
 
     emit({"event": "ready", "bind": sock.getsockname(), "target": target,
           "count": count, "interval_s": interval_s, "timeout_s": timeout_s,
-          "hardware_verified": False, **identity})
+          "hardware_verified": False, **identity,
+          **({"submit_observation": True} if submit_observation else {})})
     try:
         for sequence in range(1, count + 1):
             while True:
@@ -198,6 +216,23 @@ def run_probe(sock, target, uid, count, interval_s, timeout_s, emit):
                               "t1_pc_sw_ns": "PC_SW", "t2_board_hw_ns": "BOARD_HW",
                               "t3_board_hw_ns": "BOARD_HW", "t4_pc_sw_ns": "PC_SW"},
                           "hardware_verified": False})
+                    if submit_observation:
+                        # Build only from private request/ACK integers. The sample
+                        # emitter is allowed to mutate its own presentation data.
+                        observation_key = {
+                            "session": f"{session:016X}", "uid": [f"{word:08X}" for word in uid],
+                            "sequence": sequence, "client_tick_ms": tick_ms,
+                            "scope": "local_only", "hardware_verified": False}
+                        try:
+                            observation = encode_observation(sequence, tick_ms, uid, session, t1_ns, t4_ns)
+                            if sock.sendto(observation, target) != len(observation):
+                                raise OSError("incomplete UDP observation send")
+                        except (OSError, ValueError) as exc:
+                            observation_send_errors += 1
+                            emit({"event": "observation_send_errors", **observation_key, "reason": str(exc)})
+                        else:
+                            observations_submitted += 1
+                            emit({"event": "observation_submit", **observation_key})
             if not sampled:
                 if t4_ns is None:
                     anomaly("missing_ack", sequence=sequence)
@@ -216,6 +251,11 @@ def run_probe(sock, target, uid, count, interval_s, timeout_s, emit):
               if rtt_ns_values else None,
               "status": "PASS" if samples == count and not any(counters.values())
               and stop_reason == "count" else "REVIEW"}
+    if submit_observation:
+        result.update(observations_submitted=observations_submitted,
+                      observation_send_errors=observation_send_errors)
+        if observation_send_errors or observations_submitted != samples:
+            result["status"] = "REVIEW"
     emit(result)
     return result
 
@@ -230,6 +270,8 @@ def main(argv=None):
     parser.add_argument("--count", type=int, default=30)
     parser.add_argument("--interval", type=float, default=1)
     parser.add_argument("--timeout", type=float, default=0.8)
+    parser.add_argument("--submit-observation", action="store_true",
+                        help="Send one type-7 PC_SW observation per complete sample; local evidence only")
     parser.add_argument("--log", type=Path)
     args = parser.parse_args(argv)
     if not any(args.uid):
@@ -239,6 +281,8 @@ def main(argv=None):
     if not (math.isfinite(args.interval) and math.isfinite(args.timeout)
             and 0.1 <= args.interval <= 60 and 0 < args.timeout <= 60):
         parser.error("interval must be 0.1..60 seconds and timeout greater than 0 and at most 60 seconds")
+    if args.submit_observation and (args.interval < 1 or args.timeout > 0.8):
+        parser.error("observation submission requires interval at least 1 second and timeout at most 0.8 seconds")
     output = None
     try:
         if args.log:
@@ -255,7 +299,7 @@ def main(argv=None):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind((args.bind, args.port))
             result = run_probe(sock, (args.target, args.target_port), args.uid, args.count,
-                               args.interval, args.timeout, emit)
+                               args.interval, args.timeout, emit, submit_observation=args.submit_observation)
         return 0 if result["status"] == "PASS" else 1
     except OSError as exc:
         print(f"Time exchange probe error: {exc}", file=sys.stderr)

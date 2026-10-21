@@ -1,6 +1,7 @@
 #include "Network/udp_time_exchange.h"
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
+#include "Sync/sync_observation.h"
 #include "BSP/bsp_ptp_tx.h"
 #include "lwip/udp.h"
 #include <assert.h>
@@ -174,6 +175,8 @@ static err_t OriginalInput(struct pbuf *p,struct netif *n)
         Callback(data,36,6007,false,false);
         if(double_claim) { ++data[11]; Callback(data,36,6007,false,false); }
     }
+    if(deliver_callback && offset+52<=p->tot_len && frame[offset+5]==7)
+    { Callback(frame+offset,52,6007,false,false); }
     if(offset+28<=p->tot_len && frame[offset+5]==2) { PtpRx_Observe(frame+offset); ++old_rx_claims; }
     return input_result;
 }
@@ -201,6 +204,7 @@ static void Reset(uint32_t tick)
     rx_time=(BSP_PtpTime){2,100}; local_time=(BSP_PtpTime){3,0}; tx_time=(BSP_PtpTime){2,500}; now_ms=tick;
     attempts=removes=allocations=releases=references=inputs=outputs=rx_reads=local_reads=0;
     begins=ends=clean_armed=ack_sends=report_sends=logs=old_rx_claims=0; expected_begin_length=0;
+    SyncObservation_Init(tick,Log);
     PtpRx_Init(tick,NULL); PtpTx_Init(tick,uid,NULL);
     assert(UDPTimeExchange_Init(tick,uid,Tick,Log)); UDPTimeExchange_Process(tick); assert(pcb.recv);
 }
@@ -215,13 +219,124 @@ static void Normal(void)
     assert(report_sends==1 && begins==1 && memcmp(last_report,"SBCG\1\6\0\64",8)==0);
     assert(Get32(last_report+8)==7 && Get32(last_report+12)==1000 && Get32(last_report+32)==0x12345678);
     assert(Get32(last_report+36)==2 && Get32(last_report+40)==100 && Get32(last_report+44)==2 && Get32(last_report+48)==500);
-    Stats(); assert(logs==2 && Contains("REQ_OK=1,REQ_BAD=0,FOREIGN=0,DUPLICATE=0,CONFLICT=0,ACK_OK=1,ACK_ERR=0,INIT_ERR=0"));
+    Stats(); assert(logs==3 && Contains("REQ_OK=1,REQ_BAD=0,FOREIGN=0,DUPLICATE=0,CONFLICT=0,ACK_OK=1,ACK_ERR=0,INIT_ERR=0"));
     assert(Contains("RX_OK=1,RX_INVALID=0,TX_OK=1,TX_ERR=0,UNSUPPORTED=0,REPORT_OK=1,REPORT_ERR=0,EXPIRED=0,OVERFLOW=0"));
+}
+
+static void Put64(uint8_t *p,uint64_t value)
+{ Put32(p,(uint32_t)(value>>32)); Put32(p+4,(uint32_t)value); }
+static void Submit(uint8_t data[52],const uint8_t request[36],uint64_t t1,uint64_t t4)
+{
+    memcpy(data,request,36); data[5]=7; data[7]=52;
+    Put64(data+36,t1); Put64(data+44,t4);
+}
+static void ObservationNormal(void)
+{
+    uint8_t request[36],submit[52]; Reset(0);
+    Request(request,7,1000,0x12345678); Deliver(request,0,false); UDPTimeExchange_Process(0);
+    Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+    Callback(submit,52,6007,false,true);
+    assert(logs==0); /* Callback only copies: no estimate or serial IO. */
+    SyncObservation_Process(0);
+    assert(Contains("STATUS=0,OFFSET_X2_NS=1999999599,DELAY_X2_NS=601,SYNC=0,PC=SW,BOARD=HW"));
+    Stats();
+    assert(Contains("$OBS_RX,ACCEPTED=1,BAD=0,FOREIGN=0,NO_PAIR=0,EARLY=0,DUPLICATE=0,CONFLICT=0,QUEUE_FULL=0"));
+    assert(ack_sends==1 && report_sends==1 && begins==1 && rx_reads==1 && references==0);
+}
+
+static void ObservationEdges(void)
+{
+    uint8_t request[36],submit[53];
+    Reset(0); Request(request,1,1000,1); Deliver(request,0,false); UDPTimeExchange_Process(0);
+    Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+    Callback(submit,52,6007,false,false); Callback(submit,52,6007,false,false);
+    Put64(submit+44,UINT64_C(1000001002)); Callback(submit,52,6007,false,false);
+    Put64(submit+36,UINT64_C(1000000001)); Callback(submit,52,6007,false,false);
+    SyncObservation_Process(0); Stats();
+    assert(Contains("ACCEPTED=1,BAD=0,FOREIGN=0,NO_PAIR=0,EARLY=0,DUPLICATE=1,CONFLICT=2,QUEUE_FULL=0"));
+    puts("PASS 28: identical resubmit ignored, changed PC times conflict without overwrite or repeated calculation");
+
+    for(unsigned int scenario=0;scenario<11;++scenario)
+    {
+        Reset(0); Request(request,1,1000,1); Deliver(request,0,false); UDPTimeExchange_Process(0);
+        Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+        const unsigned int offsets[]={0,4,6,7,16,28,8};
+        if(scenario<7) {
+            if(scenario==5) { memset(submit+28,0,8); }
+            else if(scenario==6) { memset(submit+8,0,4); }
+            else { submit[offsets[scenario]]^=1; }
+        }
+        if(scenario==7) { Put64(submit+36,UINT64_C(1001000000)); }
+        if(scenario==10) { short_copy=true; }
+        Callback(submit,scenario==8 ? 51 : scenario==9 ? 53 : 52,6007,false,scenario==10);
+        short_copy=false; Stats();
+        assert(Contains("$OBS_RX,ACCEPTED=0,BAD=1") && Contains("REQ_OK=1,REQ_BAD=0"));
+        assert(references==0 && begins==1 && rx_reads==1);
+    }
+    Reset(0); Request(request,1,1000,1); Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+    Callback(submit,52,6006,false,false); Callback(submit,52,6007,true,false); Stats();
+    assert(Contains("$OBS_RX,ACCEPTED=0,BAD=0,FOREIGN=2") && Contains("REQ_OK=0,REQ_BAD=0,FOREIGN=0"));
+    puts("PASS 29: submit envelope, bounds, UID/session/seq, t1 tick and endpoint validation are isolated from old counters");
+
+    for(unsigned int scenario=0;scenario<5;++scenario)
+    {
+        Reset(0); Request(request,1,1000,1);
+        if(scenario==0) { rx_status=BSP_PTP_NOT_READY; }
+        if(scenario!=4) { Deliver(request,0,false); }
+        if(scenario==1) { send_error=ERR_IF; }
+        UDPTimeExchange_Process(0); send_error=ERR_OK;
+        Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+        if(scenario==2) { submit[32]^=1; }
+        if(scenario==3) { now_ms=2000; }
+        Callback(submit,52,6007,false,false); Stats();
+        assert(Contains("NO_PAIR=1,EARLY=0"));
+    }
+    puts("PASS 30: missing, failed, mismatched and exactly expired records cannot donate hardware times");
+
+    for(unsigned int scenario=0;scenario<2;++scenario)
+    {
+        Reset(0); Request(request,1,1000,1); deferred=scenario==0; Deliver(request,0,false);
+        Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+        Callback(submit,52,6007,false,false); if(deferred) { Flush(); }
+        UDPTimeExchange_Process(0); Callback(submit,52,6007,false,false); Stats();
+        assert(Contains("ACCEPTED=1,BAD=0,FOREIGN=0,NO_PAIR=0,EARLY=1"));
+        assert(report_sends==1 && begins==1);
+    }
+    puts("PASS 31: WAIT_ACK and READY submit are EARLY and preserve eventual report and eligibility");
+
+    Reset(0); Request(request,1,1000,1); Deliver(request,0,false); UDPTimeExchange_Process(0);
+    SyncObservationInput input={0}; input.sequence=9; input.created_ms=0;
+    input.exchange=(SyncExchange){0,0,0,0};
+    for(unsigned int i=0;i<SYNC_OBSERVATION_CAPACITY;++i) { assert(SyncObservation_Submit(&input)); }
+    Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+    Callback(submit,52,6007,false,false); SyncObservation_Process(0);
+    Callback(submit,52,6007,false,false); Stats();
+    assert(Contains("ACCEPTED=1,BAD=0,FOREIGN=0,NO_PAIR=0,EARLY=0,DUPLICATE=0,CONFLICT=0,QUEUE_FULL=1"));
+    puts("PASS 32: full CPU queue cannot overwrite input, record remains eligible for an explicit later submit");
+
+    Reset(UINT32_MAX-1000U); Request(request,1,1000,1); Deliver(request,0,false); UDPTimeExchange_Process(now_ms);
+    Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+    now_ms=998; Callback(submit,52,6007,false,false);
+    now_ms=999; Callback(submit,52,6007,false,false); UDPTimeExchange_Process(now_ms);
+    assert(Contains("NO_PAIR=1") && Contains("EXPIRED=0,OVERFLOW=0"));
+    puts("PASS 33: reported/submitted expiration is wrap safe and quiet for old pair statistics");
+
+    Reset(0); Request(request,1,1000,1); Deliver(request,0,false); UDPTimeExchange_Process(0);
+    Submit(submit,request,UINT64_C(1000000000),UINT64_C(1000001001));
+    uint8_t frame[128]; uint16_t length=MakeFrame(frame,submit,52,false,12,false);
+    struct pbuf *packet=Packet(frame,length,true);
+    assert(gnetif.input(packet,&gnetif)==ERR_OK); pbuf_free(packet);
+    assert(rx_reads==1 && begins==1 && references==0 && logs==0);
+    memset(submit,0,sizeof(submit)); SyncObservation_Process(0);
+    assert(Contains("SESSION=ABCDEF0100000001,REQ_SEQ=1,CLIENT_TICK_MS=1000") &&
+           Contains("OFFSET_X2_NS=1999999599,DELAY_X2_NS=601"));
+    puts("PASS 34: actual old/new input wrappers ignore type7 DMA time and keep owned hardware/PC copies");
 }
 
 int main(void)
 {
     setvbuf(stdout,NULL,_IONBF,0);
+    ObservationNormal(); ObservationEdges(); puts("PASS 27: type7 claims one exact reported hardware pair without new ACK/timestamp");
     Reset(0); Normal(); puts("PASS 01: exact 36/52-byte wire, hardware pair, single token through real old wrappers, copied ownership");
 
     uint8_t request[36];
@@ -387,8 +502,8 @@ int main(void)
     puts("PASS 21: actual legacy RX/type2 and TX/type3 still work and selectors are mutually exclusive");
 
     Reset(UINT32_MAX-499U); Request(request,1,0,1); input_result=ERR_IF; output_result=ERR_IF; Deliver(request,0,false);
-    UDPTimeExchange_Process(499); assert(logs==0); UDPTimeExchange_Process(500); assert(logs==2);
-    UDPTimeExchange_Process(501); assert(logs==2 && inputs==1 && outputs==1 && references==0);
+    UDPTimeExchange_Process(499); assert(logs==0); UDPTimeExchange_Process(500); assert(logs==3);
+    UDPTimeExchange_Process(501); assert(logs==3 && inputs==1 && outputs==1 && references==0);
     assert(UDPTimeExchange_Deinit()); assert(allocations==releases);
     puts("PASS 22: original input/output errors are preserved, log rate survives wrap, no buffer/reference leak");
 
@@ -428,5 +543,5 @@ int main(void)
     gnetif.flags|=NETIF_FLAG_UP; UDPTimeExchange_Process(2001); assert(report_sends==1 && Contains("EXPIRED=1"));
     puts("PASS 26: READY reports wait for link/interface recovery and expire normally without false send attempt");
     assert(UDPTimeExchange_Deinit()); assert(references==0 && allocations==releases && !token_active);
-    puts("26 native time-exchange integration scenarios passed"); return 0;
+    puts("34 native time-exchange integration scenarios passed"); return 0;
 }

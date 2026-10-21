@@ -1,6 +1,6 @@
 # UDP应用协议
 
-M2.2.2已实现，通过主机验证及本版本授权烧录/联合实物验收；当前板运行SBCG-M2.2-IO。详见[30组样本实测](Milestones/M2_2_Time_Exchange.md)。
+当前板运行已通过本版本授权烧录/联合实物验收的SBCG-M2.2-OBS，见[M2.2.4实测](Milestones/M2_2_Board_Observation.md)。原M2.2.2时间戳回报作为旧基线已通过实物验收。详见[30组样本实测](Milestones/M2_2_Time_Exchange.md)。
 
 所有整数无符号、网络大端；按偏移编码，不发送C结构体。板192.168.10.1/24，电脑物理以太网192.168.10.100/24。
 
@@ -54,4 +54,38 @@ SESSION区分电脑运行，不是认证或板启动纪元。发生重启或时�
 
 ACK和REPORT允许乱序；只有二者齐全且合法才产生four_stamp_sample。纳秒数在JSON中保存十进制字符串，SESSION为16位十六进制字符串，UID为3个8位十六进制字符串。来源标明PC_SW或BOARD_HW。仅比较各自时钟域的顺序，不将PC单调时钟参考点与板本地参考点当作UTC。
 
-工具PASS仅表示本次网络样本检查通过；hardware_verified恒false，实物结论必须由串口BOOT、板状态、新旧网络采集与固件哈希联合建立。板端协议层不调用估算器，不校时或宣称同步精度；[M2.2.3](Milestones/M2_2_Sync_Observation.md)仅在电脑端对归档样本调用原C内核。实现边界及联合验收要求见[批准设计](Plans/2026-10-20_Time_Exchange_IO_Design.md)。
+工具PASS仅表示本次网络样本检查通过；hardware_verified恒false，实物结论必须由串口BOOT、板状态、新旧网络采集与固件哈希联合建立。M2.2.2旧固件不调用估算器；M2.2.4实现如下，已通过本版本30组板端计算与真实C逐条对照实测。不校时或宣称同步精度；[M2.2.3](Milestones/M2_2_Sync_Observation.md)仅在电脑端对归档样本调用原C内核。实现边界及联合验收要求见[批准设计](Plans/2026-10-20_Time_Exchange_IO_Design.md)。
+
+
+## M2.2.4 板端观测提交（本版本实测通过）
+
+在现有5007/6007服务增加 OBSERVATION_SUBMIT(type7)，电脑发送、板不回新消息。原type1～6与端口不变。
+
+| 偏移 / 字节 | 字段 | 约束 |
+| --- | --- | --- |
+| 0 / 36 | 同本次请求封套与完整键 | VERSION=1、TYPE=7、LENGTH=52 |
+| 36 / 8 | T1_PC_SW_NS | 原请求发送前软件时刻，非提交发送时刻 |
+| 44 / 8 | T4_PC_SW_NS | 首个有效type5 ACK接收时刻，非REPORT接收时刻 |
+
+两个时刻都是无符号64位大端纳秒，Python布局`!4sBBHIIIIIQQQ`。板检查来源、长度、UID、非零SESSION/SEQ及`(t1//1000000)&0xffffffff == CLIENT_TICK_MS`。t2/t3只使用板端同键保存的RX/TX硬件快照，不接受电脑提供的板时刻。
+
+仅REPORT发送返回OK的有效配对可领取一次；尚待ACK或REPORT记EARLY，失败/缺失/过期或完整键不匹配记NO_PAIR。领取后相同t1/t4记DUPLICATE，不再计算；改变电脑时刻记CONFLICT，不覆盖。队列满记QUEUE_FULL，保留原记录可供显式再次提交，工具不会自动重试。原缓存4项、原创建时刻起2000ms不变；成功/已提交/失败终止记录到期安静清除，未完成WAIT_ACK/READY仍按原TS_PAIR EXPIRED规则统计。
+
+网络回调只做校验、配对和CPU副本入队。主循环`SyncObservation_Process`每次至多一项、结果最多1Hz；原created_ms达到2000ms输出STATUS=6且不计算。其它状态0～5直接沿用原C估算器，窗口800000000ns。不会修改PTP时间、频率或系统时钟。
+
+成功串口示例（数值仅演示格式）：
+
+```text
+$SYNC_OBS,SESSION=ABCDEF0100000001,REQ_SEQ=1,CLIENT_TICK_MS=1000,UID_W0=001A002D,UID_W1=30365105,UID_W2=36363631,STATUS=0,OFFSET_X2_NS=1999999599,DELAY_X2_NS=601,SYNC=0,PC=SW,BOARD=HW
+```
+
+OFFSET_X2_NS、DELAY_X2_NS为有符号64位整数十进制，单位为二倍纳秒；正偏差表示板时钟领先电脑，601表示300.5ns。STATUS非零的行省略两个数值，禁止复用旧结果。SESSION由两个32位十六进制字段拼接；结果经有界转换后用%s输出，不依赖64位printf。成功行含CRLF最坏226字节，应用上限256字节。
+
+新增每秒统计：
+
+- `$OBS_RX`：ACCEPTED、BAD、FOREIGN、NO_PAIR、EARLY、DUPLICATE、CONFLICT、QUEUE_FULL；独立于旧TS_IO/TS_PAIR。
+- `$SYNC_OBS_STATS`：QUEUED、CALC_OK、CALC_ERR、EXPIRED、QUEUE_FULL、FORMAT_ERR。
+
+电脑工具显式使用`--submit-observation`；默认模式不发送type7，保留旧事件和summary字段。显式模式要求CLI间隔至少1秒、总等待不超过0.8秒；每份完整样本最多补交一次，局部发送成功仅证明电脑sendto返回成功。新模式额外事件不能冒充原M2.2.3归档格式；联合验收直接对完整样本调用既有真实C适配器并与串口完整键/整数值比较，原始数据不改写。工具hardware_verified仍为false。
+
+详见[M2.2.4实现及验收边界](Milestones/M2_2_Board_Observation.md)。当前SBCG-M2.2-OBS已获本版本授权烧录、校验、复位并实测30组通过；不表示双板同步或精度已达标。

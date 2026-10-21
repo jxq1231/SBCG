@@ -27,7 +27,8 @@ def main():
         command += ["-I", str(root / directory)]
     command += [str(root / source) for source in [
         "Tests/TimeExchange/test_udp_time_exchange.c", "App/Network/udp_time_exchange.c",
-        "App/Sync/ptp_rx.c", "App/Sync/ptp_tx.c"]]
+        "App/Sync/ptp_rx.c", "App/Sync/ptp_tx.c",
+        "App/Sync/sync_observation.c", "App/Sync/sync_estimator.c"]]
     command += ["-o", str(output)]
     chunks = []
     for action in [command, [str(output)]]:

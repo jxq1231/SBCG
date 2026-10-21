@@ -1,6 +1,7 @@
 #include "udp_time_exchange.h"
 #include "udp_config.h"
 #include "BSP/bsp_ptp_tx.h"
+#include "Sync/sync_observation.h"
 #include "lwip/netif.h"
 #include "lwip/udp.h"
 #include <inttypes.h>
@@ -12,20 +13,22 @@
 #endif
 
 #define KEY_BYTES 36U
-#define REPORT_BYTES 52U
+#define REPORT_BYTES UDP_TIME_EXCHANGE_REPORT_BYTES
+#define SUBMIT_BYTES UDP_TIME_EXCHANGE_SUBMIT_BYTES
 #define RECORD_COUNT 4U
-#define RECORD_TTL_MS 2000U
+#define RECORD_TTL_MS SYNC_OBSERVATION_TTL_MS
 #define SERVICE_PERIOD_MS 1000U
 #define LOG_CAPACITY 256U
 #define NSEC_PER_SEC 1000000000U
 
-typedef enum { EMPTY, WAIT_ACK, READY, DONE } RecordState;
+typedef enum { EMPTY, WAIT_ACK, READY, REPORTED, SUBMITTED, DONE } RecordState;
 typedef struct
 {
     RecordState state;
     uint8_t key[KEY_BYTES];
     BSP_PtpTime rx, tx;
     uint32_t created_ms;
+    uint64_t submitted_t1_ns, submitted_t4_ns;
 } Record;
 typedef struct
 {
@@ -48,6 +51,11 @@ static unsigned int active_callbacks;
 static uint8_t uid_wire[12];
 static ip_addr_t peer;
 static Record records[RECORD_COUNT];
+typedef struct
+{
+    uint32_t accepted, bad, foreign, no_pair, early, duplicate, conflict, queue_full;
+} ObservationStats;
+static ObservationStats observation;
 static IoStats io;
 static PairStats pair;
 static uint32_t last_attempt_ms, last_log_ms;
@@ -62,6 +70,8 @@ static uint16_t Get16(const uint8_t *p)
 { return (uint16_t)((uint16_t)p[0]<<8U | p[1]); }
 static uint32_t Get32(const uint8_t *p)
 { return (uint32_t)p[0]<<24U | (uint32_t)p[1]<<16U | (uint32_t)p[2]<<8U | p[3]; }
+static uint64_t Get64(const uint8_t *p)
+{ return (uint64_t)Get32(p)<<32U | Get32(p+4); }
 static void Put32(uint8_t *p,uint32_t n)
 { p[0]=(uint8_t)(n>>24U); p[1]=(uint8_t)(n>>16U); p[2]=(uint8_t)(n>>8U); p[3]=(uint8_t)n; }
 static bool TimeValid(BSP_PtpTime value) { return value.nanoseconds<NSEC_PER_SEC; }
@@ -111,7 +121,7 @@ static void Expire(uint32_t now_ms)
         Record *record=&records[i];
         if(record->state!=EMPTY && (uint32_t)(now_ms-record->created_ms)>=RECORD_TTL_MS)
         {
-            if(record->state!=DONE) { ++pair.expired; }
+            if(record->state==WAIT_ACK || record->state==READY) { ++pair.expired; }
             record->state=EMPTY;
         }
     }
@@ -190,13 +200,67 @@ static err_t Send(const uint8_t *data,uint16_t length)
     return result;
 }
 
+/* A submit has no DMA timestamp of its own. Only the completed local record
+   can supply t2/t3; copying it into the CPU queue transfers no pbuf ownership. */
+static void ReceiveObservation(uint8_t data[SUBMIT_BYTES],uint32_t now_ms)
+{
+    const uint64_t t1_ns=Get64(data+36),t4_ns=Get64(data+44);
+    if(data[6]!=0U || data[7]!=SUBMIT_BYTES)
+    { ++observation.bad; return; }
+    data[5]=4U; data[7]=KEY_BYTES;
+    if(!RequestValid(data) || (uint32_t)(t1_ns/UINT64_C(1000000))!=Get32(data+12))
+    { ++observation.bad; return; }
+    Expire(now_ms);
+    for(unsigned int i=0;i<RECORD_COUNT;++i)
+    {
+        Record *record=&records[i];
+        if(record->state==EMPTY || memcmp(record->key,data,KEY_BYTES)!=0) { continue; }
+        if(record->state==SUBMITTED)
+        {
+            if(record->submitted_t1_ns==t1_ns && record->submitted_t4_ns==t4_ns)
+            { ++observation.duplicate; }
+            else { ++observation.conflict; }
+            return;
+        }
+        if(record->state==WAIT_ACK || record->state==READY)
+        { ++observation.early; return; }
+        if(record->state!=REPORTED) { break; }
+        SyncObservationInput input={0};
+        input.sequence=Get32(data+8); input.client_tick_ms=Get32(data+12);
+        for(unsigned int j=0;j<3U;++j) { input.uid_words[j]=Get32(data+16+j*4U); }
+        input.session_hi=Get32(data+28); input.session_lo=Get32(data+32);
+        input.created_ms=record->created_ms;
+        input.exchange=(SyncExchange){t1_ns,
+            (uint64_t)record->rx.seconds*NSEC_PER_SEC+record->rx.nanoseconds,
+            (uint64_t)record->tx.seconds*NSEC_PER_SEC+record->tx.nanoseconds,t4_ns};
+        if(!SyncObservation_Submit(&input)) { ++observation.queue_full; return; }
+        record->submitted_t1_ns=t1_ns; record->submitted_t4_ns=t4_ns;
+        record->state=SUBMITTED; ++observation.accepted;
+        return;
+    }
+    ++observation.no_pair;
+}
+
 static void ReceivePacket(struct pbuf *packet,const ip_addr_t *source,u16_t source_port)
 {
     if(packet==NULL) { return; }
+    uint8_t data[SUBMIT_BYTES];
+    const u16_t length=packet->tot_len<SUBMIT_BYTES ? packet->tot_len:SUBMIT_BYTES;
+    const u16_t copied=pbuf_copy_partial(packet,data,length,0);
+    const bool is_submit=copied>=6U && data[5]==7U;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_TIME_EXCHANGE_PC_PORT)
-    { ++io.foreign; pbuf_free(packet); return; }
-    uint8_t data[KEY_BYTES];
-    if(packet->tot_len!=KEY_BYTES || pbuf_copy_partial(packet,data,KEY_BYTES,0)!=KEY_BYTES || !RequestValid(data))
+    {
+        if(is_submit) { ++observation.foreign; } else { ++io.foreign; }
+        pbuf_free(packet); return;
+    }
+    if(is_submit)
+    {
+        const bool complete=packet->tot_len==SUBMIT_BYTES && copied==SUBMIT_BYTES;
+        pbuf_free(packet); context.available=false;
+        if(complete) { ReceiveObservation(data,read_tick()); } else { ++observation.bad; }
+        return;
+    }
+    if(packet->tot_len!=KEY_BYTES || copied!=KEY_BYTES || !RequestValid(data))
     { ++io.req_bad; pbuf_free(packet); return; }
     const bool rx_valid=context.available && context.valid && memcmp(context.key,data,KEY_BYTES)==0;
     context.available=false; /* Consume even a mismatched claim. */
@@ -256,6 +320,7 @@ bool UDPTimeExchange_Init(uint32_t now_ms,const uint32_t uid_words[3],
     if(!UDPTimeExchange_Deinit()) { return false; }
     emit=log; read_tick=tick; last_log_ms=now_ms; last_attempt_ms=now_ms-SERVICE_PERIOD_MS;
     memset(&io,0,sizeof(io)); memset(&pair,0,sizeof(pair));
+    memset(&observation,0,sizeof(observation));
     if(uid_words==NULL || (uid_words[0]==0U && uid_words[1]==0U && uid_words[2]==0U) ||
        tick==NULL || gnetif.input==NULL || gnetif.linkoutput==NULL ||
        gnetif.input==Input || gnetif.linkoutput==Output)
@@ -287,6 +352,14 @@ static void LogStats(uint32_t now_ms)
         ",UNSUPPORTED=%" PRIu32 ",REPORT_OK=%" PRIu32 ",REPORT_ERR=%" PRIu32 ",EXPIRED=%" PRIu32 ",OVERFLOW=%" PRIu32 "\r\n",
         pair.rx_ok,pair.rx_invalid,pair.tx_ok,pair.tx_err,pair.unsupported,pair.report_ok,pair.report_err,pair.expired,pair.overflow);
     if(length>0 && (size_t)length<sizeof(line)) { emit(line,length); }
+    _Static_assert(sizeof("$OBS_RX,ACCEPTED=,BAD=,FOREIGN=,NO_PAIR=,EARLY=,DUPLICATE=,CONFLICT=,QUEUE_FULL=\r\n")+8U*10U<=LOG_CAPACITY,
+                   "Observation statistics exceed log buffer");
+    length=snprintf(line,sizeof(line),
+        "$OBS_RX,ACCEPTED=%" PRIu32 ",BAD=%" PRIu32 ",FOREIGN=%" PRIu32 ",NO_PAIR=%" PRIu32
+        ",EARLY=%" PRIu32 ",DUPLICATE=%" PRIu32 ",CONFLICT=%" PRIu32 ",QUEUE_FULL=%" PRIu32 "\r\n",
+        observation.accepted,observation.bad,observation.foreign,observation.no_pair,observation.early,
+        observation.duplicate,observation.conflict,observation.queue_full);
+    if(length>0 && (size_t)length<sizeof(line)) { emit(line,length); }
 }
 
 void UDPTimeExchange_Process(uint32_t now_ms)
@@ -317,7 +390,8 @@ void UDPTimeExchange_Process(uint32_t now_ms)
             Put32(data+36,record->rx.seconds); Put32(data+40,record->rx.nanoseconds);
             Put32(data+44,record->tx.seconds); Put32(data+48,record->tx.nanoseconds);
             record->state=DONE;
-            if(Send(data,REPORT_BYTES)==ERR_OK) { ++pair.report_ok; } else { ++pair.report_err; }
+            if(Send(data,REPORT_BYTES)==ERR_OK) { record->state=REPORTED; ++pair.report_ok; }
+            else { ++pair.report_err; }
             break; /* At most one attempt, never an automatic retransmission. */
         }
     }

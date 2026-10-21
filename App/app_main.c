@@ -9,13 +9,14 @@
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
+#include "Sync/sync_observation.h"
 #endif
 
 #include <inttypes.h>
 #include <stdio.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M2.2-IO"
+#define APP_FIRMWARE_ID "SBCG-M2.2-OBS"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -73,6 +74,7 @@ void App_Init(void)
     PtpClock_Init(BSP_Console_GetTickMs(), SendLine);
     PtpRx_Init(BSP_Console_GetTickMs(), SendLine);
     PtpTx_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
+    SyncObservation_Init(BSP_Console_GetTickMs(), SendLine);
     if (!UDPTimeExchange_Init(BSP_Console_GetTickMs(), info.uid_words,
                              BSP_Console_GetTickMs, SendLine))
     {
@@ -110,5 +112,6 @@ void App_Process(void)
     PtpRx_Process(BSP_Console_GetTickMs());
     PtpTx_Process(BSP_Console_GetTickMs());
     UDPTimeExchange_Process(BSP_Console_GetTickMs());
+    SyncObservation_Process(BSP_Console_GetTickMs());
 #endif
 }

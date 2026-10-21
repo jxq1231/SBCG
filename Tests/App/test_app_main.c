@@ -7,6 +7,7 @@
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
+#include "Sync/sync_observation.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -30,11 +31,23 @@ static bool rx_initialized;
 static uint32_t rx_calls;
 static bool tx_initialized;
 static uint32_t tx_calls;
-static bool time_initialized;
+static bool time_initialized, observation_initialized;
+static uint32_t observation_calls, observation_init_calls;
 static bool deinit_ok = true;
 static bool time_init_ok = true;
 static uint32_t deinit_calls, completed_init_calls, time_calls;
 static UDPTimeExchange_Log time_log;
+
+void SyncObservation_Init(uint32_t now_ms,SyncObservation_Log log)
+{
+    assert(tx_initialized && now_ms==tick_ms && log!=NULL);
+    observation_initialized=true; observation_calls=0; ++observation_init_calls;
+}
+void SyncObservation_Process(uint32_t now_ms)
+{
+    assert(observation_initialized && now_ms==tick_ms && time_calls==lwip_calls);
+    ++observation_calls;
+}
 
 bool UDPTimeExchange_Deinit(void)
 {
@@ -47,7 +60,7 @@ bool UDPTimeExchange_Deinit(void)
 bool UDPTimeExchange_Init(uint32_t now_ms, const uint32_t uid_words[3],
                           UDPTimeExchange_Tick tick, UDPTimeExchange_Log log)
 {
-    assert(tx_initialized && now_ms == tick_ms && log != NULL);
+    assert(tx_initialized && observation_initialized && now_ms == tick_ms && log != NULL);
     assert(tick != NULL && tick() == tick_ms && deinit_calls == completed_init_calls + 1U);
     assert(uid_words[0] == 0x001A002D && uid_words[2] == 0x36363631);
     time_initialized = time_init_ok;
@@ -186,7 +199,8 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     ptp_initialized = false;
     rx_initialized = false;
     tx_initialized = false;
-    time_initialized = false;
+    time_initialized = observation_initialized = false;
+    observation_calls = observation_init_calls = 0U;
     deinit_calls = 0U;
     completed_init_calls = 0U;
     App_Init();
@@ -201,9 +215,9 @@ int main(void)
     assert(ptp_initialized);
     assert(rx_initialized);
     assert(tx_initialized);
-    assert(time_initialized);
+    assert(time_initialized && observation_initialized && observation_init_calls==1U);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M2.2-IO,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M2.2-OBS,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -218,7 +232,7 @@ int main(void)
     assert(ptp_calls == 2U);
     assert(rx_calls == 2U);
     assert(tx_calls == 2U);
-    assert(time_calls == 2U);
+    assert(time_calls == 2U && observation_calls==2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);
@@ -285,16 +299,17 @@ int main(void)
     assert(time_initialized && time_calls == 1U);
     App_Init();
     assert(deinit_calls == 2U && completed_init_calls == 2U && time_initialized);
-    assert(write_count == 2U && time_calls == 0U && tx_calls == 0U);
+    assert(write_count == 2U && time_calls == 0U && tx_calls == 0U && observation_calls==0U && observation_init_calls==2U);
     App_Process();
     assert(time_calls == 1U && tx_calls == 1U && lwip_calls == 1U);
     puts("PASS: whole application can reinitialize a running service and preserve scheduling");
 
     const uint32_t writes_before = write_count;
     const uint32_t tx_before = tx_calls;
+    const uint32_t obs_before = observation_init_calls;
     deinit_ok = false;
     App_Init();
-    assert(write_count == writes_before + 1U && tx_calls == tx_before);
+    assert(write_count == writes_before + 1U && tx_calls == tx_before && observation_init_calls==obs_before);
     assert(strcmp(last_line, "$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n") == 0);
     deinit_ok = true;
     puts("PASS: lost wrapper ownership stops application reinitialization");
