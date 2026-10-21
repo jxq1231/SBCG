@@ -1,5 +1,7 @@
 # 当前项目状态
 
+当前开发优先项（2026-10-21）：用户已批准[T1.1单板DHT11采集与声速](Plans/2026-10-21_Temperature_Integration_Design.md)。队友99eb65f仅含PG7配置，采集/声速代码由本工程补齐；当前需要先在CubeMX生成PG7/DHT11_DATA开漏High配置，尚未修改功能代码或烧录。接线与实机验收准备好后通知用户。本轮不做温度UDP、LCD、第二板或校时控制，见[执行清单](Plans/2026-10-21_Temperature_Integration_Implementation.md)。
+
 最新增量（2026-10-21）：[M2.2.4板端实时估算观测](Milestones/M2_2_Board_Observation.md)通过本版本授权烧录和联合实物验收。当前SBCG-M2.2-OBS的30组板端结果与真实C参考逐条完全一致；旧30组RX/TX/ACK、70包零缺口、90条PTP及心跳连续，异常计数0。248项检查、Debug/Release构建/布局、457文件实际再生成及独立软件审查通过。保持单板LOCAL/SYNC=0，不校时、不检查第二板。
 
 最新主机增量（2026-10-21）：**M2.2.3真实四时间戳估算链通过回放验证**。已验收的30组完整键各由原C内核返回OK；42项新增测试和原177项回归合计219项通过，独立规格/质量复核通过。两配置ELF及加载内容、414个既有非文档文件和6份原始证据均保持不变，未烧录或访问硬件。仍为单板LOCAL/SYNC=0，见[结果与复验](Milestones/M2_2_Sync_Observation.md)。
