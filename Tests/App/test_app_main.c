@@ -10,6 +10,7 @@
 #include "Sync/sync_observation.h"
 #include "Temperature/temperature_service.h"
 #include "Console/temperature_console.h"
+#include "Audio/codec_monitor.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -44,10 +45,26 @@ static bool temperature_initialized, temperature_low;
 static unsigned console_inits, console_calls, rx_inits;
 static bool reply_pending, rx_init_ok = true;
 static TemperatureConsole_Log console_log;
+static unsigned codec_inits, codec_calls, codec_reads;
+static bool start_low_in_process;
+
+void CodecMonitor_Init(uint32_t now_ms, CodecMonitor_Log log)
+{
+    assert(temperature_initialized && console_inits>0 && now_ms==tick_ms && log!=NULL);
+    ++codec_inits; codec_calls=codec_reads=0;
+}
+void CodecMonitor_Process(uint32_t now_ms, bool io_allowed)
+{
+    assert(codec_inits>0 && now_ms==tick_ms);
+    assert(temperature_calls==lwip_calls && console_calls==temperature_calls);
+    assert(io_allowed==!temperature_low);
+    ++codec_calls;
+    if(io_allowed) { ++codec_reads; }
+}
 
 bool BSP_Console_RxInit(void) { ++rx_inits; return rx_init_ok; }
 void TemperatureConsole_Init(TemperatureConsole_Log log)
-{ assert(temperature_initialized); console_log = log; ++console_inits; }
+{ assert(temperature_initialized); console_log = log; ++console_inits; console_calls=0; }
 void TemperatureConsole_Process(uint32_t now_ms)
 {
     assert(temperature_initialized && now_ms == tick_ms);
@@ -76,6 +93,7 @@ void TemperatureService_Process(uint32_t now_ms)
     assert(temperature_initialized && now_ms==tick_ms);
     assert(observation_calls==lwip_calls && time_calls==lwip_calls);
     ++temperature_calls;
+    if (start_low_in_process) { temperature_low=true; }
 }
 
 void SyncObservation_Init(uint32_t now_ms,SyncObservation_Log log)
@@ -247,6 +265,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     temperature_initialized=false; temperature_calls=temperature_init_calls=0U;
     temperature_low=false;
     console_inits=console_calls=rx_inits=0U; reply_pending=false;
+    codec_inits=codec_calls=codec_reads=0; start_low_in_process=false;
     App_Init();
 }
 
@@ -263,7 +282,7 @@ int main(void)
     assert(temperature_initialized && temperature_init_calls==1U);
     assert(console_inits==1U && rx_inits==1U && console_log!=NULL);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-T1.2-MANUAL,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M3.0-CODEC,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -465,5 +484,12 @@ int main(void)
     assert(strstr(last_line,"$CONSOLE,INIT=ERROR"));
     rx_init_ok=true;
     puts("PASS: command RX initializes once and replies use the DHT-safe logger");
+    Reset(0U,true);
+    assert(codec_inits==1U && codec_calls==0U);
+    start_low_in_process=true; App_Process();
+    assert(codec_calls==1U && codec_reads==0U);
+    start_low_in_process=false; temperature_low=false; App_Process();
+    assert(codec_calls==2U && codec_reads==1U);
+    puts("PASS: codec I/O uses current DHT state after temperature processing and resumes on release");
     return 0;
 }

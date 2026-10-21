@@ -1,6 +1,30 @@
 # UDP应用协议
 
-当前板运行已通过本版本授权烧录/联合实物验收的SBCG-M2.2-OBS，见[M2.2.4实测](Milestones/M2_2_Board_Observation.md)。原M2.2.2时间戳回报作为旧基线已通过实物验收。详见[30组样本实测](Milestones/M2_2_Time_Exchange.md)。
+当前板已验收固件为 SBCG-M3.0-CODEC；前序温度串口命令及恢复验收见
+[T1.2](Milestones/T1_2_Manual_Temperature.md)和[连续拔插](Milestones/T1_1_Temperature_Replug.md)。
+本次 [M3.0 音频芯片身份读取](Milestones/M3_0_Codec_ID.md)已通过本版本授权烧录与联合实测，
+45次ID=8994、错误0，UDP格式保持原样。
+下述 M2.2.4 及 M2.2.2 记录为各自旧版本实测基线，见
+[板端估算](Milestones/M2_2_Board_Observation.md)和[30组时间交换](Milestones/M2_2_Time_Exchange.md)。
+
+## M3.0 芯片身份串口状态（本版本已实测）
+
+以下是格式示例，不是已采集的芯片响应；它只通过原 USART1 输出，不新增 UDP 报文。
+
+```text
+$CODEC,SEQ=1,TICK_MS=2016,ADDR7=1A,RESULT=OK,ID=8994,HAL_ERR=00000000,READ_MS=1,OK=1,ERRORS=0
+```
+
+SEQ/TICK_MS/READ_MS/OK/ERRORS 是无符号 32 位十进制数，时间单位 ms；
+ADDR7 是 7 位地址的十六进制文本，ID 是完整读取的无符号 16 位十六进制数，
+HAL_ERR 是本地 STM32 HAL 的 32 位错误位掩码（十六进制）。
+RESULT 为 OK、BUSY、IO_ERROR、ID_MISMATCH 或 INVALID_ARG；BUSY/IO_ERROR 时
+省略 ID，不能把旧值或半帧当作芯片响应。BUSY 表示 handle 非 READY 或总线忙，
+没有启动事务时 HAL_ERR=0，避免把上次错误归到本次。
+OK/ERRORS 是读取成功/失败的累计次数；DHT11 低电平避让不产生读取、不增加序号或错误。
+正常间隔至少 2000 ms，READ_MS 是实际调用耗时，2 ms HAL 参数并非整体硬上限。
+数据行以 CRLF 结尾；初始化不读取，首读在应用初始化至少 2000 ms 后。
+ID=8994 通过仅能证明芯片控制接口通信，不代表麦克风、采样率或 DMA 通过。
 
 所有整数无符号、网络大端；按偏移编码，不发送C结构体。板192.168.10.1/24，电脑物理以太网192.168.10.100/24。
 

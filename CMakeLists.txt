@@ -61,6 +61,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/Temperature/sound_speed.c
     App/Temperature/temperature_service.c
     App/Console/temperature_console.c
+    App/BSP/bsp_audio_codec.c
+    App/Audio/codec_monitor.c
 )
 
 # LwIP generation registers LAN8742 in STM32_Drivers. Older PHY-only
