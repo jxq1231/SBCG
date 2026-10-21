@@ -8,6 +8,7 @@
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
 #include "Sync/sync_observation.h"
+#include "Temperature/temperature_service.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -37,6 +38,27 @@ static bool deinit_ok = true;
 static bool time_init_ok = true;
 static uint32_t deinit_calls, completed_init_calls, time_calls;
 static UDPTimeExchange_Log time_log;
+static uint32_t temperature_init_calls, temperature_calls;
+static bool temperature_initialized, temperature_low;
+
+bool TemperatureService_IsStartLowActive(void)
+{
+    return temperature_low;
+}
+
+void TemperatureService_Init(uint32_t now_ms,const uint32_t uid_words[3],TemperatureLog log)
+{
+    assert(completed_init_calls==deinit_calls && observation_initialized);
+    assert(now_ms==tick_ms && uid_words[0]==0x001A002DU && log!=NULL);
+    temperature_initialized=true; ++temperature_init_calls; temperature_calls=0U;
+    temperature_low=false;
+}
+void TemperatureService_Process(uint32_t now_ms)
+{
+    assert(temperature_initialized && now_ms==tick_ms);
+    assert(observation_calls==lwip_calls && time_calls==lwip_calls);
+    ++temperature_calls;
+}
 
 void SyncObservation_Init(uint32_t now_ms,SyncObservation_Log log)
 {
@@ -181,6 +203,7 @@ void BSP_Console_GetInfo(BSP_ConsoleInfo *info)
 
 bool BSP_Console_Write(const char *data, uint16_t length)
 {
+    assert(!temperature_low);
     assert(length > 0U && length < sizeof(last_line));
     assert(data[length - 2U] == '\r' && data[length - 1U] == '\n');
     memcpy(last_line, data, length);
@@ -203,6 +226,8 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     observation_calls = observation_init_calls = 0U;
     deinit_calls = 0U;
     completed_init_calls = 0U;
+    temperature_initialized=false; temperature_calls=temperature_init_calls=0U;
+    temperature_low=false;
     App_Init();
 }
 
@@ -216,8 +241,9 @@ int main(void)
     assert(rx_initialized);
     assert(tx_initialized);
     assert(time_initialized && observation_initialized && observation_init_calls==1U);
+    assert(temperature_initialized && temperature_init_calls==1U);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M2.2-OBS,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-T1.1-TEMP-R1,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -233,6 +259,7 @@ int main(void)
     assert(rx_calls == 2U);
     assert(tx_calls == 2U);
     assert(time_calls == 2U && observation_calls==2U);
+    assert(temperature_calls==2U);
     tick_ms = 1000U;
     App_Process();
     assert(write_count == 2U);
@@ -299,6 +326,7 @@ int main(void)
     assert(time_initialized && time_calls == 1U);
     App_Init();
     assert(deinit_calls == 2U && completed_init_calls == 2U && time_initialized);
+    assert(temperature_init_calls==2U && temperature_calls==0U);
     assert(write_count == 2U && time_calls == 0U && tx_calls == 0U && observation_calls==0U && observation_init_calls==2U);
     App_Process();
     assert(time_calls == 1U && tx_calls == 1U && lwip_calls == 1U);
@@ -307,9 +335,11 @@ int main(void)
     const uint32_t writes_before = write_count;
     const uint32_t tx_before = tx_calls;
     const uint32_t obs_before = observation_init_calls;
+    const uint32_t temp_before=temperature_init_calls;
     deinit_ok = false;
     App_Init();
     assert(write_count == writes_before + 1U && tx_calls == tx_before && observation_init_calls==obs_before);
+    assert(temperature_init_calls==temp_before);
     assert(strcmp(last_line, "$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n") == 0);
     deinit_ok = true;
     puts("PASS: lost wrapper ownership stops application reinitialization");
@@ -319,7 +349,91 @@ int main(void)
     assert(strcmp(last_line, "$TS_INIT,RESULT=INIT_ERROR\r\n") == 0);
     tick_ms = 1000U; App_Process();
     assert(tx_calls == 1U && time_calls == 1U);
+    assert(temperature_initialized && temperature_calls==1U);
     time_init_ok = true;
     puts("PASS: service initialization failure leaves original business scheduling active");
+
+    Reset(0U,true);
+    temperature_low=true;
+    char deferred[32]="$DEFER,N=1\r\n";
+    time_log(deferred,(int)strlen(deferred));
+    strcpy(deferred,"$DEFER,N=2\r\n");
+    time_log(deferred,(int)strlen(deferred));
+    memset(deferred,'X',sizeof(deferred));
+    assert(write_count==1U);
+    App_Process();
+    assert(write_count==1U && time_calls==1U && temperature_calls==1U);
+    temperature_low=false;
+    App_Process();
+    assert(write_count==2U && strcmp(last_line,"$DEFER,N=1\r\n")==0);
+    App_Process();
+    assert(write_count==3U && strcmp(last_line,"$DEFER,N=2\r\n")==0);
+    puts("PASS: UART waits for DATA release, owns queued bytes and drains FIFO one line per loop");
+
+    Reset(0U,true); temperature_low=true;
+    for(unsigned int i=0;i<18U;++i)
+    {
+        char line[40];
+        int length=snprintf(line,sizeof(line),"$DEFER,N=%u\r\n",i);
+        time_log(line,length);
+    }
+    assert(write_count==1U);
+    temperature_low=false;
+    for(unsigned int i=0;i<16U;++i)
+    {
+        char expected[40];
+        (void)snprintf(expected,sizeof(expected),"$DEFER,N=%u\r\n",i);
+        App_Process(); assert(strcmp(last_line,expected)==0);
+    }
+    tick_ms=1000U; App_Process();
+    assert(strstr(last_line,"TX_ERRORS=2\r\n")!=NULL);
+    puts("PASS: bounded queue overflow is visible and never transmits during start low");
+
+    Reset(0U,true); temperature_low=true;
+    time_log("$DEFER,N=1\r\n",12);
+    temperature_low=false; write_ok=false; App_Process();
+    write_ok=true; tick_ms=1000U; App_Process();
+    assert(strstr(last_line,"TX_ERRORS=1\r\n")!=NULL);
+    puts("PASS: a failed deferred UART write is counted without blocking future logs");
+
+    Reset(0U,true); temperature_low=true;
+    time_log("$DEFER,N=1\r\n",12);
+    App_Init();
+    assert(!temperature_low && write_count==2U && strstr(last_line,"$BOOT,")==last_line);
+    App_Process(); assert(write_count==2U);
+    puts("PASS: successful application reinitialization releases DATA and clears old queued logs");
+
+    Reset(0U,true); temperature_low=true;
+    for(unsigned int i=0;i<10U;++i)
+    {
+        char line[40]; int length=snprintf(line,sizeof(line),"$DEFER,N=%u\r\n",i);
+        time_log(line,length);
+    }
+    temperature_low=false;
+    for(unsigned int i=0;i<8U;++i) { App_Process(); }
+    temperature_low=true;
+    for(unsigned int i=10U;i<20U;++i)
+    {
+        char line[40]; int length=snprintf(line,sizeof(line),"$DEFER,N=%u\r\n",i);
+        time_log(line,length);
+    }
+    temperature_low=false;
+    for(unsigned int i=8U;i<20U;++i)
+    {
+        char expected[40]; (void)snprintf(expected,sizeof(expected),"$DEFER,N=%u\r\n",i);
+        App_Process(); assert(strcmp(last_line,expected)==0);
+    }
+    assert(write_count==21U);
+    puts("PASS: circular queue preserves FIFO order while wrapping with pending records");
+
+    Reset(0U,true); temperature_low=true;
+    time_log("$DEFER,N=1\r\n",12);
+    deinit_ok=false; App_Init();
+    assert(write_count==1U && temperature_low && temperature_init_calls==1U);
+    temperature_low=false; App_Process();
+    assert(strcmp(last_line,"$DEFER,N=1\r\n")==0);
+    App_Process(); assert(strcmp(last_line,"$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n")==0);
+    deinit_ok=true;
+    puts("PASS: ownership failure preserves pending DATA state and existing queued records");
     return 0;
 }

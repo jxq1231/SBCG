@@ -1,6 +1,7 @@
 #include "app_main.h"
 #include "BSP/bsp_console.h"
 #include "Network/ethernet_monitor.h"
+#include "Temperature/temperature_service.h"
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
@@ -14,14 +15,16 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-M2.2-OBS"
+#define APP_FIRMWARE_ID "SBCG-T1.1-TEMP-R1"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
 #define APP_HEARTBEAT_PERIOD_MS 1000U
 #define APP_LOG_LINE_CAPACITY 256U
+#define APP_LOG_QUEUE_CAPACITY 16U
 /* BOOT/heartbeat remain short; allow longer service logs without larger locals. */
 #define APP_STATUS_LINE_CAPACITY 160U
 
@@ -29,12 +32,42 @@ static uint32_t last_heartbeat_ms;
 static uint32_t heartbeat_seq;
 /* Also observable in a debugger if the UART cannot send any text. */
 static volatile uint32_t app_tx_error_count;
+/* UART is synchronous. Preserve legacy logs while the nonblocking DHT start
+   pulse is active, without pausing Ethernet/PTP processing or changing IRQs. */
+static char pending_lines[APP_LOG_QUEUE_CAPACITY][APP_LOG_LINE_CAPACITY];
+static uint16_t pending_lengths[APP_LOG_QUEUE_CAPACITY];
+static uint32_t pending_head, pending_count;
+
+static void FlushOneLine(void)
+{
+    if (pending_count == 0U || TemperatureService_IsStartLowActive()) { return; }
+    if (!BSP_Console_Write(pending_lines[pending_head], pending_lengths[pending_head]))
+    {
+        ++app_tx_error_count;
+    }
+    pending_head = (pending_head + 1U) % APP_LOG_QUEUE_CAPACITY;
+    --pending_count;
+}
 
 static void SendLine(const char *line, int length)
 {
     if ((length <= 0) || ((size_t)length >= APP_LOG_LINE_CAPACITY))
     {
         ++app_tx_error_count;
+        return;
+    }
+
+    if (TemperatureService_IsStartLowActive() || pending_count != 0U)
+    {
+        if (pending_count == APP_LOG_QUEUE_CAPACITY)
+        {
+            ++app_tx_error_count;
+            return;
+        }
+        const uint32_t tail = (pending_head + pending_count) % APP_LOG_QUEUE_CAPACITY;
+        memcpy(pending_lines[tail], line, (size_t)length);
+        pending_lengths[tail] = (uint16_t)length;
+        ++pending_count;
         return;
     }
 
@@ -60,6 +93,7 @@ void App_Init(void)
 
     heartbeat_seq = 0U;
     app_tx_error_count = 0U;
+    pending_head = pending_count = 0U;
     BSP_Console_GetInfo(&info);
     const int length = snprintf(line, sizeof(line),
         "$BOOT,FW=" APP_FIRMWARE_ID ",HCLK_HZ=%" PRIu32
@@ -82,6 +116,8 @@ void App_Init(void)
         SendLine(error, (int)(sizeof(error) - 1U));
     }
 #endif
+    TemperatureService_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
+    FlushOneLine();
 }
 
 void App_Process(void)
@@ -114,4 +150,6 @@ void App_Process(void)
     UDPTimeExchange_Process(BSP_Console_GetTickMs());
     SyncObservation_Process(BSP_Console_GetTickMs());
 #endif
+    TemperatureService_Process(BSP_Console_GetTickMs());
+    FlushOneLine();
 }

@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M2.2.4%20%7C%20Runtime%20Observation-0f766e?style=flat-square" alt="M2.2.4板端实时估算观测通过，尚未同步">
+  <img src="https://img.shields.io/badge/Stage-T1.1%20%7C%20Temperature%20Baseline-0f766e?style=flat-square" alt="T1.1正常温度采样通过，拔插恢复未测">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -40,7 +40,9 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**M2.2.4板端实时估算观测通过：当前SBCG-M2.2-OBS经本版本授权烧录、校验和复位，30组板端结果与真实C参考逐条完全一致；旧30组RX/TX/ACK、70包零缺口、90条PTP/心跳连续，异常计数0。248项检查、两配置构建/布局、457文件实际再生成及独立软件审查通过。仍为单板LOCAL/SYNC=0。** 见[本轮记录](Docs/Milestones/M2_2_Board_Observation.md)。
+**T1.1正常温度采样通过：当前SBCG-T1.1-TEMP-R1经授权烧录，90秒取得17个正式版本，25.7℃、声速346.874m/s，温度及串口错误0；原70个UDP包零缺口，两组30请求及板端计算核对通过。用户延后传感器拔插测试，故障恢复尚未实测。** 见[本轮记录与边界](Docs/Milestones/T1_1_Temperature.md)。
+
+**此前M2.2.4板端实时估算观测通过：当时SBCG-M2.2-OBS经本版本授权烧录、校验和复位，30组板端结果与真实C参考逐条完全一致；旧30组RX/TX/ACK、70包零缺口、90条PTP/心跳连续，异常计数0。248项检查、两配置构建/布局、457文件实际再生成及独立软件审查通过。仍为单板LOCAL/SYNC=0。** 见[本轮记录](Docs/Milestones/M2_2_Board_Observation.md)。
 
 **最新主机增量M2.2.3已通过：将已验收的30组真实四时刻交给原C估算器，逐条返回OK；42项新增与原177项回归共219项检查、两配置构建/布局和独立复核通过。固件、加载内容及原始日志均保持不变，未烧录或访问硬件，仍为LOCAL/SYNC=0。** 见[结果、限制与复验](Docs/Milestones/M2_2_Sync_Observation.md)。
 
@@ -65,6 +67,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M2.1.1 本地PTP时钟 | 88条LOCAL/SYNC=0单调时间；本版本UDP 70包零缺口、30/30应答；已授权烧录校验 | [代码、再生成与实物验收](Docs/Milestones/M2_1_PTP_Clock.md) |
 | M2.1.2 RX事件关联 | 30个请求各匹配唯一DMA时间及ACK，70包零缺口，98条PTP/心跳连续；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_RX.md) |
 | M2.1.3 TX事件关联 | 本版本30组唯一RX/TX/ACK，70包零缺口，91条PTP/心跳；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_TX.md) |
+| T1.1 温度与声速 | 本版本17次正常采样、原网络通过；拔插恢复延后，单板未同步 | [本次实测与范围](Docs/Milestones/T1_1_Temperature.md) |
 | M2.2.4 板端实时估算 | 本版本30组与真实C逐条一致，原网络通过；未校时 | [联合实物验收](Docs/Milestones/M2_2_Board_Observation.md) |
 | M2.2.3 真实样本估算链 | 归档30组均由原C返回OK；219项检查通过，固件和原始数据不变 | [主机回放验证](Docs/Milestones/M2_2_Sync_Observation.md) |
 | M2.2.2 时间戳数据链 | 30组新样本、原30组RX/TX/ACK、70包零缺口、90条PTP/心跳；本版本实物验收通过 | [实现及验收记录](Docs/Milestones/M2_2_Time_Exchange.md) |

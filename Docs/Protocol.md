@@ -89,3 +89,21 @@ OFFSET_X2_NS、DELAY_X2_NS为有符号64位整数十进制，单位为二倍纳�
 电脑工具显式使用`--submit-observation`；默认模式不发送type7，保留旧事件和summary字段。显式模式要求CLI间隔至少1秒、总等待不超过0.8秒；每份完整样本最多补交一次，局部发送成功仅证明电脑sendto返回成功。新模式额外事件不能冒充原M2.2.3归档格式；联合验收直接对完整样本调用既有真实C适配器并与串口完整键/整数值比较，原始数据不改写。工具hardware_verified仍为false。
 
 详见[M2.2.4实现及验收边界](Milestones/M2_2_Board_Observation.md)。当前SBCG-M2.2-OBS已获本版本授权烧录、校验、复位并实测30组通过；不表示双板同步或精度已达标。
+
+
+## T1.1 温度与声速串口观测（R1正常窗口通过，拔插恢复未测）
+
+当前工作区FW=SBCG-T1.1-TEMP-R1；R0实测FW=SBCG-T1.1-TEMP。仅当前测试UID启用DHT11，旧UDP type1～7不变，无温度网络消息。
+
+```text
+$TEMP,STATE=OK,VERSION=1,T_MILLI_C=24400,RH_MILLI_PCT=53000,C_MM_S=346086,AGE_MS=0,FRESH=1,LAST=OK
+$TEMP_STATS,ATT=2,OK=1,PRIME=1,INIT=0,BUS=0,START=0,TIMEOUT=0,PULSE=0,CLOCK=0,CRC=0,RANGE=0,FORMAT=0
+```
+
+以上为格式示例，非实测。各行ASCII并以CRLF结束，每秒最多各一条；本模块起始低电平与捕获期间延后日志。整数均为十进制：T_MILLI_C为有符号32位毫摄氏度，RH_MILLI_PCT为无符号32位毫%RH，C_MM_S为无符号32位毫米/秒，AGE_MS为uint32毫秒。VERSION及统计为饱和uint32；STATE/LAST为字符串，FRESH为0/1。
+
+UNREADY/禁用时VERSION=0且不输出T/RH/C/AGE；首次读数仅预读，下次5秒周期正式更新。失败保留原值及版本，FRESH=0；HOLD_LAST表明历史快照，15秒以上为STALE。DISABLED表示测试UID或logger门控未满足。LAST分别为INIT/BUS/START/TIMEOUT/PULSE/CLOCK/CRC/RANGE/PRIMING/OK/DISABLED。INIT统计包含一次性初始化失败，CLOCK统计运行期时钟错误；FORMAT仅本地格式错误，UART发送错误归既有HEARTBEAT/TX_ERRORS。R1在起始低电平期间将所有应用日志放入16项FIFO，释放后每轮至多发送一条；队列溢出也计入TX_ERRORS。
+
+声速为331300 + round_signed(606*T_MILLI_C/1000)，单位mm/s，恰半远离零。仅为干空气线性温度近似，湿度只观测，不参与模型；输出分辨率不是DHT11精度。接口与实机要求见[T1.1记录](Milestones/T1_1_Temperature.md)。
+
+T1.1实物状态（2026-10-21）：R1经本版本授权烧录，17个正式版本均为T_MILLI_C=25700、RH_MILLI_PCT=25000、C_MM_S=346874，错误计数0，原网络联合窗口通过。用户延后拔插，因此上述HOLD_LAST/STALE及重预读恢复目前只有逻辑测试覆盖，未实物验收；不将正常采样通过扩展为全部故障行为通过。
