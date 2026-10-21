@@ -93,7 +93,7 @@ OFFSET_X2_NS、DELAY_X2_NS为有符号64位整数十进制，单位为二倍纳�
 
 ## T1.1 温度与声速串口观测（R1正常窗口通过，拔插恢复未测）
 
-当前工作区FW=SBCG-T1.1-TEMP-R1；R0实测FW=SBCG-T1.1-TEMP。仅当前测试UID启用DHT11，旧UDP type1～7不变，无温度网络消息。
+本节记录已实测的FW=SBCG-T1.1-TEMP-R1；R0实测FW=SBCG-T1.1-TEMP。当前T1.2已获本版本授权烧录及联合实测，见下节。仅当前测试UID启用DHT11，旧UDP type1～7不变，无温度网络消息。
 
 ```text
 $TEMP,STATE=OK,VERSION=1,T_MILLI_C=24400,RH_MILLI_PCT=53000,C_MM_S=346086,AGE_MS=0,FRESH=1,LAST=OK
@@ -107,3 +107,17 @@ UNREADY/禁用时VERSION=0且不输出T/RH/C/AGE；首次读数仅预读，下�
 声速为331300 + round_signed(606*T_MILLI_C/1000)，单位mm/s，恰半远离零。仅为干空气线性温度近似，湿度只观测，不参与模型；输出分辨率不是DHT11精度。接口与实机要求见[T1.1记录](Milestones/T1_1_Temperature.md)。
 
 T1.1实物状态（2026-10-21）：R1经本版本授权烧录，17个正式版本均为T_MILLI_C=25700、RH_MILLI_PCT=25000、C_MM_S=346874，错误计数0，原网络联合窗口通过。用户延后拔插，因此上述HOLD_LAST/STALE及重预读恢复目前只有逻辑测试覆盖，未实物验收；不将正常采样通过扩展为全部故障行为通过。
+
+## T1.2 手动温度命令（本版本实物通过）
+
+命令为 ASCII 文本、区分大小写，以 LF 或 CRLF 结束，LF 前最多 63 字节（含可选 CR）。支持 `PING`、`TEMP?`、`TEMP SET <T>`、`TEMP AUTO`。温度允许可选负号、1～2 位整数及可选一位小数，范围 -20.0～60.0℃；额外空格、参数、指数及更多小数位拒绝。每轮最多 64 字节/一条命令，命令开始处理最小间隔 100 ms。请等待响应后再发下一条。
+
+SET/AUTO/PING 成功返回 `$CMD,NAME=SET|AUTO|PING,RESULT=OK`；失败返回 `$CMD,NAME=SET|AUTO|INVALID,RESULT=ERROR,REASON=VALUE|UNAVAILABLE|COMMAND|FRAME`。VALUE 为温度格式/范围错误，UNAVAILABLE 为服务禁用/忙或版本耗尽，COMMAND 为未知命令，FRAME 为过长/坏字节/串口缺口后的重新定位。错误不改变设定值或版本。
+
+TEMP? 返回 `$ENV` 和 `$CONSOLE`；SET/AUTO 成功后也返回 `$ENV`。ENV 顺序为 MODE、SOURCE、VALID、VERSION，VALID=1 时追加 T_MILLI_C、C_MM_S、AGE_MS。MODE=AUTO/MANUAL；SOURCE=DHT11/MANUAL/NONE，NONE 表示当前无可用值。VALID=0 时省略温度/声速/年龄，不应以旧值替代。数值宽度和单位沿用 T1.1；VERSION uint32 仅在有效发布时递增，切换到 AUTO 不重置版本。达到 UINT32_MAX 时停止发布新值，自动 LAST=VERSION；手动 SET 返回 UNAVAILABLE。
+
+手动模式暂停 DHT11，值不自动过期、不持久化、不输出伪造湿度；每秒 `$TEMP` 为 STATE=MANUAL，并有 MODE=MANUAL、SOURCE=MANUAL。切换 AUTO 清除手动有效值，保持与最后一次采集至少 5 秒间隔并重新预读一帧，第二帧合格才更新。等待期间 UNREADY 可以带非零历史版本。正常 AUTO 的 `$TEMP`/`$TEMP_STATS` 格式保持原样。
+
+CONSOLE 字段 RX_ERRORS、RX_OVERFLOWS、RX_REARM_ERRORS 都是饱和 uint32 事件计数：HAL 错误、环形缓冲溢出、续收启动失败。256 字节缓冲实际可存 255 字节。任何缺口作废队列和当前行，丢弃至 LF，再接受新命令；必要时先发送空行重定位。续收失败主循环最多每 10 ms 单次重试。HAL 回调不解析/打印；DHT 起始低电平期间命令响应推迟，既有日志队列保护仍生效。
+
+本版本 FW=SBCG-T1.2-MANUAL，已完成手动保持/零温/负温/非法拒绝/分段/恢复自动及原网络联合实测，旧 UDP 协议及缓存配置未改。使用步骤与测试范围见 [T1.2](Milestones/T1_2_Manual_Temperature.md)。

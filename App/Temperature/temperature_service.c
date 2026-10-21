@@ -38,7 +38,7 @@ typedef struct
     const char *last;
     uint32_t init_ms, last_attempt_ms, low_start_ms, last_log_ms;
     uint32_t valid_ms, version, sound_speed_mm_s;
-    bool enabled, ready, attempted, waiting, primed, have_value, fresh;
+    bool enabled, ready, attempted, waiting, primed, have_value, fresh, manual;
 } TemperatureService;
 
 static TemperatureService service;
@@ -51,6 +51,50 @@ bool TemperatureService_IsStartLowActive(void)
 static void increment(uint32_t *counter)
 {
     if (*counter < UINT32_MAX) { ++*counter; }
+}
+
+void TemperatureService_GetSnapshot(uint32_t now_ms, TemperatureSnapshot *out)
+{
+    if (out == NULL) { return; }
+    memset(out, 0, sizeof *out);
+    out->manual = service.manual;
+    out->version = service.version;
+    out->valid = service.enabled && service.have_value
+        && (service.manual || (service.fresh
+            && (uint32_t)(now_ms - service.valid_ms) < TEMP_STALE_MS));
+    if (service.have_value)
+    {
+        out->age_ms = now_ms - service.valid_ms;
+        out->temperature_milli_c = service.sample.temperature_milli_c;
+        out->sound_speed_mm_s = service.sound_speed_mm_s;
+    }
+}
+
+bool TemperatureService_SetManual(uint32_t now_ms, int32_t temperature_milli_c)
+{
+    uint32_t sound_speed_mm_s;
+    if (!service.enabled || service.waiting || service.version == UINT32_MAX
+        || !SoundSpeed_Calculate(temperature_milli_c, &sound_speed_mm_s))
+    { return false; }
+    service.manual = true;
+    service.have_value = service.fresh = true;
+    service.sample.temperature_milli_c = temperature_milli_c;
+    service.sample.relative_humidity_milli_pct = 0U; /* Not a manual input. */
+    service.sound_speed_mm_s = sound_speed_mm_s;
+    service.valid_ms = now_ms;
+    ++service.version;
+    service.last = "SET";
+    return true;
+}
+
+bool TemperatureService_UseAuto(void)
+{
+    if (!service.enabled || service.waiting) { return false; }
+    if (!service.manual) { return true; }
+    service.manual = false;
+    service.have_value = service.fresh = service.primed = false;
+    service.last = "AUTO_WAIT";
+    return true;
 }
 
 static void bsp_failure(BSP_Dht11Status result)
@@ -114,10 +158,16 @@ static void accept_frame(const uint8_t frame[5], uint32_t now_ms)
         service.last = "PRIMING";
         return;
     }
+    if (service.version == UINT32_MAX)
+    {
+        service.fresh = false;
+        service.last = "VERSION";
+        return;
+    }
     service.sample = sample;
     service.sound_speed_mm_s = sound_speed_mm_s;
     service.valid_ms = now_ms;
-    increment(&service.version);
+    ++service.version;
     increment(&service.stats.successes);
     service.have_value = true;
     service.fresh = true;
@@ -154,12 +204,22 @@ static void log_status(uint32_t now_ms)
      * Call only with the bus released so blocking UART cannot extend low. */
     service.last_log_ms = now_ms;
     if (!service.enabled) { state = "DISABLED"; }
+    else if (service.manual) { state = "MANUAL"; }
     else if (!service.have_value) { state = "UNREADY"; }
     else if (age_ms >= TEMP_STALE_MS) { state = "STALE"; }
     else if (!service.fresh) { state = "HOLD_LAST"; }
     else { state = "OK"; }
 
-    if (service.have_value)
+    if (service.manual)
+    {
+        length = snprintf(line, sizeof line,
+            "$TEMP,STATE=MANUAL,VERSION=%" PRIu32 ",T_MILLI_C=%" PRId32
+            ",C_MM_S=%" PRIu32 ",AGE_MS=%" PRIu32
+            ",FRESH=1,LAST=SET,MODE=MANUAL,SOURCE=MANUAL\r\n",
+            service.version, service.sample.temperature_milli_c,
+            service.sound_speed_mm_s, age_ms);
+    }
+    else if (service.have_value)
     {
         length = snprintf(line, sizeof line,
             "$TEMP,STATE=%s,VERSION=%" PRIu32 ",T_MILLI_C=%" PRId32
@@ -173,7 +233,8 @@ static void log_status(uint32_t now_ms)
     else
     {
         length = snprintf(line, sizeof line,
-            "$TEMP,STATE=%s,VERSION=0,FRESH=0,LAST=%s\r\n", state, service.last);
+            "$TEMP,STATE=%s,VERSION=%" PRIu32 ",FRESH=0,LAST=%s\r\n",
+            state, service.version, service.last);
     }
     emit_line(line, length);
     length = snprintf(line, sizeof line,
@@ -240,7 +301,7 @@ void TemperatureService_Process(uint32_t now_ms)
         return;
     }
 
-    if (service.enabled && service.ready
+    if (service.enabled && service.ready && !service.manual
         && ((!service.attempted
              && (uint32_t)(now_ms - service.init_ms) >= TEMP_POWERUP_MS)
             || (service.attempted

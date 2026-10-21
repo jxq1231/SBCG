@@ -65,3 +65,13 @@ class LwipLayoutTests(unittest.TestCase):
     def test_static_end_cannot_enter_reserved_stack(self):
         self.symbols["_end"] = (0x20047C04, 0)
         self.check(False)
+
+    def test_uart_irq_requires_larger_stack_reservation(self):
+        checks = layout.lwip_layout_checks(self.symbols, self.sections,
+                                          0x20048000, 4096, required_stack_bytes=4096)
+        self.assertFalse(all(ok for ok, _ in checks))
+        self.symbols['_sstack'] = (0x20047000, 0)
+        self.symbols['_Min_Stack_Size'] = (0x1000, 0)
+        checks = layout.lwip_layout_checks(self.symbols, self.sections,
+                                          0x20048000, 4096, required_stack_bytes=4096)
+        self.assertTrue(all(ok for ok, _ in checks), checks)

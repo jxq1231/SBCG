@@ -293,8 +293,69 @@ static void tick_wrap_delayed_loop_and_long_idle(void)
     contains(status_line, "AGE_MS=0,FRESH=1,LAST=OK");
 }
 
+static void manual_selection_and_auto_recovery(void)
+{
+    TemperatureSnapshot value;
+    reset(0U);
+    TemperatureService_Init(0U, allowed_uid, log_line);
+    TemperatureService_GetSnapshot(0U, &value);
+    CHECK(!value.manual && !value.valid && value.version == 0U);
+    CHECK(TemperatureService_SetManual(100U, 25000));
+    TemperatureService_GetSnapshot(30100U, &value);
+    CHECK(value.manual && value.valid && value.version == 1U);
+    CHECK(value.temperature_milli_c == 25000 && value.sound_speed_mm_s == 346450U);
+    TemperatureService_Process(30100U);
+    CHECK(start_calls == 0U);
+    contains(status_line, "STATE=MANUAL");
+    CHECK(strstr(status_line, "RH_MILLI_PCT") == NULL);
+    CHECK(!TemperatureService_SetManual(30101U, 60001));
+    TemperatureService_GetSnapshot(30101U, &value);
+    CHECK(value.manual && value.valid && value.version == 1U);
+    CHECK(value.temperature_milli_c == 25000);
+    CHECK(TemperatureService_SetManual(30102U, 0));
+    TemperatureService_GetSnapshot(30102U, &value);
+    CHECK(value.temperature_milli_c == 0 && value.sound_speed_mm_s == 331300U);
+    CHECK(TemperatureService_SetManual(30103U, -10000));
+    TemperatureService_GetSnapshot(30103U, &value);
+    CHECK(value.temperature_milli_c == -10000 && value.sound_speed_mm_s == 325240U);
+    CHECK(TemperatureService_UseAuto());
+    CHECK(TemperatureService_UseAuto());
+    TemperatureService_GetSnapshot(30103U, &value);
+    CHECK(!value.manual && !value.valid && value.version == 3U);
+    attempt(30104U);
+    TemperatureService_GetSnapshot(30124U, &value);
+    CHECK(!value.valid && value.version == 3U);
+    attempt(35104U);
+    TemperatureService_GetSnapshot(35124U, &value);
+    CHECK(!value.manual && value.valid && value.version == 4U);
+    CHECK(value.temperature_milli_c == 24400);
+    /* Never interrupt an owned start pulse from a public mode API. */
+    TemperatureService_Process(40104U);
+    CHECK(line_low && !TemperatureService_SetManual(40104U, 20000));
+    CHECK(!TemperatureService_UseAuto());
+    TemperatureService_Process(40124U);
+    CHECK(TemperatureService_SetManual(40125U, 20000));
+    CHECK(TemperatureService_UseAuto());
+    TemperatureService_Process(45103U);
+    CHECK(start_calls == 3U); /* Still respects the previous attempt interval. */
+    attempt(45104U);
+    TemperatureService_GetSnapshot(45124U, &value);
+    CHECK(!value.valid);
+    reset(0U);
+    TemperatureService_Init(0U, NULL, log_line);
+    CHECK(!TemperatureService_SetManual(0U, 20000));
+    CHECK(!TemperatureService_UseAuto());
+    reset(0U);
+    init_result = BSP_DHT11_INIT_ERROR;
+    TemperatureService_Init(0U, allowed_uid, log_line);
+    CHECK(TemperatureService_SetManual(0U, 20000));
+    TemperatureService_GetSnapshot(UINT32_MAX, &value);
+    CHECK(value.manual && value.valid);
+}
+
 int main(void)
 {
+    manual_selection_and_auto_recovery();
     powerup_priming_and_no_logs_while_low();
     uid_and_reinitialization_ownership();
     initialization_error_is_not_retried();

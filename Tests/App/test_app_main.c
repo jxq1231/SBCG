@@ -9,6 +9,7 @@
 #include "Sync/ptp_tx.h"
 #include "Sync/sync_observation.h"
 #include "Temperature/temperature_service.h"
+#include "Console/temperature_console.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -40,6 +41,23 @@ static uint32_t deinit_calls, completed_init_calls, time_calls;
 static UDPTimeExchange_Log time_log;
 static uint32_t temperature_init_calls, temperature_calls;
 static bool temperature_initialized, temperature_low;
+static unsigned console_inits, console_calls, rx_inits;
+static bool reply_pending, rx_init_ok = true;
+static TemperatureConsole_Log console_log;
+
+bool BSP_Console_RxInit(void) { ++rx_inits; return rx_init_ok; }
+void TemperatureConsole_Init(TemperatureConsole_Log log)
+{ assert(temperature_initialized); console_log = log; ++console_inits; }
+void TemperatureConsole_Process(uint32_t now_ms)
+{
+    assert(temperature_initialized && now_ms == tick_ms);
+    ++console_calls;
+    if (reply_pending && !temperature_low)
+    {
+        static const char reply[] = "$CMD,NAME=PING,RESULT=OK\r\n";
+        console_log(reply, (int)sizeof reply - 1); reply_pending = false;
+    }
+}
 
 bool TemperatureService_IsStartLowActive(void)
 {
@@ -228,6 +246,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     completed_init_calls = 0U;
     temperature_initialized=false; temperature_calls=temperature_init_calls=0U;
     temperature_low=false;
+    console_inits=console_calls=rx_inits=0U; reply_pending=false;
     App_Init();
 }
 
@@ -242,8 +261,9 @@ int main(void)
     assert(tx_initialized);
     assert(time_initialized && observation_initialized && observation_init_calls==1U);
     assert(temperature_initialized && temperature_init_calls==1U);
+    assert(console_inits==1U && rx_inits==1U && console_log!=NULL);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-T1.1-TEMP-R1,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-T1.2-MANUAL,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -435,5 +455,15 @@ int main(void)
     App_Process(); assert(strcmp(last_line,"$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n")==0);
     deinit_ok=true;
     puts("PASS: ownership failure preserves pending DATA state and existing queued records");
+    Reset(0U,true);
+    reply_pending=true; temperature_low=true;
+    App_Process();
+    assert(console_calls==1U && reply_pending && write_count==1U);
+    temperature_low=false; App_Process();
+    assert(console_calls==2U && !reply_pending && strstr(last_line,"NAME=PING,RESULT=OK"));
+    rx_init_ok=false; Reset(0U,true);
+    assert(strstr(last_line,"$CONSOLE,INIT=ERROR"));
+    rx_init_ok=true;
+    puts("PASS: command RX initializes once and replies use the DHT-safe logger");
     return 0;
 }

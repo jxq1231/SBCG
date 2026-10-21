@@ -13,7 +13,7 @@ RAM_END = 0x20050000
 DESCRIPTOR_BYTES = 160  # Current configuration: 4 F7 descriptors, 40 bytes each.
 
 
-def lwip_layout_checks(symbols, sections, heap_address, heap_size):
+def lwip_layout_checks(symbols, sections, heap_address, heap_size, required_stack_bytes=0):
     """Validate the fixed heap and RX pool independently of external tools."""
     checks = []
 
@@ -39,6 +39,9 @@ def lwip_layout_checks(symbols, sections, heap_address, heap_size):
     stack_bottom = symbols["_sstack"][0]
     check(stack_top == heap_address and stack_bottom < stack_top,
           "MSP is below the fixed LwIP heap")
+    check(stack_top - stack_bottom == symbols['_Min_Stack_Size'][0]
+          and stack_top - stack_bottom >= required_stack_bytes,
+          f"MSP reservation matches size and is at least {required_stack_bytes} bytes")
     check(symbols["_end"][0] <= stack_bottom,
           "newlib heap starts below reserved MSP stack")
     rx_address, rx_size = symbols["DMARxDscrTab"]
@@ -138,7 +141,9 @@ def main():
             heap_address = int(re.search(
                 r"^#define\s+LWIP_RAM_HEAP_POINTER\s+(0x[0-9a-fA-F]+)\s*$", options, re.M)[1], 0)
             heap_size = int(re.search(r"^#define\s+MEM_SIZE\s+(\d+)\s*$", options, re.M)[1])
-            for condition, message in lwip_layout_checks(symbols, sections, heap_address, heap_size):
+            minimum_stack = 4096 if fields.get('NVIC.USART1_IRQn', '').startswith('true') else 0
+            for condition, message in lwip_layout_checks(
+                    symbols, sections, heap_address, heap_size, minimum_stack):
                 check(condition, message)
         vector_offset = sections[".isr_vector"][2]
         vector_msp = int.from_bytes(elf.read_bytes()[vector_offset:vector_offset + 4], "little")

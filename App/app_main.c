@@ -2,6 +2,7 @@
 #include "BSP/bsp_console.h"
 #include "Network/ethernet_monitor.h"
 #include "Temperature/temperature_service.h"
+#include "Console/temperature_console.h"
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
@@ -18,7 +19,7 @@
 #include <string.h>
 
 #ifdef SBCG_USE_LWIP
-#define APP_FIRMWARE_ID "SBCG-T1.1-TEMP-R1"
+#define APP_FIRMWARE_ID "SBCG-T1.2-MANUAL"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
@@ -117,6 +118,12 @@ void App_Init(void)
     }
 #endif
     TemperatureService_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
+    TemperatureConsole_Init(SendLine);
+    if (!BSP_Console_RxInit())
+    {
+        static const char error[] = "$CONSOLE,INIT=ERROR\r\n";
+        SendLine(error, (int)sizeof error - 1);
+    }
     FlushOneLine();
 }
 
@@ -151,5 +158,6 @@ void App_Process(void)
     SyncObservation_Process(BSP_Console_GetTickMs());
 #endif
     TemperatureService_Process(BSP_Console_GetTickMs());
+    TemperatureConsole_Process(BSP_Console_GetTickMs());
     FlushOneLine();
 }

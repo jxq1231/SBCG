@@ -10,13 +10,13 @@
 | --- | --- |
 | 当前实测 | 本板系统/串口/PHY、LwIP与电脑UDP、PTP本地时钟及RX/TX/板端观测、DHT11正常采样；T1.1 R1有17个有效温度版本及原网络联合通过，拔插恢复由用户延后。各版证据见[项目状态](Project_State.md) |
 | 板级参考 | 历史按UM1907 Rev4的MB1191 B-04原理图/I/O表、DS10916及本机CubeF7 V1.17.4 BSP核对的连线；当前PCB修订与改动未现场确认 |
-| 设计目标 | FMC/LTDC、双板同步协议/PPS、SAI/DMA、温度UDP及整机测距仍未实现；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3已生成但器件通信未验证，MCU串口接收未实现 |
+| 设计目标 | FMC/LTDC、双板同步协议/PPS、SAI/DMA、温度UDP及整机测距仍未实现；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3已生成但器件通信未验证；T1.2串口接收/手动设温、恢复自动及原网络联合实测通过 |
 
 任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。用户确认课程模块为DHT11，但模块脚序、电压、上拉和具体版本仍需在自动温补阶段核对。当前不检查第二板；双板共用基线与角色在后续联调阶段落实。
 
 当前SYS/RCC为HSE Bypass、M25/N400/P2、HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；PLLQ实际/2，不提供48 MHz。其余外设参数一律按后续目标理解。所有硬件修改由CubeMX完成，不手改`.ioc`或生成初始化。
 
-USART1本次生成值已核对为PA9/TX、PB7/RX、115200 8N1、PCLK2、无UART IRQ/DMA；启动信息和每秒心跳代码已接入并通过主机行为测试；用户实物接收日志已确认启动/心跳发送通过，MCU接收未实现。串口工具按用户指定采用[SerialWeb](SerialWeb.md)，板级VCP发送证据见[M0.2报告](Milestones/M0_2_Serial.md)，不据此声明MCU接收通过。
+USART1当前生成值已核对为PA9/TX、PB7/RX、115200 8N1、PCLK2；用户已通过CubeMX启用USART1_IRQn（抢占5、子优先级0），无UART DMA。启动/心跳及R1自动测温发送已有实测；T1.2接收命令和手动设温已通过本版本授权烧录及90秒联合验收，详见[本轮记录](Milestones/T1_2_Manual_Temperature.md)。串口工具按用户指定采用[SerialWeb](SerialWeb.md)，板级VCP发送证据见[M0.2报告](Milestones/M0_2_Serial.md)，不据此声明MCU接收通过。
 
 ## 1. 先统一的结论
 
@@ -511,3 +511,5 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 
 
 当前已验证范围只见[单板报告](Milestones/M0_1_Startup.md)和[项目状态](Project_State.md)；本文件其余参数均按对应里程碑生成与验证。
+
+T1.2 资源更新（联合实测通过）：USART1_IRQn 5/0 由 CubeMX 生成；用户链接扩展将主栈预留增至 4 KiB（0x20047000～0x20048000），LwIP 堆/ETH 描述符/RX 池地址及缓存状态保持不变。命令响应使用主循环专用静态缓冲；无新增 DMA。

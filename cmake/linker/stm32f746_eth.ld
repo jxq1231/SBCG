@@ -1,6 +1,11 @@
 /* User-owned extension of the unchanged CubeMX memory/section definitions. */
 INCLUDE STM32F746xx_FLASH.ld
 
+/* UART RX can interrupt snprintf/network processing. Debug HAL's IRQ frame
+   alone uses ~240 bytes; reserve 4 KiB for foreground + nested IRQ frames.
+   Override only in this user-owned wrapper, never the CubeMX base script. */
+_Min_Stack_Size = 0x1000;
+
 /* CMake defines this only for the generated LwIP configuration. Keep legacy
    PHY-only snapshots buildable with their original stack location. */
 PROVIDE(__sbcg_has_lwip = 0);
