@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M2.2.2%20%7C%20Timestamp%20IO-0f766e?style=flat-square" alt="M2.2.2单板时间戳回报实物验收通过，尚未同步">
+  <img src="https://img.shields.io/badge/Stage-M2.2.3%20%7C%20Observation%20Replay-0f766e?style=flat-square" alt="M2.2.3真实样本估算链回放通过，尚未同步">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -40,7 +40,9 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**当前M2.2.2单板UDP时间戳回报通过实物验收：新5007/6007服务以会话键关联请求RX及ACK TX硬件时间，电脑保存来源明确的四时刻样本。SBCG-M2.2-IO经授权烧录校验，30组新样本与原30组RX/TX/ACK全部匹配；70包零缺口、90条PTP/心跳连续，错误及溢出0。177项主机检查、两配置构建/布局、444文件实际再生成及复核亦通过；仍为LOCAL/SYNC=0，未校时或检查第二板。** 见[协议](Docs/Protocol.md)和[本轮记录](Docs/Milestones/M2_2_Time_Exchange.md)。
+**最新主机增量M2.2.3已通过：将已验收的30组真实四时刻交给原C估算器，逐条返回OK；42项新增与原177项回归共219项检查、两配置构建/布局和独立复核通过。固件、加载内容及原始日志均保持不变，未烧录或访问硬件，仍为LOCAL/SYNC=0。** 见[结果、限制与复验](Docs/Milestones/M2_2_Sync_Observation.md)。
+
+**当前板端基线M2.2.2单板UDP时间戳回报通过实物验收：新5007/6007服务以会话键关联请求RX及ACK TX硬件时间，电脑保存来源明确的四时刻样本。SBCG-M2.2-IO经授权烧录校验，30组新样本与原30组RX/TX/ACK全部匹配；70包零缺口、90条PTP/心跳连续，错误及溢出0。177项主机检查、两配置构建/布局、444文件实际再生成及复核亦通过；仍为LOCAL/SYNC=0，未校时或检查第二板。** 见[协议](Docs/Protocol.md)和[本轮记录](Docs/Milestones/M2_2_Time_Exchange.md)。
 
 **此前M2.2.1已完成四时间戳估算器的纯算法验收：13组、1044次真实函数调用（含1000物理模型）验证偏差符号、路径时延和边界；原109项回归、两配置构建/布局及只读复核通过。函数尚未接入App运行，Debug/Release ELF及加载内容与板端基线完全一致，本轮未烧录、未校时。** 见[M2.2.1结果与边界](Docs/Milestones/M2_2_Sync_Estimator.md)。
 
@@ -61,6 +63,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M2.1.1 本地PTP时钟 | 88条LOCAL/SYNC=0单调时间；本版本UDP 70包零缺口、30/30应答；已授权烧录校验 | [代码、再生成与实物验收](Docs/Milestones/M2_1_PTP_Clock.md) |
 | M2.1.2 RX事件关联 | 30个请求各匹配唯一DMA时间及ACK，70包零缺口，98条PTP/心跳连续；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_RX.md) |
 | M2.1.3 TX事件关联 | 本版本30组唯一RX/TX/ACK，70包零缺口，91条PTP/心跳；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_TX.md) |
+| M2.2.3 真实样本估算链 | 归档30组均由原C返回OK；219项检查通过，固件和原始数据不变 | [主机回放验证](Docs/Milestones/M2_2_Sync_Observation.md) |
 | M2.2.2 时间戳数据链 | 30组新样本、原30组RX/TX/ACK、70包零缺口、90条PTP/心跳；本版本实物验收通过 | [实现及验收记录](Docs/Milestones/M2_2_Time_Exchange.md) |
 | M2.2.1 估算数学内核 | 13组/1044次调用、含1000物理模型；未接入运行或校时，加载内容保持不变 | [纯算法结果与复验](Docs/Milestones/M2_2_Sync_Estimator.md) |
 | 显示 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |

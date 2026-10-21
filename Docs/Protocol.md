@@ -54,4 +54,4 @@ SESSION区分电脑运行，不是认证或板启动纪元。发生重启或时�
 
 ACK和REPORT允许乱序；只有二者齐全且合法才产生four_stamp_sample。纳秒数在JSON中保存十进制字符串，SESSION为16位十六进制字符串，UID为3个8位十六进制字符串。来源标明PC_SW或BOARD_HW。仅比较各自时钟域的顺序，不将PC单调时钟参考点与板本地参考点当作UTC。
 
-工具PASS仅表示本次网络样本检查通过；hardware_verified恒false，实物结论必须由串口BOOT、板状态、新旧网络采集与固件哈希联合建立。本阶段不调用估算器，不校时或宣称同步精度。实现边界及联合验收要求见[批准设计](Plans/2026-10-20_Time_Exchange_IO_Design.md)。
+工具PASS仅表示本次网络样本检查通过；hardware_verified恒false，实物结论必须由串口BOOT、板状态、新旧网络采集与固件哈希联合建立。板端协议层不调用估算器，不校时或宣称同步精度；[M2.2.3](Milestones/M2_2_Sync_Observation.md)仅在电脑端对归档样本调用原C内核。实现边界及联合验收要求见[批准设计](Plans/2026-10-20_Time_Exchange_IO_Design.md)。
