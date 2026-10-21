@@ -89,7 +89,7 @@ python -B Tools/Monitor/time_exchange_probe.py --uid 001A002D:30365105:36363631 
 
 本次联合验收直接对完整样本调用`Analysis/sync_exchange_analysis.py`的真实C适配器，以SESSION、UID、SEQ、CLIENT_TICK_MS关联串口，30组状态及OFFSET_X2_NS、DELAY_X2_NS完全相同；新旧异常计数0，旧网络70包无缺口、30组RX/TX/ACK匹配、至少60条PTP/心跳连续。保留完整原文及哈希。
 
-Flash/Runtime：PASS。本增量已满足提交条件，按jxq提交并依已有协作授权推送；提交/远程核对完成后停止本增量。两板同步收敛、±10μs精度、PPS与声波测距仍需后续独立验收。
+Flash/Runtime：PASS。本功能已按jxq提交并依已有协作授权推送，远程核对一致，本增量停止。两板同步收敛、±10μs精度、PPS与声波测距仍需后续独立验收。
 
 ## 本次原始证据SHA256
 
@@ -101,3 +101,7 @@ Flash/Runtime：PASS。本增量已满足提交条件，按jxq提交并依已有
 | `Logs/UDP/m224-obs-1792566156000-time.jsonl` | `0b282320714350e6f21b9ab8903eecdc393a3d64b1953acbd432c5bf610fa4a2` |
 | `Logs/UDP/m224-obs-1792566156000-flash.log` | `361c78ce615ef8feceb0a3ccaa37468c31c3c6cdd4c61f8b0e7c1a164499d03e` |
 | `Logs/UDP/m224-obs-1792566156000-serial.bin` | `43722f279e4a74f1dcfdf6607dbe880edd0b2324aaa7e99dc2cf8b454e321fba` |
+
+## Git交付
+
+功能提交：[8ecaea3](https://github.com/jxq1231/SBCG/commit/8ecaea36248632d088f8285224d6423a0249f759)，消息`feat: add verified board clock observation`。作者与提交者均为jxq，邮箱保持仓库既有配置。已正常推送到`jxq/m0-clock-review`，远程提交号核对一致。原始日志按规则留在忽略目录，未上传到源码仓库；本报告保存范围、计数和哈希供协作复验。

@@ -31,8 +31,8 @@ No CubeMX change required。复用现有ETH内部DMA和硬件快照；GPIO、TIM
 - [x] 实际Generate Code及源码逐字节回归，必要时仅恢复被删除的原LAN8742许可证。
 - [x] 审阅新Debug ELF及SHA256，另行取得本版本烧录授权。
 - [x] COM3/两路旧UDP/新模式联合实物验收，30组与原生C一致。
-- [ ] 验证后按jxq提交、推送、校验远程，停止本增量。
+- [x] 验证后按jxq提交、推送、校验远程，停止本增量。
 
 原始证据存放忽略目录 `Logs/M2_2_Board_Observation/`。完成软件构建不等于实物通过；新固件未经本版本授权不烧录。
 
-软件检查结果：248项PASS；实际再生成457文件不变（原样恢复LAN8742许可证）；Debug SHA256前缀5afe448fa408。本版本获明确授权烧录一次，Flash/Runtime PASS；30组与真实C逐条一致，旧网络70包/30组和90条PTP/心跳通过；等待提交与远程核对收尾。
+软件检查结果：248项PASS；实际再生成457文件不变（原样恢复LAN8742许可证）；Debug SHA256前缀5afe448fa408。本版本获明确授权烧录一次，Flash/Runtime PASS；30组与真实C逐条一致，旧网络70包/30组和90条PTP/心跳通过；功能提交8ecaea3已推送到jxq/m0-clock-review并核对远程一致，本增量停止。
