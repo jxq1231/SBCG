@@ -1,8 +1,12 @@
 # 硬件资源与后续配置参考
 
+<!-- doc-status: current-reference-with-future-designs; reviewed: 2026-10-23 -->
+
+> 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。
+
 2026-10-22 此前增量：[M3.0 WM8994 身份读取](Milestones/M3_0_Codec_ID.md)
 沿用生成的 I2C3（PH7 SCL、PH8 SDA），7 位地址 0x1A、ID 寄存器 0x0000，
-预期 0x8994。板载芯片无需外接线；本次不启用 SAI、MCLK、音频 DMA 或中断。
+预期 0x8994。板载芯片无需外接线；M3.0当时不启用 SAI、MCLK、音频 DMA 或中断；后续M3.1已启用。
 已通过SBCG-M3.0-CODEC本版本授权烧录及90秒联合实测：45次ID=8994、错误0、
 单次0～1ms，原温度/网络保持正常；详细证据见该增量记录。控制接口通过不代表音频已可采集。
 
@@ -20,11 +24,11 @@
 | 板级参考 | 历史按UM1907 Rev4的MB1191 B-04原理图/I/O表、DS10916及本机CubeF7 V1.17.4 BSP核对的连线；当前PCB修订与改动未现场确认 |
 | 设计目标 | FMC/LTDC、双板同步协议/PPS、温度UDP及整机测距仍未实现；SAI/DMA连续数据流及受控幅度响应已实测；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3的WM8994 ID8994在M3.0已实测，SAI/DMA在M3.1已实测；T1.2串口接收/手动设温、恢复自动及原网络联合实测通过 |
 
-任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。用户确认课程模块为DHT11，但模块脚序、电压、上拉和具体版本仍需在自动温补阶段核对。当前不检查第二板；双板共用基线与角色在后续联调阶段落实。
+任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。当前模块已按3.3V/PG7接线并通过采集及恢复测试；替换模块时仍须重新核对脚序、电压、上拉和版本。当前不检查第二板；双板共用基线与角色在后续联调阶段落实。
 
 当前SYS/RCC为HSE Bypass、M25/N400/P2、HCLK200 MHz、PCLK1 50 MHz、PCLK2 100 MHz；PLLQ实际/2，不提供48 MHz。其余外设参数一律按后续目标理解。所有硬件修改由CubeMX完成，不手改`.ioc`或生成初始化。
 
-USART1当前生成值已核对为PA9/TX、PB7/RX、115200 8N1、PCLK2；用户已通过CubeMX启用USART1_IRQn（抢占5、子优先级0），无UART DMA。启动/心跳及R1自动测温发送已有实测；T1.2接收命令和手动设温已通过本版本授权烧录及90秒联合验收，详见[本轮记录](Milestones/T1_2_Manual_Temperature.md)。串口工具按用户指定采用[SerialWeb](SerialWeb.md)，板级VCP发送证据见[M0.2报告](Milestones/M0_2_Serial.md)，不据此声明MCU接收通过。
+USART1当前生成值已核对为PA9/TX、PB7/RX、115200 8N1、PCLK2；用户已通过CubeMX启用USART1_IRQn（抢占5、子优先级0），无UART DMA。启动/心跳及R1自动测温发送已有实测；T1.2接收命令和手动设温已通过本版本授权烧录及90秒联合验收，详见[本轮记录](Milestones/T1_2_Manual_Temperature.md)。串口工具按用户指定采用[SerialWeb](SerialWeb.md)，板级VCP发送证据见[M0.2报告](Milestones/M0_2_Serial.md)，M0.2发送记录本身不证明MCU接收；接收证据来自后续T1.2。
 
 ## M3.1 当前音频资源（连续数据流及受控幅度响应已实测）
 
@@ -83,7 +87,7 @@ I/D Cache维持关闭，不增加缓存维护。板载WM8994使用既有PH7/PH8 
 | LCD/音频时钟 | PLLSAI N192/R5/DivR4及共享PLLM25锁定，LCD9.6 MHz；SAI2走PLLI2S | 音频只配置PLLI2S；PTP通过自身时间/增量校正，不改变主PLL或LCD支路 |
 | 音频预留 | PI4～PI7、PG10、PD6；PH15额外保留，PH7/PH8共享I2C3 | PH15 BSP宏与原理图用途不同，按第4.7节核查后才决定IRQ配置 |
 
-这里固定架构与配置目标，当前SBCG已有单板PTP本地时钟和RX/TX观测，但尚未实现双板同步协议/伺服、角色识别、温度UDP或音频。第5.5～5.9节规定后续实现边界；不得把本文的拟定接口当作现有代码。
+这里固定架构与配置目标，当前SBCG已有单板PTP本地时钟和RX/TX观测，但尚未实现双板同步协议/伺服、角色识别、温度UDP；音频连续采集、受控幅度响应、帧编号及本地PTP锚点已分阶段实测。第5.5～5.9节规定后续实现边界；不得把本文的拟定接口当作现有代码。
 
 ## 4. 完整引脚清单
 
@@ -252,16 +256,16 @@ PG7在[S1]表11和图26中只接Arduino D4；与第4.1～4.5节的LTDC、FMC、R
 
 PH15先不给其它GPIO输出、PPS或课程模块使用；PD6同样保留。启用采集前核对实际板修订、codec配置和所用BSP示例的事件路径；需要时用课程允许的测量工具验证实际电平。SAI DMA的缓冲半满/满回调与codec/PH15 GPIO事件应分别处理。若以后启用PH15/EXTI15，它与触控PI13/EXTI13共用EXTI15_10 IRQ处理入口，须按线路分发，不能覆盖触控回调。
 
-### 4.8 音频DMA预留：尚未启用
+### 4.8 音频DMA：输入已启用，输出仍预留
 
-以下映射已核查本机CubeF7 V1.17.4 `stm32746g_discovery_audio.h`；团队先预留，后续经CubeMX配置并核对生成结果。当前仍未配置这些DMA或IRQ。[S9]
+以下映射历史按CubeF7 V1.17.4 BSP核查；输入现已由CubeMX生成并在M3.1及M3.2实测，输出仍仅预留。实际参数以上方当前音频摘要及生成代码为准。[S9]
 
 | 功能/外设 | 方向 | DMA映射 | IRQ入口 | 当前状态 |
 | --- | --- | --- | --- | --- |
-| 录音 / SAI2_Block_B | 外设到内存 | **DMA2 Stream7 Channel 0** | DMA2_Stream7_IRQHandler | 音频输入预留，未启用 |
+| 录音 / SAI2_Block_B | 外设到内存 | **DMA2 Stream7 Channel 0** | DMA2_Stream7_IRQHandler | 已生成并实测；halfword circular、32768元素、IRQ4/0 |
 | 放音 / SAI2_Block_A | 内存到外设 | **DMA2 Stream4 Channel 3** | DMA2_Stream4_IRQHandler | 音频输出预留，未启用；只录音时不启用此DMA |
 
-同一个Stream不能因Channel不同就同时分给两个外设。后续采集里程碑再确定采样率、数据宽度、缓冲地址/长度、循环模式、半满/满回调、Cache策略与IRQ优先级，不直接照抄BSP默认优先级或让CubeMX自动分配后未经审核合入。
+同一个Stream不能因Channel不同就同时分给两个外设。输入采样率、缓冲、回调和IRQ已在M3.1确定并实测，不重复配置；输出等新增资源仍须通过CubeMX单独设计，不直接照抄BSP默认优先级。
 
 **ETH有专用DMA，不占用DMA2 Stream4/7。** 音频应防止与其他通用DMA2外设发生Stream重复分配；与网口/LTDC的并发风险主要是总线/内存带宽、Cache一致性和中断负载，不能称为网口抢同一DMA2 Stream。[S2，第40页第2.31节]；[ST架构说明](https://www.st.com/en/microcontrollers-microprocessors/stm32f7-series.html)
 
@@ -278,7 +282,7 @@ PH15先不给其它GPIO输出、PPS或课程模块使用；PD6同样保留。启
 | PLLQ | 当前实际/2，Q输出200 MHz，USB/RNG/SDMMC未启用；需要48 MHz域时重新规划 |
 | 总线 | AHB /1，APB1 /4，APB2 /2；TIMPRE采用常规倍频路径并核对TIM2时钟 |
 | LTDC | 锁定PLLSAIN=192、PLLSAIR=5、PLLSAI DivR=4：9.6 MHz；所有图层与有效引脚模式RGB565；音频不得改这一支路 |
-| SAI2预留 | 选择RCC_SAI2CLKSOURCE_PLLI2S；PLLI2SN/Q/DivQ按采样率单独确定，不使用PLLSAI |
+| SAI2当前 | RCC_SAI2CLKSOURCE_PLLI2S，N344/Q7/DivQ1；标称48kHz，推导47991.071Hz，不使用PLLSAI |
 | 电源/Flash | 在CubeMX按实际3.3 V和200 MHz配置电压档位、必要的OverDrive及Flash延时；不凭本表跳过时钟校验 |
 
 ST部分示例代码使用 `HSE_ON`；这里依据上传B-04原理图选择有源时钟的 Bypass。实物若为其他修订，先确认其时钟电路。200 MHz主PLL不能自然提供常见的48 MHz USB时钟；ST-LINK VCP由独立ST-LINK芯片处理，**不需要启用主MCU USB_OTG_FS/HS**。后续若启用USB/SDMMC，重新核查48 MHz域。
@@ -427,7 +431,7 @@ PPS验收时每个上升沿表示PTP共同整秒，而不是复位后的本板�
 | 测距/显示 | 使用同一测量ID、两个PTP到达时刻及温度版本 | 使用完全相同字段和math_version=1公式 |
 | 串口角色输出 | role=A及本机/对端UID | role=B及本机/对端UID |
 
-上述地址用于课程独立测试网络，掩码255.255.255.0。角色表是软件板级配置，.ioc硬件基线相同；使用HAL读UID不增加GPIO。UID比较顺序固定w0/w1/w2，传输字段采用网络字节序。角色识别及UDP/PTP实现尚未写入固件。
+上述地址用于课程独立测试网络，掩码255.255.255.0。角色表是软件板级配置，.ioc硬件基线相同；使用HAL读UID不增加GPIO。UID比较顺序固定w0/w1/w2，传输字段采用网络字节序。正式双板角色识别/温度共享/同步伺服尚未写入固件；单板UDP与本地PTP/RX/TX观测已实现。
 
 ### 5.9 声速与距离：math_version=1全整数约定
 
@@ -494,7 +498,7 @@ distance_mm = (sound_speed_mm_s * abs(delta_ns) + 500000000) / 1000000000
 | PD6与PH15的音频IRQ命名 | B-04的PD6硬连Audio_INT，PH15为TP3；V1.17.4 BSP宏AUDIO_IN_INT指PH15。两脚保留并核实，不当作同一信号 |
 | 两板有相同硬件配置 | 相同配置不自动实现同步；MAC/IP唯一，共同时间服务、协议及同一测量温度快照一致 |
 
-**为完整课程任务提前保留音频资源**：[S1]图24、表11中PI4/PI5/PI6/PI7/PG10为SAI2相关、PD6为原理图Audio_INT，PH15须按第4.7节为BSP音频相关信号保留，PH7/PH8用于音频控制；板载U20/U21麦克风的MIC_DATA/MIC_CLK经WM8994编解码器路径处理，不是可随意指定为ADC输入的麦克风接口。第4.8节预留BSP对应的输入/输出DMA映射；采样率、缓冲与具体采集配置仍待音频里程碑确定，尚未启用。
+**为完整课程任务提前保留音频资源**：[S1]图24、表11中PI4/PI5/PI6/PI7/PG10为SAI2相关、PD6为原理图Audio_INT，PH15须按第4.7节为BSP音频相关信号保留，PH7/PH8用于音频控制；板载U20/U21麦克风的MIC_DATA/MIC_CLK经WM8994编解码器路径处理，不是可随意指定为ADC输入的麦克风接口。第4.8节区分已启用的输入DMA与仍预留的输出DMA；输入配置已在M3.1确定并验收，不再作为待配置项。
 
 ## 8. 按里程碑处理的待确认项
 

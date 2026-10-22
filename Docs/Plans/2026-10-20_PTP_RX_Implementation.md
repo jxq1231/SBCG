@@ -1,5 +1,9 @@
 # M2.1.2 RX Hardware Timestamp Implementation Plan
 
+<!-- doc-status: archived-plan; reviewed: 2026-10-23 -->
+
+> **已完成的历史方案，请勿重复实施。** 仅保留当时范围、授权和生成检查；其中“当前/下一步/待验”均按原日期理解，不构成新授权。验收见[对应报告](../Milestones/M2_1_PTP_RX.md)，现行入口见[文档导航](../README.md)。
+
 > 执行方式：使用superpowers:executing-plans在当前已隔离的jxq功能分支逐项执行；不新增工作树。功能提交仍遵守根AGENTS.md，实物通过前不提交功能完成。
 
 **Goal:** 为30个合法电脑UDP请求关联本板DMA接收时间，保持既有请求应答及心跳。

@@ -1,6 +1,10 @@
 # CubeMX第一步：现有系统时钟基线复核
 
-更新：2026-10-18。工程为现有`SBCG.ioc`，不要新建替代工程。本板此步骤已生成并通过调试复位启动验收；下文用于复核和后续协作，不要求重新修改已通过的配置。
+<!-- doc-status: completed-baseline-reference; reviewed: 2026-10-23 -->
+
+> 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。
+
+复核：2026-10-23。工程为现有`SBCG.ioc`，不要新建替代工程。本板此步骤已生成并通过调试复位启动验收；下文用于复核和后续协作，不要求重新修改已通过的配置。
 
 ## 1. 当前基线
 
@@ -15,8 +19,8 @@
 | PLL | HSE源，M25、N400、P2；当前Q2 |
 | 总线 | SYSCLK/HCLK200 MHz；AHB /1；APB1 /4为50 MHz；APB2 /2为100 MHz |
 | 电源与Flash | Scale1、OverDrive、FLASH_LATENCY_6 |
-| 当前GPIO | 仅开启A/B/H端口时钟；PA15未分配，保留后续PPS |
-| 后续外设 | FMC/LTDC/ETH/TIM2/SAI/DHT11等未启用；USART1已在当前工作区生成，见[串口检查](SerialWeb.md) |
+| 当前GPIO | 当前生成代码开启A/B/C/G/H/I端口时钟；PA15未分配，保留后续PPS |
+| 已启用/未启用 | USART1含RX IRQ、ETH/LwIP/PTP、I2C3、SAI2/DMA2及PG7-DHT11已配置；FMC/LTDC/TIM2未启用，见[当前状态](Project_State.md) |
 
 按此前核查的MB1191 B-04原理图，有源25 MHz时钟进入PH0，因此选择Bypass。本板实测RCC状态与之相符，但PCB修订和绝对输入频率尚未独立测量；其它实物不能直接套用结论。
 
@@ -70,4 +74,4 @@ cmake --build --preset Debug --parallel
 - [x] 用户烧录校验成功；后续只读Flash比对与单板启动观察通过。
 - [ ] 冷启动、独立测频未执行；其它硬件性能按其里程碑单独验收。
 
-后续目标按完整路线确定；USART1启动信息/每秒心跳已接入并通过主机行为测试和构建，用户实物启动/心跳发送验收通过，MCU接收未实现；显示、网络、音频和温度功能未实现。
+本步SYS/RCC已完成，勿重复配置。后续USART1收发、网络/PTP观测、温度及音频均有各版实测；显示、双板同步和测距仍未实现。当前目标只见[项目状态](Project_State.md)。

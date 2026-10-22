@@ -1,11 +1,10 @@
-# UDP应用协议
+# 串口观测与UDP应用协议
 
-当前板运行 SBCG-M3.1-AUDIO；连续采集、联合业务及受控幅度响应已实测。此前已验收固件为 SBCG-M3.0-CODEC；前序温度串口命令及恢复验收见
-[T1.2](Milestones/T1_2_Manual_Temperature.md)和[连续拔插](Milestones/T1_1_Temperature_Replug.md)。
-本次 [M3.0 音频芯片身份读取](Milestones/M3_0_Codec_ID.md)已通过本版本授权烧录与联合实测，
-45次ID=8994、错误0，UDP格式保持原样。
-下述 M2.2.4 及 M2.2.2 记录为各自旧版本实测基线，见
-[板端估算](Milestones/M2_2_Board_Observation.md)和[30组时间交换](Milestones/M2_2_Time_Exchange.md)。
+<!-- doc-status: current-interface; reviewed: 2026-10-23 -->
+
+更新：2026-10-23。当前板端已验收标识为 **SBCG-M3.2-ANCHOR**。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS和AUDIO_ANCHOR仅为串口行。
+
+M3.2.3当前仅实施纯算法与离线回放，不新增网络字段、串口命令或板端运行入口。当前状态见[Project_State](Project_State.md)。
 
 ## M3.1 音频串口状态（连续数据流及受控幅度响应已实测）
 
@@ -138,12 +137,12 @@ OFFSET_X2_NS、DELAY_X2_NS为有符号64位整数十进制，单位为二倍纳�
 
 电脑工具显式使用`--submit-observation`；默认模式不发送type7，保留旧事件和summary字段。显式模式要求CLI间隔至少1秒、总等待不超过0.8秒；每份完整样本最多补交一次，局部发送成功仅证明电脑sendto返回成功。新模式额外事件不能冒充原M2.2.3归档格式；联合验收直接对完整样本调用既有真实C适配器并与串口完整键/整数值比较，原始数据不改写。工具hardware_verified仍为false。
 
-详见[M2.2.4实现及验收边界](Milestones/M2_2_Board_Observation.md)。当前SBCG-M2.2-OBS已获本版本授权烧录、校验、复位并实测30组通过；不表示双板同步或精度已达标。
+详见[M2.2.4实现及验收边界](Milestones/M2_2_Board_Observation.md)。当时SBCG-M2.2-OBS已获本版本授权烧录、校验、复位并实测30组通过；不表示双板同步或精度已达标。
 
 
 ## T1.1 温度与声速串口观测（R1正常窗口通过，R1当时未测拔插）
 
-本节记录已实测的FW=SBCG-T1.1-TEMP-R1；R0实测FW=SBCG-T1.1-TEMP。当前T1.2已获本版本授权烧录及联合实测，见下节。仅当前测试UID启用DHT11，旧UDP type1～7不变，无温度网络消息。
+本节记录已实测的FW=SBCG-T1.1-TEMP-R1；R0实测FW=SBCG-T1.1-TEMP。后续T1.2曾获本版本授权烧录及联合实测，见下节。仅当前测试UID启用DHT11，旧UDP type1～7不变，无温度网络消息。
 
 ```text
 $TEMP,STATE=OK,VERSION=1,T_MILLI_C=24400,RH_MILLI_PCT=53000,C_MM_S=346086,AGE_MS=0,FRESH=1,LAST=OK

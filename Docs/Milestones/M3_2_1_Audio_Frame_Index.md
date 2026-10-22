@@ -1,5 +1,9 @@
 # M3.2.1 音频帧编号：正常窗口验收通过
 
+<!-- doc-status: completed-evidence; reviewed: 2026-10-23 -->
+
+> **已归档的增量验收记录。** 仅证明本页所列固件、窗口和测试范围；不是当前待办。后续进展以现行状态页为准，旧版本的未测项和失败不改写为已通过。 当前配置/任务见[项目状态](../Project_State.md)，阅读范围见[文档导航](../README.md)。
+
 日期：2026-10-22。用户已批准[本次单一目标](../Plans/2026-10-22_Audio_Frame_Index_Design.md)。
 **Build=PASS；主机测试=PASS；Flash=PASS；Runtime=PASS_WITH_POLLING_JITTER_NOTE。**
 本次编号与原业务正常窗口通过；旧codec 2050ms经验警戒未通过，详见实测边界。当前板为SBCG-M3.2-INDEX；验证结果随本增量归档提交，不推进M3.2.2。

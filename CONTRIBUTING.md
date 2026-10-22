@@ -6,15 +6,15 @@
 
 - `master`：共享文档和已验证的软件增量；查看[Project_State.md](Docs/Project_State.md)了解固件验收状态，不把分支名当作硬件验证证明。
 - `jxq/<topic>`：本仓库维护者的开发或审阅分支。一次分支聚焦一个目标；其他成员的前缀由团队约定。
-- `jxq/m0-clock-review`：当前审阅分支，包含连接/构建诊断修复及本板启动实测记录；具体验证范围以Project_State为准，不沿用“仅编译通过”的旧描述。
+- `jxq/m0-clock-review`：当前单板开发/审阅分支，已推进至M3.2.2实物验收；具体验证范围以Project_State为准，不沿用“仅编译通过”的旧描述。
 
-建议开始顺序：
+先确认团队集成基线；以下以当前开发分支为例（不要假定master已含最新实验）：
 
 ```powershell
 git status
 git fetch origin
-git switch master
-git pull --ff-only origin master
+git switch jxq/m0-clock-review
+git pull --ff-only origin jxq/m0-clock-review
 git switch -c jxq/your-topic
 ```
 

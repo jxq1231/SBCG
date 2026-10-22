@@ -1,5 +1,9 @@
 # M2.2.1 Four-Timestamp Estimator Implementation Plan
 
+<!-- doc-status: archived-plan; reviewed: 2026-10-23 -->
+
+> **已完成的历史方案，请勿重复实施。** 仅保留当时范围、授权和生成检查；其中“当前/下一步/待验”均按原日期理解，不构成新授权。验收见[对应报告](../Milestones/M2_2_Sync_Estimator.md)，现行入口见[文档导航](../README.md)。
+
 > 使用superpowers:executing-plans在现有jxq功能分支按清单执行；不新建工作树。实现后按superpowers:requesting-code-review进行只读复核。
 
 **Goal:** 用纯C实现已确认的四时间戳偏差/路径时延估算器，并独立验证数值和失败边界。

@@ -1,5 +1,9 @@
 # M3.1 音频采集中温度模式切换联动实验
 
+<!-- doc-status: completed-evidence; reviewed: 2026-10-23 -->
+
+> **已归档的增量验收记录。** 仅证明本页所列固件、窗口和测试范围；不是当前待办。后续进展以现行状态页为准，旧版本的未测项和失败不改写为已通过。 本轮当时未发声；M3.1受控发声后来已由[sound-02补齐](M3_1_Audio_DMA.md)。 当前配置/任务见[项目状态](../Project_State.md)，阅读范围见[文档导航](../README.md)。
+
 日期：2026-10-22。**本轮联动实验通过，受控声学响应仍未验证。**
 状态：PASS_MANUAL_TEMPERATURE_WITH_AUDIO_NETWORK。
 

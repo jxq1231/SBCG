@@ -1,5 +1,9 @@
 # M2.2.3 Sync Observation Implementation Plan
 
+<!-- doc-status: archived-plan; reviewed: 2026-10-23 -->
+
+> **已完成的历史方案，请勿重复实施。** 仅保留当时范围、授权和生成检查；其中“当前/下一步/待验”均按原日期理解，不构成新授权。验收见[对应报告](../Milestones/M2_2_Sync_Observation.md)，现行入口见[文档导航](../README.md)。
+
 > 执行superpowers:subagent-driven-development；沿用用户当前功能分支，按批准设计实施一个主机回放增量。每步先失败测试后实现，最终统一验证提交。
 
 **Goal:** 30组已验收样本各调用一次原C估算器，输出来源和完整键可追溯的偏移/模型时延。

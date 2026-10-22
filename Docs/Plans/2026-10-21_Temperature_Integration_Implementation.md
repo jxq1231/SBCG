@@ -1,5 +1,9 @@
 # T1.1 DHT11与声速 Implementation Plan
 
+<!-- doc-status: archived-plan; reviewed: 2026-10-23 -->
+
+> **已完成的历史方案，请勿重复实施。** 仅保留当时范围、授权和生成检查；其中“当前/下一步/待验”均按原日期理解，不构成新授权。验收见[对应报告](../Milestones/T1_1_Temperature.md)，现行入口见[文档导航](../README.md)。 R1当时未测拔插；后续T1.2固件已[连续补验](../Milestones/T1_1_Temperature_Replug.md)，不改写R1未勾项。
+
 > 按逐项实施与验证流程执行；可使用superpowers:executing-plans。项目AGENTS.md的CubeMX、单增量和实物后功能提交要求优先于通用技能示例。
 
 **Goal:** 当前板DHT11的有效温度转换为统一整数声速并可经串口验收。

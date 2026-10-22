@@ -1,5 +1,9 @@
 # M2.2.2 实施清单
 
+<!-- doc-status: archived-plan; reviewed: 2026-10-23 -->
+
+> **已完成的历史方案，请勿重复实施。** 仅保留当时范围、授权和生成检查；其中“当前/下一步/待验”均按原日期理解，不构成新授权。验收见[对应报告](../Milestones/M2_2_Time_Exchange.md)，现行入口见[文档导航](../README.md)。
+
 > 执行：superpowers:subagent-driven-development；电脑工具与固件服务独立分工，集成及复核由主任务负责。沿用用户当前功能分支和项目Docs/Plans约定。
 
 **Goal:** 单板每秒回应专用UDP请求，以同一会话键回报真实RX和ACK TX，电脑保存30组四时刻样本。

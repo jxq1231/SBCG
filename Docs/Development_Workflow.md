@@ -1,6 +1,10 @@
 # 开发、构建与调试工作流
 
-更新：2026-10-18。适用于现有SBCG GCC/CMake工程；硬件状态集中记录在[Project_State.md](Project_State.md)。用户已确认VS Code Build正常，本机不再有待复验的`$gcc`引用问题。
+<!-- doc-status: current-workflow; reviewed: 2026-10-23 -->
+
+> 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。
+
+更新：2026-10-23。适用于现有SBCG GCC/CMake工程；硬件状态集中记录在[Project_State.md](Project_State.md)。用户已确认VS Code Build正常，本机不再有待复验的`$gcc`引用问题。
 
 ## 1. 环境与配置
 
@@ -81,7 +85,7 @@ ETH已生成时，构建后另运行`python -B Tools/Monitor/check_eth_layout.py
 
 ## 5. 验证边界与工具来源
 
-10项主机行为测试、Debug/Release构建、clangd及地址定位已有本机通过记录；2026-10-18再次Debug构建和单板调试复位启动通过，随后用户确认VS Code Build界面正常。其它电脑的路径、驱动和扩展仍需按实际环境核对。
+初期10项主机行为测试、Debug/Release构建、clangd及地址定位已有当时通过记录；当前工具测试83项、Analysis61项（M3.2.2基线），本轮新增验证见当前里程碑；2026-10-18再次Debug构建和单板调试复位启动通过，随后用户确认VS Code Build界面正常。其它电脑的路径、驱动和扩展仍需按实际环境核对。
 
 主机脚本参考[STM32_AutoDebug_Universal_Kit](https://github.com/TaoCosmo-Dev/STM32_AutoDebug_Universal_Kit/tree/8434f26644ba4c677dc7db489d3a9570db00cf71)的阶段化诊断思路，独立实现CMake/GCC适配。当前没有自动采集固件运行日志、异常现场或自动修复闭环；不能把脚本名称理解成这些功能已具备。
 
@@ -93,4 +97,4 @@ ETH已生成时，构建后另运行`python -B Tools/Monitor/check_eth_layout.py
 
 此前页面曾记录`SerialPort.open`失败，原因尚未追溯确定；用户现已回传BOOT及21条心跳，发送路径通过。若以后重现，关闭自动重连及其它占用同一端口的串口窗口，再手动连接。不要把网页能打开或端口已枚举当作收发通过。
 
-USART1的PA9/TX、PB7/RX、PCLK2及生成参数已核对，Debug构建通过。本次启动信息/每秒心跳已接入，5项应用主机行为测试通过；用户实物日志已确认本版本启动信息和21条心跳接收正常；MCU接收和命令解析未实现。以后复验应先烧录相应固件、连接网页后复位再检查输出。具体操作、检查表及ELF边界见[SerialWeb.md](SerialWeb.md)。当前COM编号只代表这台电脑的枚举，不写死为所有人的端口。
+USART1的PA9/TX、PB7/RX、PCLK2及生成参数已核对，Debug构建通过。本次启动信息/每秒心跳已接入，5项应用主机行为测试通过；用户实物日志已确认本版本启动信息和21条心跳接收正常；MCU接收/手动设温已在T1.2及后续音频联动验收；操作见SerialWeb页首。需要观察BOOT时先连接再复位；仅检查现有输出时无需重新烧录。具体操作、检查表及ELF边界见[SerialWeb.md](SerialWeb.md)。当前COM编号只代表这台电脑的枚举，不写死为所有人的端口。

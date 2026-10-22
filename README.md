@@ -21,6 +21,8 @@
   <a href="https://github.com/jxq1231/SBCG/issues">任务与讨论</a>
 </p>
 
+<!-- doc-status: current-summary; reviewed: 2026-10-23 -->
+
 ## 项目介绍
 
 SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。目标是在板端完成以太网时间同步、声音事件采集、到达时间差计算和温度补偿，并在两块板上显示一致的测量结果。
@@ -40,54 +42,28 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**M3.2.2本地PTP/DMA位置锚点已通过正常窗口验收：90次观测全部有效，夹取宽度0～1帧；原采集无丢块，80包UDP、两组30请求/板端计算和自动温度/codec通过。** 相对本地PTP的DMA进度长窗口平均率约47991.046～47991.091Hz。codec轮询最大2068ms如实保留；仍LOCAL/SYNC=0，尚未校准物理声学到达时间或完成双板同步。见[完整结果与边界](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md)。
+更新：2026-10-23。最近板端验收为 **M3.2.2 / SBCG-M3.2-ANCHOR**：90个有效锚点、宽度0～1帧，90对音频位置连续；80包UDP、两组30请求及自动温度/codec通过。相对本地PTP的平均率约47991.046～47991.091Hz。codec最大轮询2068ms保留，仍LOCAL/SYNC=0。[完整证据与限制](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md)。
 
-**M3.2.1单板音频帧编号已验收：90秒取得89对有效位置、522块/4276224帧，无已知缺口、丢块或编号错误；80包UDP、两组30请求/板端计算和自动温度通过。** 新增采集会话、连续帧范围与异常标记；codec最大2051ms使旧2050ms经验警戒未通过、心跳最大1052ms均保留说明。仍LOCAL/SYNC=0，不代表PTP样本映射、事件检测或测距通过。见[本轮结果与边界](Docs/Milestones/M3_2_1_Audio_Frame_Index.md)。
+当前批准实施 **M3.2.3纯C帧位置时间估算与归档数据回放**，先整理文档再实现；此时尚未完成，不接入固件、不烧录。[当前工作](Docs/Plans/M3_2_3/task_plan.md)。
 
-**M3.1单板音频采集已验收：SAI2/DMA、标称48kHz、PCM16双通道。受控发声两路RMS中位数提高30.44×/28.75×，连续采集无丢块及硬件错误；通道0有3条瞬时峰值触顶，边界如实记录。5分钟稳定性、自动/手动温度切换及原网络/PTP联合回归通过，仍LOCAL/SYNC=0。** 见[完整结果与限制](Docs/Milestones/M3_1_Audio_DMA.md)、[安静稳定性](Docs/Milestones/M3_1_Quiet_Stability.md)、[温度联动](Docs/Milestones/M3_1_Temperature_Coexistence.md)。采样到PTP的映射、声音检测和测距仍为后续目标。
-
-**此前T1.1正常温度采样通过：当时SBCG-T1.1-TEMP-R1经授权烧录，90秒取得17个正式版本，25.7℃、声速346.874m/s，温度及串口错误0；原70个UDP包零缺口，两组30请求及板端计算核对通过。用户延后传感器拔插测试，故障恢复尚未实测。** 见[本轮记录与边界](Docs/Milestones/T1_1_Temperature.md)。
-
-**此前M2.2.4板端实时估算观测通过：当时SBCG-M2.2-OBS经本版本授权烧录、校验和复位，30组板端结果与真实C参考逐条完全一致；旧30组RX/TX/ACK、70包零缺口、90条PTP/心跳连续，异常计数0。248项检查、两配置构建/布局、457文件实际再生成及独立软件审查通过。仍为单板LOCAL/SYNC=0。** 见[本轮记录](Docs/Milestones/M2_2_Board_Observation.md)。
-
-**最新主机增量M2.2.3已通过：将已验收的30组真实四时刻交给原C估算器，逐条返回OK；42项新增与原177项回归共219项检查、两配置构建/布局和独立复核通过。固件、加载内容及原始日志均保持不变，未烧录或访问硬件，仍为LOCAL/SYNC=0。** 见[结果、限制与复验](Docs/Milestones/M2_2_Sync_Observation.md)。
-
-**前一板端基线M2.2.2单板UDP时间戳回报通过实物验收：新5007/6007服务以会话键关联请求RX及ACK TX硬件时间，电脑保存来源明确的四时刻样本。SBCG-M2.2-IO经授权烧录校验，30组新样本与原30组RX/TX/ACK全部匹配；70包零缺口、90条PTP/心跳连续，错误及溢出0。177项主机检查、两配置构建/布局、444文件实际再生成及复核亦通过；仍为LOCAL/SYNC=0，未校时或检查第二板。** 见[协议](Docs/Protocol.md)和[本轮记录](Docs/Milestones/M2_2_Time_Exchange.md)。
-
-**此前M2.2.1已完成四时间戳估算器的纯算法验收：13组、1044次真实函数调用（含1000物理模型）验证偏差符号、路径时延和边界；原109项回归、两配置构建/布局及只读复核通过。函数尚未接入App运行，Debug/Release ELF及加载内容与板端基线完全一致，本轮未烧录、未校时。** 见[M2.2.1结果与边界](Docs/Milestones/M2_2_Sync_Estimator.md)。
-
-**截至2026-10-20：M2.1.3单板RX/TX硬件时间戳关联通过实物验收。SBCG-M2.1-TX经授权烧录、校验和复位，30个电脑请求各匹配唯一DMA接收时间、发送时间及ACK；70个UDP包零缺口，91条PTP状态/心跳连续，错误及溢出0。109项主机检查、Debug/Release构建/布局、实际Generate Code回归及复核通过。时钟仍为LOCAL/SYNC=0，两板同步和整机测距尚未实现；当前不检查第二板。** 见[M2.1.3实测与复验](Docs/Milestones/M2_1_PTP_TX.md)。下述旧版本结果各自保留，不直接充当新版本证据。
-
-| 内容 | 状态 | 入口 |
+| 范围 | 当前结论 | 记录 |
 | --- | --- | --- |
-| 工程与工具链 | STM32F746NGH6 / TFBGA216，CubeMX 6.18.1，CubeF7 V1.17.4 | [工程配置](SBCG.ioc) |
-| 主机开发工作流 | 环境检查、Debug/Release构建、日志报告、地址定位已完成 | [操作指南](Docs/Development_Workflow.md) |
-| M0.2串口观测 | 启动信息/每秒心跳代码、5项主机行为测试和Debug构建通过；用户已提供BOOT及21条心跳，板端发送通过 | [SerialWeb使用与配置核对](Docs/SerialWeb.md) |
-| M0.1系统时钟 | 200 MHz / HSE Bypass，**当前单板调试复位启动通过** | [实物报告](Docs/Milestones/M0_1_Startup.md) |
-| 两板UID与角色 | 已读当前单板真实UID；第二板及A/B指定待补录 | [当前状态](Docs/Project_State.md) |
-| M1.1以太网物理链路 | 用户日志确认PHY地址0、ID=0007/C131、100 Mbps全双工，DOWN→UP→DOWN→UP；最后一段98条心跳正常 | [实物验收](Docs/Milestones/M1_1_Ethernet_Setup.md#10-用户实物日志验收结果) |
-| M1.2 LwIP集成 | SBCG-M1.2-INT启动、12条连续心跳、100 Mbps全双工及ping 4/4回复通过；该版本无UDP应用 | [集成与实物验收](Docs/Milestones/M1_2_UDP_Setup.md#8-用户实物验收2026-10-19) |
-| M1.2 单向UDP | 正常窗口31包零缺口；两组各两次拔插均恢复，最新一组已联合核对PHY、心跳与14个本地跳过时隙；序号/tick延续 | [实物结果与复验](Docs/Milestones/M1_2_UDP_Send.md#第二组拔插与串口联合验收2026-10-19) |
-| M1.3 请求/应答 | 电脑30发30收，来源/UID/序号/请求标记匹配；串口VALID=30、ACK_OK=30，心跳连续，错误项均0；71项主机检查通过 | [实物结果与复验](Docs/Milestones/M1_3_UDP_Request_Reply.md#用户实物验收2026-10-20) |
-| M1.4 双向UDP恢复 | 两次PHY断开后均恢复；41个匹配应答、19次断线窗口超时；5005的19个缺口与本地跳过对应，90条心跳连续 | [自动采集联合验收](Docs/Milestones/M1_4_UDP_Reconnect.md) |
-| M2.1.1 本地PTP时钟 | 88条LOCAL/SYNC=0单调时间；本版本UDP 70包零缺口、30/30应答；已授权烧录校验 | [代码、再生成与实物验收](Docs/Milestones/M2_1_PTP_Clock.md) |
-| M2.1.2 RX事件关联 | 30个请求各匹配唯一DMA时间及ACK，70包零缺口，98条PTP/心跳连续；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_RX.md) |
-| M2.1.3 TX事件关联 | 本版本30组唯一RX/TX/ACK，70包零缺口，91条PTP/心跳；错误/溢出0 | [实物结果与复验](Docs/Milestones/M2_1_PTP_TX.md) |
-| T1.1 温度与声速 | 本版本17次正常采样、原网络通过；拔插恢复延后，单板未同步 | [本次实测与范围](Docs/Milestones/T1_1_Temperature.md) |
-| M2.2.4 板端实时估算 | 本版本30组与真实C逐条一致，原网络通过；未校时 | [联合实物验收](Docs/Milestones/M2_2_Board_Observation.md) |
-| M2.2.3 真实样本估算链 | 归档30组均由原C返回OK；219项检查通过，固件和原始数据不变 | [主机回放验证](Docs/Milestones/M2_2_Sync_Observation.md) |
-| M2.2.2 时间戳数据链 | 30组新样本、原30组RX/TX/ACK、70包零缺口、90条PTP/心跳；本版本实物验收通过 | [实现及验收记录](Docs/Milestones/M2_2_Time_Exchange.md) |
-| M2.2.1 估算数学内核 | 13组/1044次调用、含1000物理模型；未接入运行或校时，加载内容保持不变 | [纯算法结果与复验](Docs/Milestones/M2_2_Sync_Estimator.md) |
-| 显示 / 双板同步 / 测距 | 后续目标；音频单板采集已在M3.1验收 | [资源规划](Docs/Hardware_Resources.md) |
+| 系统与串口 | 200MHz启动、USART1日志及RX命令均已分版实测 | [当前状态](Docs/Project_State.md) |
+| 单板网络/PTP | UDP、重连、RX/TX戳、时间交换和板端估算观测已实测 | [协议](Docs/Protocol.md) |
+| 温度 | DHT11 3.3V/PG7正常采集、手动设温及连续拔插恢复已实测 | [手动温度](Docs/Milestones/T1_2_Manual_Temperature.md)、[恢复](Docs/Milestones/T1_1_Temperature_Replug.md) |
+| 音频 | codec ID、PCM连续采集/受控响应、帧编号和本地PTP锚点已实测 | [M3.1](Docs/Milestones/M3_1_Audio_DMA.md)、[M3.2.2](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md) |
+| 双板同步/PPS、声学时间校准、检测/测距、LCD | 尚未完成；当前不检查第二板 | [课程路线](Docs/Project_Roadmap.md) |
+
+历史方案和各版实验按需查[文档状态表](Docs/Document_Status.md)，勿从旧计划重复配置/烧录。
 
 完整要求及实施顺序见[任务书路线与验收矩阵](Docs/Project_Roadmap.md)，当前实测范围见[项目状态](Docs/Project_State.md)。路线优先建立观测、网络与统一时间，再完成声音检测、测距和基础LCD；基础60分闭环后推进提高功能。所有文档从[Docs入口](Docs/README.md)阅读。
 
 | 里程碑 | 验收目标 | 当前状态 |
 | --- | --- | --- |
-| M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收未实现 |
+| M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收及手动设温已由T1.2验收 |
 | M1 | 以太网链路与双向UDP通信 | 本板与电脑正常请求/应答、两次链路恢复及5005接收已验证；两板UDP未实现 |
 | M2 | 时间同步及PPS精度验证 | 本地时钟、RX/TX、UDP时间戳回报及板端估算观测通过；两板同步及PPS待实现 |
-| M3 | 音频DMA采集 | M3.1连续采集/幅度响应已验收；M3.2时间映射待设计 |
+| M3 | 音频DMA采集 | M3.1连续采集/幅度响应已验收；M3.2.1编号/M3.2.2锚点通过；M3.2.3估算器实施中 |
 | M4 | 声音事件检测 | 未开始 |
 | M5 | TDOA测量及标定 | 未开始 |
 | M6 / M7 | 课程基础 / 提高要求验收 | 未开始 |
@@ -159,12 +135,12 @@ SBCG/
 └── SBCG.ioc              CubeMX硬件配置源
 ```
 
-`build/`、`Logs/`和`compile_commands.json`为本机生成内容。`App/`已有应用调度、串口和PHY监视模块；后续只按当前里程碑需要扩展。
+`build/`、`Logs/`和`compile_commands.json`为本机生成内容。`App/`已有串口、网络/PTP观测、温度和音频模块；后续只按当前里程碑需要扩展。
 
 ## 一起开发
 
 1. 先在[Issues](https://github.com/jxq1231/SBCG/issues)说明本次目标、资源影响和验收方法。
-2. 从最新`master`创建一个职责明确的分支，使用`jxq/<topic>`命名；成员可由团队另行约定自己的前缀。
+2. 先确认团队当前集成基线（本轮为`jxq/m0-clock-review`，勿假定master已含最新实验），再创建职责明确的分支，使用`jxq/<topic>`命名；成员可由团队另行约定自己的前缀。
 3. 每次推进一个独立可测试增量，提交后发起PR，并写明编译、烧录和实物验证分别进行到哪一步。
 4. `.ioc`、主PLL、TIM2、DMA、NVIC等共享资源变更先沟通，再通过CubeMX生成；不手改生成硬件配置。
 5. 用Issue记录问题、PR讨论代码、`Docs/`保存可复核结论。尚未验收的硬件快照保持草稿PR状态。

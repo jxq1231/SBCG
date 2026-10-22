@@ -1,5 +1,9 @@
 # M2.1.3 TX Hardware Timestamp Implementation Plan
 
+<!-- doc-status: archived-plan; reviewed: 2026-10-23 -->
+
+> **已完成的历史方案，请勿重复实施。** 仅保留当时范围、授权和生成检查；其中“当前/下一步/待验”均按原日期理解，不构成新授权。验收见[对应报告](../Milestones/M2_1_PTP_TX.md)，现行入口见[文档导航](../README.md)。
+
 > 使用superpowers:executing-plans在现有jxq功能分支逐项执行，不新建工作树；功能提交需实物通过。
 
 **Goal:** 为30个原UDP应答取得唯一匹配的TX硬件时间，保持既有RX和网络行为。
