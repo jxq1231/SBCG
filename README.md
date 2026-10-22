@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M3.2.2%20%7C%20Local%20PTP%20Anchor-0f766e?style=flat-square" alt="M3.2.2本地PTP与音频DMA位置锚点通过">
+  <img src="https://img.shields.io/badge/Stage-M3.2.3%20%7C%20Software%20Replay-0f766e?style=flat-square" alt="M3.2.3纯软件回放通过，板端仍为M3.2.2">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -44,7 +44,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 更新：2026-10-23。最近板端验收为 **M3.2.2 / SBCG-M3.2-ANCHOR**：90个有效锚点、宽度0～1帧，90对音频位置连续；80包UDP、两组30请求及自动温度/codec通过。相对本地PTP的平均率约47991.046～47991.091Hz。codec最大轮询2068ms保留，仍LOCAL/SYNC=0。[完整证据与限制](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md)。
 
-当前批准实施 **M3.2.3纯C帧位置时间估算与归档数据回放**，先整理文档再实现；此时尚未完成，不接入固件、不烧录。[当前工作](Docs/Plans/M3_2_3/task_plan.md)。
+**M3.2.3纯C帧位置时间估算与归档回放已通过**：4030组真实C/Fraction一致，30个留出点最大绝对残差13.004us、RMS7.284us。属于线性模型下的LOCAL PTP/DMA位置估算，未校准声学延迟；未接入板端、ELF不变，无新烧录。[本轮软件验收](Docs/Milestones/M3_2_3_Audio_Time_Map.md)。
 
 | 范围 | 当前结论 | 记录 |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收及手动设温已由T1.2验收 |
 | M1 | 以太网链路与双向UDP通信 | 本板与电脑正常请求/应答、两次链路恢复及5005接收已验证；两板UDP未实现 |
 | M2 | 时间同步及PPS精度验证 | 本地时钟、RX/TX、UDP时间戳回报及板端估算观测通过；两板同步及PPS待实现 |
-| M3 | 音频DMA采集 | M3.1连续采集/幅度响应已验收；M3.2.1编号/M3.2.2锚点通过；M3.2.3估算器实施中 |
+| M3 | 音频DMA采集 | M3.1连续采集/幅度响应已验收；M3.2.1编号/M3.2.2锚点通过；M3.2.3纯算法/留出回放通过，未接入板端 |
 | M4 | 声音事件检测 | 未开始 |
 | M5 | TDOA测量及标定 | 未开始 |
 | M6 / M7 | 课程基础 / 提高要求验收 | 未开始 |

@@ -4,7 +4,7 @@
 
 更新：2026-10-23。当前板端已验收标识为 **SBCG-M3.2-ANCHOR**。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS和AUDIO_ANCHOR仅为串口行。
 
-M3.2.3当前仅实施纯算法与离线回放，不新增网络字段、串口命令或板端运行入口。当前状态见[Project_State](Project_State.md)。
+M3.2.3已完成纯算法与离线回放验证，不新增网络字段、串口命令或板端运行入口。当前状态见[Project_State](Project_State.md)。
 
 ## M3.1 音频串口状态（连续数据流及受控幅度响应已实测）
 
@@ -246,3 +246,9 @@ PTP读取失败/非法纳秒为PTP；同会话相对前个已接受锚点PTP倒�
 NDTR语义及[ST AN4031依据](https://www.st.com/resource/en/application_note/dm00046011.pdf)、完整限制和实机门槛见[M3.2.2记录](Milestones/M3_2_2_Audio_PTP_Anchor.md)。
 
 2026-10-23本版本实测90次锚点全部有效，宽度0/1帧；原音频/位置、80包UDP、两组30请求及温度/codec联合检查通过。相对本地PTP的DMA进度平均率范围不等于声学时间校准；codec最大2068ms作为前台轮询抖动保留，详见本轮milestone。
+
+## M3.2.3 离线时间估算（纯软件已验证）
+
+本轮不新增UDP/串口报文。`AudioTimeMap_Estimate`接受同一BOOT/UID及SESSION的两端锚点和目标NDTR坐标，输出uint64纳秒的estimate/model_lower/model_upper及valid；状态0..8定义见[接口](../App/Audio/audio_time_map.h)。这是线性模型下的游标量化区间，不是麦克风声学时间误差界；不外推，失败输出清零。
+
+该内核未接入固件源列表或App调度，当前板端输出仍按M3.2.2。4030组C/Fraction对照及30留出点回放通过，不新增实物同步/检测/测距结论；见[M3.2.3软件记录](Milestones/M3_2_3_Audio_Time_Map.md)。
