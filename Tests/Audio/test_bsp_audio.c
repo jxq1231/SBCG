@@ -1,5 +1,6 @@
 #include "BSP/bsp_audio.h"
 #include "BSP/bsp_audio_codec.h"
+#include "Audio/audio_frame_index.h"
 #include "main.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,24 +58,34 @@ int main(void)
     CHECK(BSP_Audio_Stop() && stops==0);
     CHECK(BSP_Audio_Start());CHECK(starts==1 && Snapshot().running);
     CHECK(Snapshot().derived_milli_hz==47991071U);
+    const uint32_t first_session=Snapshot().session;
+    CHECK(first_session!=0U && Snapshot().observed_frames==0U && Snapshot().index_faults==0U);
     CHECK(!BSP_Audio_Start() && configs==1 && starts==1);
     CHECK(!BSP_Audio_BeginBlock(&block));
     Half(171);CHECK(BSP_Audio_BeginBlock(&block));
     CHECK(block.samples==buffer && block.half==0 && block.completed_ms==171);
+    CHECK(block.session==first_session && block.first_frame==0U && block.frame_count==8192U);
+    CHECK(block.index_valid && block.contiguous && block.gap_frames==0U);
+    BSP_AudioBlock old_token=block;
     CHECK(!BSP_Audio_BeginBlock(&block));
     CHECK(BSP_Audio_EndBlock(&block,true));CHECK(!BSP_Audio_EndBlock(&block,true));
     CHECK(!BSP_Audio_BeginBlock(&block));
     Full(342);CHECK(BSP_Audio_BeginBlock(&block));
     CHECK(block.samples==buffer+16384 && block.half==1);
+    CHECK(block.first_frame==8192U && block.contiguous && block.gap_frames==0U);
     CHECK(BSP_Audio_EndBlock(&block,true));
     CHECK(Snapshot().half_count==1 && Snapshot().full_count==1 && Snapshot().processed_blocks==2 && Snapshot().dropped_blocks==0);
     puts("PASS: startup ordering, DMA size/alignment, alternating ownership and single completion");
     Half(513);Full(684);Half(855);
-    CHECK(BSP_Audio_BeginBlock(&block) && block.half==0);CHECK(BSP_Audio_EndBlock(&block,true));
+    CHECK(BSP_Audio_BeginBlock(&block) && block.half==0);
+    CHECK(block.first_frame==32768U && block.gap_frames==16384U && !block.contiguous && block.index_valid);
+    CHECK(BSP_Audio_EndBlock(&block,true));
     CHECK(Snapshot().dropped_blocks==2);
     Full(1026);CHECK(BSP_Audio_BeginBlock(&block));Half(1197);
     CHECK(!BSP_Audio_EndBlock(&block,true));CHECK(Snapshot().dropped_blocks==3);
-    CHECK(BSP_Audio_BeginBlock(&block));CHECK(BSP_Audio_EndBlock(&block,false)==false);
+    CHECK(BSP_Audio_BeginBlock(&block));
+    CHECK(block.first_frame==49152U && block.gap_frames==8192U && block.index_valid);
+    CHECK(BSP_Audio_EndBlock(&block,false)==false);
     CHECK(Snapshot().dropped_blocks==4);
     Full(1368);CHECK(BSP_Audio_BeginBlock(&block));
     dma.flags=1;dma.remaining=16384;
@@ -84,6 +95,7 @@ int main(void)
     dma.flags=0;Full(1710);dma.remaining=0;
     CHECK(!BSP_Audio_BeginBlock(&block));CHECK(Snapshot().dropped_blocks==7);
     dma.remaining=32768;Half(1881);CHECK(BSP_Audio_BeginBlock(&block));
+    CHECK(block.first_frame==81920U && block.gap_frames==40960U && !block.contiguous);
     CHECK(BSP_Audio_EndBlock(&block,true));
     puts("PASS: late consumer, overwrite during compute, pending IRQ boundary, reload edge and recovery");
     test_primask=1;(void)Snapshot();CHECK(test_primask==1);test_primask=0;
@@ -91,8 +103,12 @@ int main(void)
     HAL_SAI_RxHalfCpltCallback(&hsai_BlockA2);HAL_SAI_RxCpltCallback(NULL);
     CHECK(Snapshot().callback_count==before);
     Half(2000);CHECK(Snapshot().error_count==1);
+    CHECK((Snapshot().index_faults&AUDIO_INDEX_ORDER)!=0U);
+    CHECK(BSP_Audio_BeginBlock(&block) && !block.index_valid && !block.contiguous);
+    CHECK(BSP_Audio_EndBlock(&block,true));
     hsai_BlockB2.ErrorCode=16;dma.ErrorCode=8;HAL_SAI_ErrorCallback(&hsai_BlockB2);
     CHECK(!Snapshot().running && Snapshot().hal_error==16 && Snapshot().dma_error==8);
+    CHECK((Snapshot().index_faults&AUDIO_INDEX_HAL_ERROR)!=0U);
     CHECK(!BSP_Audio_BeginBlock(&block));
     before=Snapshot().callback_count;Full(2100);CHECK(Snapshot().callback_count==before);
     CHECK(BSP_Audio_Stop() && (a.CR1&1U)==0 && stops==1);
@@ -108,7 +124,20 @@ int main(void)
     start_result=HAL_OK;error_during_start=true;
     CHECK(!BSP_Audio_Start() && !Snapshot().running && a.CR1==0);
     error_during_start=false;CHECK(BSP_Audio_Stop());
+    CHECK(BSP_Audio_Start());Half(2200);
+    CHECK(BSP_Audio_BeginBlock(&block) && block.session>first_session && block.first_frame==0U);
+    /* All fields collide except the boot-local session: reject stale identity. */
+    old_token=block;old_token.session=first_session;
+    CHECK(!BSP_Audio_EndBlock(&old_token,true));
+    CHECK(BSP_Audio_EndBlock(&block,true));
+    Full(2451);CHECK(BSP_Audio_BeginBlock(&block) && !block.index_valid);
+    CHECK((Snapshot().index_faults&AUDIO_INDEX_LATE)!=0U);
+    CHECK(BSP_Audio_EndBlock(&block,true));Half(2622);
+    CHECK(BSP_Audio_BeginBlock(&block) && !block.index_valid);
+    CHECK(BSP_Audio_EndBlock(&block,true));CHECK(BSP_Audio_Stop());
+    tick_ms=UINT32_MAX-181U;
     CHECK(BSP_Audio_Start());Half(UINT32_MAX-10U);Full(160);
+    CHECK(Snapshot().observed_frames==16384U && Snapshot().index_faults==0U);
     CHECK(Snapshot().first_callback_ms==UINT32_MAX-10U && Snapshot().last_callback_ms==160);
     stop_result=HAL_ERROR;CHECK(!BSP_Audio_Stop());CHECK(Snapshot().start_error==5);
     unsigned old_configs=configs;CHECK(!BSP_Audio_Start() && configs==old_configs);

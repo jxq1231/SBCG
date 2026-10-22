@@ -175,3 +175,40 @@ CONSOLE 字段 RX_ERRORS、RX_OVERFLOWS、RX_REARM_ERRORS 都是饱和 uint32 �
 2026-10-22补充实测：T1.2固件完成一次DHT11物理拔插恢复观察；HOLD_LAST/STALE保留旧值与版本、ENV无效值省略、PRIMING不发布新值及后续版本持续增长均已观察。TIMEOUT累计18并在恢复后停止增长。两段主机采集之间存在空档，不能由此证明精确15秒边界或全程连续网络零丢包；见[实测边界](Milestones/T1_1_Temperature_Replug.md)。
 
 后续连续补测（2026-10-22）：T1.2同一固件已在单一约488.9秒窗口完成拔插验证，连续观察到AGE_MS=14744时HOLD_LAST、15744时STALE，ENV无效值省略、预读不发布版本、约5秒后恢复有效版本。488个UDP包序号完整，原30组请求及时间交换通过。此为约1秒日志分辨率的观察，不声称毫秒级过期切换精度；见[连续验收](Milestones/T1_1_Temperature_Replug.md)。
+
+
+## M3.2.1 音频帧位置（正常窗口实机通过）
+
+固件标识 `SBCG-M3.2-INDEX`。原 UDP type1～7、端口、PTP LOCAL/SYNC=0 和温度命令不变。
+原 `$AUDIO` 格式保留，FRAMES 取 uint64_t 观察帧累计值；新增同频率、同 SEQ 的 ASCII/CRLF 行，先 AUDIO 后 AUDIO_POS：
+
+```text
+$AUDIO_POS,SEQ=1,SESSION=1,OBS_FRAMES=40960,FIRST=32768,COUNT=8192,GAP=0,INDEX_VALID=1,CONTIG=1,FAULTS=00000000,VALID=1
+```
+
+以上仅演示格式，不是实机数据。每秒最多一对；日志仍受 DHT 起始低电平延后机制保护。
+
+| 字段 | 宽度、单位及含义 |
+| --- | --- |
+| SEQ | uint32 十进制；与同次 AUDIO 快照匹配，模 2^32 递增 |
+| SESSION | 非零 uint32 十进制；本次 MCU 启动内 DMA 启动尝试号，失败尝试也可能消耗编号；耗尽拒绝启动（START_ERR=6），不回绕 |
+| OBS_FRAMES | uint64 十进制、帧；累计观察到的 DMA 完成边界×8192，不随前台跳过而压缩，溢出时停止增加并标错 |
+| FIRST / COUNT | uint64 / uint32 十进制、帧；最新成功处理块的零基首帧及帧数8192；左右声道同一采样时刻为一帧 |
+| GAP | uint64 十进制、帧；该块相对上一成功 End 末尾的已知未交付范围；首块相对本会话起点0计算 |
+| INDEX_VALID | 0/1；采集中且当前编号尚未发现歧义；不是独立证明硬件没有漏掉完整 DMA 循环 |
+| CONTIG | 0/1；该消费块编号有效且 GAP=0；不能用于证明两条每秒日志之间首尾直接相接 |
+| FAULTS | uint32，固定8位十六进制；1=回调顺序，2=观察间隔超过250ms，4=64位溢出，8=SAI/HAL错误，可组合；会话内锁存 |
+| VALID | 0/1；本行位置来源于成功 End、同会话、未过期且编号可信的块。为0时 FIRST/COUNT/GAP/CONTIG 清零，不能将零解释为有效首帧 |
+
+SESSION 不跨复位唯一；接收端必须以 BOOT 分段，重启或新采集后不能延续上一会话位置。
+GAP 描述相邻成功处理块之间的缺口；每秒日志仅展示最新块，期间曾出现的缺口可能不落在展示块上，必须同时检查累计 DROP。
+即便编号无效，原 AUDIO 仍可用于幅度诊断，不把其 VALID 与 AUDIO_POS 的位置 VALID 混用。
+
+现有约170.7ms半块周期使用250ms保守观察阈值。IRQ标志合并、长关中断造成HAL tick漏计等情况，不能只靠本计数器排除；不可确认的硬件漏采不虚构缺口数量。
+FIRST 是 DMA 数据帧位置，不是麦克风物理到达时间；completed_ms 仍只是回调 HAL tick。本增量不读PTP，不作校时、时间映射或同步精度声明。
+
+正常窗口检查器：`Analysis/audio_position_analysis.py --serial <串口JSONL> --output <新JSON路径>`。
+它要求预期固件BOOT、同一SESSION、原始AUDIO→AUDIO_POS顺序、至少60对连续日志、有效位置与累计计数一致，且DROP/ERR/HAL/DMA/FAULTS为0。
+主机报告恒为hardware_verified=false；采集持续时间、固件哈希、原始串口及原网络联合验收另行核对，不能用行数代替90秒实际运行时间。
+
+2026-10-22本版本实测：89对有效位置、SESSION=1、末观察4276224帧，缺口/编号错误0；原业务联合验收通过。codec最大2051ms和心跳1052ms保留为前台轮询抖动边界，见[M3.2.1完整记录](Milestones/M3_2_1_Audio_Frame_Index.md)。未作PTP时间映射或故障注入实物验收。

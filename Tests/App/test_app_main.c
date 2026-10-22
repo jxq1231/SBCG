@@ -304,7 +304,7 @@ int main(void)
     assert(temperature_initialized && temperature_init_calls==1U);
     assert(console_inits==1U && rx_inits==1U && console_log!=NULL);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M3.1-AUDIO,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M3.2-INDEX,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 

@@ -1,5 +1,6 @@
 #include "bsp_audio.h"
 #include "bsp_audio_codec.h"
+#include "Audio/audio_frame_index.h"
 #include "main.h"
 #include <stddef.h>
 
@@ -10,10 +11,16 @@ extern SAI_HandleTypeDef hsai_BlockA2, hsai_BlockB2;
 static volatile int16_t audio_dma_buffer[BSP_AUDIO_DMA_ELEMENTS]
     __attribute__((section(".AudioDmaSection"), aligned(32)));
 static volatile BSP_AudioSnapshot state;
+static AudioFrameIndex frame_index;
+static uint32_t session_counter;
+static uint64_t delivered_end_frame;
+static BSP_AudioBlock claim;
+_Static_assert(BSP_AUDIO_HALF_FRAMES == AUDIO_INDEX_BLOCK_FRAMES,
+               "Frame index must match the generated DMA buffer layout");
 static bool dma_owned, clock_owned, claimed;
 static volatile bool accepting_callbacks;
 static uint32_t consumed_generation, claim_generation;
-static uint8_t completed_half, expected_half, claim_half;
+static uint8_t completed_half, claim_half;
 
 static uint32_t Lock(void)
 {
@@ -50,6 +57,8 @@ bool BSP_Audio_Stop(void)
 
 bool BSP_Audio_Start(void)
 {
+    if (session_counter == UINT32_MAX)
+    { state.start_error = 6U; return false; }
     if (dma_owned || clock_owned ||
         HAL_SAI_GetState(&hsai_BlockA2) != HAL_SAI_STATE_READY ||
         HAL_SAI_GetState(&hsai_BlockB2) != HAL_SAI_STATE_READY ||
@@ -59,7 +68,8 @@ bool BSP_Audio_Start(void)
     { state.start_error = 1U; return false; }
     state = (BSP_AudioSnapshot){0};
     consumed_generation = claim_generation = 0U;
-    completed_half = expected_half = claim_half = 0U;
+    completed_half = claim_half = 0U;
+    delivered_end_frame = 0U;
     claimed = false;
     const uint32_t source_hz = HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_SAI2);
     const uint32_t divider = hsai_BlockA2.Init.Mckdiv;
@@ -80,6 +90,9 @@ bool BSP_Audio_Start(void)
     state.codec_writes = setup.writes_ok;
     if (codec != BSP_CODEC_OK)
     { state.start_error = 2U; (void)BSP_Audio_Stop(); return false; }
+    /* Boot-local, non-reused attempt identity. Reserve before DMA can IRQ. */
+    state.session = ++session_counter;
+    AudioFrameIndex_Init(&frame_index, HAL_GetTick());
     state.running = true;
     accepting_callbacks = true;
     /* Own cleanup of partially-started HAL transfers as well as successful ones. */
@@ -132,6 +145,13 @@ bool BSP_Audio_BeginBlock(BSP_AudioBlock *block)
     block->samples = audio_dma_buffer + (uint32_t)claim_half * BSP_AUDIO_HALF_ELEMENTS;
     block->generation = generation;
     block->completed_ms = state.last_callback_ms; block->half = claim_half;
+    block->session = state.session;
+    block->frame_count = BSP_AUDIO_HALF_FRAMES;
+    block->first_frame = state.observed_frames - BSP_AUDIO_HALF_FRAMES;
+    block->index_valid = state.index_faults == 0U;
+    block->gap_frames = block->index_valid ? block->first_frame - delivered_end_frame : 0U;
+    block->contiguous = block->index_valid && block->gap_frames == 0U;
+    claim = *block;
     Unlock(old);
     return true;
 }
@@ -141,12 +161,21 @@ bool BSP_Audio_EndBlock(const BSP_AudioBlock *block, bool processed)
     if (block == NULL) { return false; }
     const uint32_t old = Lock();
     if (!claimed || block->generation != claim_generation || block->half != claim_half ||
-        block->samples != audio_dma_buffer + (uint32_t)claim_half * BSP_AUDIO_HALF_ELEMENTS)
+        block->samples != audio_dma_buffer + (uint32_t)claim_half * BSP_AUDIO_HALF_ELEMENTS ||
+        block->session != claim.session || block->first_frame != claim.first_frame ||
+        block->frame_count != claim.frame_count || block->gap_frames != claim.gap_frames ||
+        block->completed_ms != claim.completed_ms || block->index_valid != claim.index_valid ||
+        block->contiguous != claim.contiguous)
     { Unlock(old); return false; }
     const bool valid = processed && state.running &&
         state.callback_count == claim_generation && HalfIsInactive(claim_half);
     claimed = false;
-    if (valid) { ++state.processed_blocks; } else { ++state.dropped_blocks; }
+    if (valid)
+    {
+        ++state.processed_blocks;
+        if (block->index_valid) { delivered_end_frame = block->first_frame + block->frame_count; }
+    }
+    else { ++state.dropped_blocks; }
     Unlock(old);
     return valid;
 }
@@ -154,12 +183,14 @@ bool BSP_Audio_EndBlock(const BSP_AudioBlock *block, bool processed)
 static void Completed(SAI_HandleTypeDef *handle, uint8_t half)
 {
     if (handle != &hsai_BlockB2 || !accepting_callbacks || !state.running) { return; }
-    if (half != expected_half) { ++state.error_count; }
-    expected_half = half ^ 1U;
+    if (half != frame_index.expected_half) { ++state.error_count; }
     if (half == 0U) { ++state.half_count; } else { ++state.full_count; }
     completed_half = half;
     const uint32_t tick_ms = HAL_GetTick();
-    if (state.callback_count == 0U) { state.first_callback_ms = tick_ms; }
+    if (state.observed_frames == 0U) { state.first_callback_ms = tick_ms; }
+    AudioFrameIndex_Complete(&frame_index, half, tick_ms);
+    state.observed_frames = frame_index.frames;
+    state.index_faults |= frame_index.faults;
     state.last_callback_ms = tick_ms;
     __DMB(); ++state.callback_count;
 }
@@ -169,6 +200,7 @@ void HAL_SAI_ErrorCallback(SAI_HandleTypeDef *handle)
 {
     if (handle != &hsai_BlockB2 || !accepting_callbacks) { return; }
     ++state.error_count;
+    state.index_faults |= AUDIO_INDEX_HAL_ERROR;
     state.hal_error |= HAL_SAI_GetError(handle);
     state.dma_error |= HAL_DMA_GetError(handle->hdmarx);
     state.running = false;

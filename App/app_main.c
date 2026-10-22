@@ -23,7 +23,7 @@
 #include <string.h>
 
 #if defined(SBCG_USE_AUDIO)
-#define APP_FIRMWARE_ID "SBCG-M3.1-AUDIO"
+#define APP_FIRMWARE_ID "SBCG-M3.2-INDEX"
 #elif defined(SBCG_USE_LWIP)
 #define APP_FIRMWARE_ID "SBCG-M3.0-CODEC"
 #else

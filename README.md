@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M3.1%20%7C%20Audio%20Capture-0f766e?style=flat-square" alt="M3.1单板音频采集与幅度响应通过">
+  <img src="https://img.shields.io/badge/Stage-M3.2.1%20%7C%20Frame%20Index-0f766e?style=flat-square" alt="M3.2.1单板音频帧编号通过">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -39,6 +39,8 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 > 测距布置和声源位置决定TDOA对应的物理含义，详见[硬件资源与测量约定](Docs/Hardware_Resources.md)。电脑用于开发、观察和设参，最终测量在板端完成。
 
 ## 项目进度
+
+**M3.2.1单板音频帧编号已验收：90秒取得89对有效位置、522块/4276224帧，无已知缺口、丢块或编号错误；80包UDP、两组30请求/板端计算和自动温度通过。** 新增采集会话、连续帧范围与异常标记；codec最大2051ms使旧2050ms经验警戒未通过、心跳最大1052ms均保留说明。仍LOCAL/SYNC=0，不代表PTP样本映射、事件检测或测距通过。见[本轮结果与边界](Docs/Milestones/M3_2_1_Audio_Frame_Index.md)。
 
 **M3.1单板音频采集已验收：SAI2/DMA、标称48kHz、PCM16双通道。受控发声两路RMS中位数提高30.44×/28.75×，连续采集无丢块及硬件错误；通道0有3条瞬时峰值触顶，边界如实记录。5分钟稳定性、自动/手动温度切换及原网络/PTP联合回归通过，仍LOCAL/SYNC=0。** 见[完整结果与限制](Docs/Milestones/M3_1_Audio_DMA.md)、[安静稳定性](Docs/Milestones/M3_1_Quiet_Stability.md)、[温度联动](Docs/Milestones/M3_1_Temperature_Coexistence.md)。采样到PTP的映射、声音检测和测距仍为后续目标。
 

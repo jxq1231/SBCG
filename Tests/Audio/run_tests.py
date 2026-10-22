@@ -17,11 +17,12 @@ def main():
     environment["PATH"] = str(Path(compiler).parent) + os.pathsep + environment["PATH"]
     failures = 0
     cases = [
+        ("audio_frame_index", "stubs", ["App/Audio/audio_frame_index.c"]),
         ("bsp_audio_codec", "stubs", ["App/BSP/bsp_audio_codec.c"]),
         ("codec_monitor", "stubs", ["App/Audio/codec_monitor.c"]),
         ("codec_setup", "codec_stubs", ["App/BSP/bsp_audio_codec.c"]),
         ("audio_statistics", "stubs", ["App/Audio/audio_statistics.c"]),
-        ("bsp_audio", "dma_stubs", ["App/BSP/bsp_audio.c"]),
+        ("bsp_audio", "dma_stubs", ["App/BSP/bsp_audio.c", "App/Audio/audio_frame_index.c"]),
         ("audio_capture", "stubs", ["App/Audio/audio_capture.c", "App/Audio/audio_statistics.c"]),
     ]
     for name, stubs, sources in cases:
