@@ -1,0 +1,124 @@
+#include "BSP/bsp_audio.h"
+#include "BSP/bsp_audio_codec.h"
+#include "main.h"
+#include <stdio.h>
+#include <stdlib.h>
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);exit(1);}}while(0)
+static SAI_Block_TypeDef a,b;
+static DMA_Stream_TypeDef dma_stream;
+static DMA_HandleTypeDef dma={0,0,0,&dma_stream,HAL_DMA_STATE_READY};
+SAI_HandleTypeDef hsai_BlockA2={&a,{2},NULL,HAL_SAI_STATE_READY,0};
+SAI_HandleTypeDef hsai_BlockB2={&b,{0},&dma,HAL_SAI_STATE_READY,0};
+uint32_t test_primask;
+static uint32_t tick_ms,clock_hz=49142857;
+static unsigned starts,stops,configs;
+static int16_t *buffer;
+static HAL_StatusTypeDef start_result=HAL_OK,stop_result=HAL_OK;
+static BSP_AudioCodecStatus codec_result=BSP_CODEC_OK;
+static bool error_during_start;
+uint32_t HAL_GetTick(void) {return tick_ms;}
+uint32_t HAL_RCCEx_GetPeriphCLKFreq(uint32_t which) {CHECK(which==RCC_PERIPHCLK_SAI2);return clock_hz;}
+HAL_SAI_StateTypeDef HAL_SAI_GetState(const SAI_HandleTypeDef *h) {return h->State;}
+uint32_t HAL_SAI_GetError(const SAI_HandleTypeDef *h) {return h->ErrorCode;}
+uint32_t HAL_DMA_GetError(const DMA_HandleTypeDef *h) {return h->ErrorCode;}
+HAL_DMA_StateTypeDef HAL_DMA_GetState(const DMA_HandleTypeDef *h) {return h->State;}
+BSP_AudioCodecStatus BSP_AudioCodec_ConfigureMic2(BSP_AudioCodecSetupResult *r)
+{
+    CHECK((a.CR1&1U)!=0 && (b.CR1&1U)==0);++configs;
+    *r=(BSP_AudioCodecSetupResult){4,0x210,7};return codec_result;
+}
+HAL_StatusTypeDef HAL_SAI_Receive_DMA(SAI_HandleTypeDef *h,uint8_t *p,uint16_t size)
+{
+    CHECK(h==&hsai_BlockB2 && size==32768 && configs>0 && (a.CR1&1U)!=0);
+    CHECK(((uintptr_t)p%32U)==0);buffer=(int16_t*)p;++starts;
+    if(start_result==HAL_OK){h->State=HAL_SAI_STATE_BUSY_RX;b.CR1|=1U;dma.remaining=size;dma.State=HAL_DMA_STATE_BUSY;dma_stream.CR=DMA_SxCR_EN;}
+    if(error_during_start){h->ErrorCode=16;HAL_SAI_ErrorCallback(h);}
+    return start_result;
+}
+HAL_StatusTypeDef HAL_SAI_DMAStop(SAI_HandleTypeDef *h)
+{
+    CHECK(h==&hsai_BlockB2);++stops;
+    b.CR1=0;
+    if(h->State==HAL_SAI_STATE_BUSY_RX)
+    {
+        if(stop_result==HAL_OK){dma.State=HAL_DMA_STATE_READY;dma_stream.CR=0;}
+        else {dma.State=HAL_DMA_STATE_TIMEOUT;}
+    }
+    /* Real HAL sets READY even after its DMA abort failed. */
+    h->State=HAL_SAI_STATE_READY;
+    return stop_result;
+}
+static BSP_AudioSnapshot Snapshot(void) {BSP_AudioSnapshot s;BSP_Audio_GetSnapshot(&s);return s;}
+static void Half(uint32_t ms) {tick_ms=ms;dma.remaining=16384;dma.flags=0;HAL_SAI_RxHalfCpltCallback(&hsai_BlockB2);}
+static void Full(uint32_t ms) {tick_ms=ms;dma.remaining=32768;dma.flags=0;HAL_SAI_RxCpltCallback(&hsai_BlockB2);}
+int main(void)
+{
+    BSP_AudioBlock block;
+    CHECK(BSP_Audio_Stop() && stops==0);
+    CHECK(BSP_Audio_Start());CHECK(starts==1 && Snapshot().running);
+    CHECK(Snapshot().derived_milli_hz==47991071U);
+    CHECK(!BSP_Audio_Start() && configs==1 && starts==1);
+    CHECK(!BSP_Audio_BeginBlock(&block));
+    Half(171);CHECK(BSP_Audio_BeginBlock(&block));
+    CHECK(block.samples==buffer && block.half==0 && block.completed_ms==171);
+    CHECK(!BSP_Audio_BeginBlock(&block));
+    CHECK(BSP_Audio_EndBlock(&block,true));CHECK(!BSP_Audio_EndBlock(&block,true));
+    CHECK(!BSP_Audio_BeginBlock(&block));
+    Full(342);CHECK(BSP_Audio_BeginBlock(&block));
+    CHECK(block.samples==buffer+16384 && block.half==1);
+    CHECK(BSP_Audio_EndBlock(&block,true));
+    CHECK(Snapshot().half_count==1 && Snapshot().full_count==1 && Snapshot().processed_blocks==2 && Snapshot().dropped_blocks==0);
+    puts("PASS: startup ordering, DMA size/alignment, alternating ownership and single completion");
+    Half(513);Full(684);Half(855);
+    CHECK(BSP_Audio_BeginBlock(&block) && block.half==0);CHECK(BSP_Audio_EndBlock(&block,true));
+    CHECK(Snapshot().dropped_blocks==2);
+    Full(1026);CHECK(BSP_Audio_BeginBlock(&block));Half(1197);
+    CHECK(!BSP_Audio_EndBlock(&block,true));CHECK(Snapshot().dropped_blocks==3);
+    CHECK(BSP_Audio_BeginBlock(&block));CHECK(BSP_Audio_EndBlock(&block,false)==false);
+    CHECK(Snapshot().dropped_blocks==4);
+    Full(1368);CHECK(BSP_Audio_BeginBlock(&block));
+    dma.flags=1;dma.remaining=16384;
+    CHECK(!BSP_Audio_EndBlock(&block,true));CHECK(Snapshot().dropped_blocks==5);
+    dma.flags=0;Half(1539);dma.flags=2;
+    CHECK(!BSP_Audio_BeginBlock(&block));CHECK(Snapshot().dropped_blocks==6);
+    dma.flags=0;Full(1710);dma.remaining=0;
+    CHECK(!BSP_Audio_BeginBlock(&block));CHECK(Snapshot().dropped_blocks==7);
+    dma.remaining=32768;Half(1881);CHECK(BSP_Audio_BeginBlock(&block));
+    CHECK(BSP_Audio_EndBlock(&block,true));
+    puts("PASS: late consumer, overwrite during compute, pending IRQ boundary, reload edge and recovery");
+    test_primask=1;(void)Snapshot();CHECK(test_primask==1);test_primask=0;
+    unsigned before=Snapshot().callback_count;
+    HAL_SAI_RxHalfCpltCallback(&hsai_BlockA2);HAL_SAI_RxCpltCallback(NULL);
+    CHECK(Snapshot().callback_count==before);
+    Half(2000);CHECK(Snapshot().error_count==1);
+    hsai_BlockB2.ErrorCode=16;dma.ErrorCode=8;HAL_SAI_ErrorCallback(&hsai_BlockB2);
+    CHECK(!Snapshot().running && Snapshot().hal_error==16 && Snapshot().dma_error==8);
+    CHECK(!BSP_Audio_BeginBlock(&block));
+    before=Snapshot().callback_count;Full(2100);CHECK(Snapshot().callback_count==before);
+    CHECK(BSP_Audio_Stop() && (a.CR1&1U)==0 && stops==1);
+    CHECK(BSP_Audio_Stop() && stops==1);
+    puts("PASS: IRQ filtering, callback order fault, error snapshot, stop and PRIMASK preservation");
+    hsai_BlockB2.ErrorCode=dma.ErrorCode=0;codec_result=BSP_CODEC_IO_ERROR;
+    CHECK(!BSP_Audio_Start() && Snapshot().start_error==2 && starts==1 && a.CR1==0);
+    CHECK(Snapshot().codec_register==0x210 && Snapshot().codec_writes==7 && Snapshot().codec_hal_error==4);
+    codec_result=BSP_CODEC_OK;clock_hz=0;
+    CHECK(!BSP_Audio_Start() && Snapshot().start_error==4 && a.CR1==0);
+    clock_hz=49142857;start_result=HAL_ERROR;
+    CHECK(!BSP_Audio_Start() && Snapshot().start_error==3 && a.CR1==0);
+    start_result=HAL_OK;error_during_start=true;
+    CHECK(!BSP_Audio_Start() && !Snapshot().running && a.CR1==0);
+    error_during_start=false;CHECK(BSP_Audio_Stop());
+    CHECK(BSP_Audio_Start());Half(UINT32_MAX-10U);Full(160);
+    CHECK(Snapshot().first_callback_ms==UINT32_MAX-10U && Snapshot().last_callback_ms==160);
+    stop_result=HAL_ERROR;CHECK(!BSP_Audio_Stop());CHECK(Snapshot().start_error==5);
+    unsigned old_configs=configs;CHECK(!BSP_Audio_Start() && configs==old_configs);
+    stop_result=HAL_OK;CHECK(!BSP_Audio_Stop());
+    CHECK(!BSP_Audio_Start() && configs==old_configs && dma_stream.CR==DMA_SxCR_EN);
+    dma_stream.CR=0;dma.State=HAL_DMA_STATE_READY;CHECK(BSP_Audio_Stop());
+    dma.State=HAL_DMA_STATE_BUSY;
+    CHECK(!BSP_Audio_Start() && configs==old_configs);
+    dma.State=HAL_DMA_STATE_READY;
+    CHECK(!BSP_Audio_BeginBlock(NULL) && !BSP_Audio_EndBlock(NULL,true));BSP_Audio_GetSnapshot(NULL);
+    puts("PASS: codec/clock/DMA/start-callback failures, tick wrap, failed-stop ownership and null inputs");
+    return 0;
+}

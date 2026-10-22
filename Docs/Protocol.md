@@ -1,11 +1,37 @@
 # UDP应用协议
 
-当前板已验收固件为 SBCG-M3.0-CODEC；前序温度串口命令及恢复验收见
+当前板运行 SBCG-M3.1-AUDIO；连续采集、联合业务及受控幅度响应已实测。此前已验收固件为 SBCG-M3.0-CODEC；前序温度串口命令及恢复验收见
 [T1.2](Milestones/T1_2_Manual_Temperature.md)和[连续拔插](Milestones/T1_1_Temperature_Replug.md)。
 本次 [M3.0 音频芯片身份读取](Milestones/M3_0_Codec_ID.md)已通过本版本授权烧录与联合实测，
 45次ID=8994、错误0，UDP格式保持原样。
 下述 M2.2.4 及 M2.2.2 记录为各自旧版本实测基线，见
 [板端估算](Milestones/M2_2_Board_Observation.md)和[30组时间交换](Milestones/M2_2_Time_Exchange.md)。
+
+## M3.1 音频串口状态（连续数据流及受控幅度响应已实测）
+
+仅新增原USART1文本行，不改变UDP的5005/5006/5007及PC端口。
+以下均为格式示例，不是实测：
+
+```text
+$AUDIO_INIT,RESULT=OK,NOMINAL_HZ=48000,DERIVED_MILLI_HZ=47991071,START_ERR=0,CODEC=0,I2C_ERR=00000000,REG=FFFF,WRITES=24
+$AUDIO,SEQ=1,STATE=RUN,FRAMES=40960,H=3,F=2,OK=5,DROP=0,ERR=0,HAL=00000000,DMA=00000000,RATE_HZ=47976,VALID=1,P0=100,P1=200,R0=30,R1=40
+```
+
+全部ASCII、CRLF。SEQ/H/F/OK/DROP/ERR/RATE_HZ为uint32十进制：H/F是半满/全满
+回调次数，OK是已处理且结束校验通过的块数，DROP是积压或被覆盖的丢块，ERR是
+回调顺序或HAL错误次数。FRAMES按`(H+F)*8192`用uint64十进制输出，只代表已观察
+回调所覆盖的帧数。HAL/DMA/I2C_ERR为32位十六进制错误位图。
+STATE为RUN、STALLED（回调超过1秒未更新）或ERROR。VALID=1时附带P0/P1、R0/R1，
+分别为两个有效时隙通道的无符号峰值和整数RMS，范围0..32768，PCM满幅计数单位；
+不预先声明它们对应实物左右位置。VALID=0时省略幅度字段，不能沿用旧幅度当作本次样本。
+NOMINAL_HZ是配置名义值；DERIVED_MILLI_HZ是按时钟分频推算的毫赫兹值；
+RATE_HZ是以回调计数和HAL tick窗口估计的整数帧率，**不是声音到达时间戳**。
+
+START_ERR：0正常、1句柄未就绪/仍被占用、2外部芯片配置失败、3DMA启动失败、
+4无效时钟、5停止失败。CODEC沿用BSP状态枚举：0成功、1忙、2I/O错误、
+3ID不符、4非法参数；REG为失败寄存器uint16十六进制，成功为FFFF，
+WRITES为成功寄存器写次数uint16十进制。输出限速每秒一条AUDIO；DHT启动低电平
+期间延后统计与输出，IRQ仍只更新计数。完整验收见[M3.1](Milestones/M3_1_Audio_DMA.md)。
 
 ## M3.0 芯片身份串口状态（本版本已实测）
 

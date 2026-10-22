@@ -4,6 +4,9 @@
 #include "Temperature/temperature_service.h"
 #include "Console/temperature_console.h"
 #include "Audio/codec_monitor.h"
+#ifdef SBCG_USE_AUDIO
+#include "Audio/audio_capture.h"
+#endif
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
@@ -19,7 +22,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef SBCG_USE_LWIP
+#if defined(SBCG_USE_AUDIO)
+#define APP_FIRMWARE_ID "SBCG-M3.1-AUDIO"
+#elif defined(SBCG_USE_LWIP)
 #define APP_FIRMWARE_ID "SBCG-M3.0-CODEC"
 #else
 #define APP_FIRMWARE_ID "SBCG-M1.1"
@@ -120,6 +125,9 @@ void App_Init(void)
 #endif
     TemperatureService_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
     TemperatureConsole_Init(SendLine);
+#ifdef SBCG_USE_AUDIO
+    AudioCapture_Init(BSP_Console_GetTickMs(), SendLine);
+#endif
     CodecMonitor_Init(BSP_Console_GetTickMs(), SendLine);
     if (!BSP_Console_RxInit())
     {
@@ -162,5 +170,8 @@ void App_Process(void)
     TemperatureService_Process(BSP_Console_GetTickMs());
     TemperatureConsole_Process(BSP_Console_GetTickMs());
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#ifdef SBCG_USE_AUDIO
+    AudioCapture_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#endif
     FlushOneLine();
 }

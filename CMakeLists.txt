@@ -65,6 +65,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/Audio/codec_monitor.c
 )
 
+include(cmake/audio-layout.cmake)
+
 # LwIP generation registers LAN8742 in STM32_Drivers. Older PHY-only
 # snapshots still need the user source entry, but never compile both copies.
 if(TARGET LwIP)

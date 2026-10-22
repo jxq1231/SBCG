@@ -11,10 +11,15 @@
 #include "Temperature/temperature_service.h"
 #include "Console/temperature_console.h"
 #include "Audio/codec_monitor.h"
+#include "Audio/audio_capture.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+/* Fail promptly in unattended Windows runs, without a runtime assertion dialog. */
+#undef assert
+#define assert(x) do { if (!(x)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 
 static uint32_t tick_ms;
 static uint32_t write_count;
@@ -47,6 +52,22 @@ static bool reply_pending, rx_init_ok = true;
 static TemperatureConsole_Log console_log;
 static unsigned codec_inits, codec_calls, codec_reads;
 static bool start_low_in_process;
+static unsigned audio_inits, audio_calls, audio_allowed;
+
+void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
+{
+    assert(temperature_initialized && console_inits>0 && !temperature_low);
+    assert(now_ms==tick_ms && log!=NULL);
+    ++audio_inits; audio_calls=audio_allowed=0;
+}
+void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
+{
+    assert(audio_inits>0 && now_ms==tick_ms);
+    assert(temperature_calls==lwip_calls && console_calls==temperature_calls);
+    assert(processing_allowed==!temperature_low);
+    ++audio_calls;
+    if (processing_allowed) { ++audio_allowed; }
+}
 
 void CodecMonitor_Init(uint32_t now_ms, CodecMonitor_Log log)
 {
@@ -266,6 +287,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     temperature_low=false;
     console_inits=console_calls=rx_inits=0U; reply_pending=false;
     codec_inits=codec_calls=codec_reads=0; start_low_in_process=false;
+    audio_inits=audio_calls=audio_allowed=0;
     App_Init();
 }
 
@@ -282,7 +304,7 @@ int main(void)
     assert(temperature_initialized && temperature_init_calls==1U);
     assert(console_inits==1U && rx_inits==1U && console_log!=NULL);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M3.0-CODEC,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M3.1-AUDIO,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -366,6 +388,7 @@ int main(void)
     App_Init();
     assert(deinit_calls == 2U && completed_init_calls == 2U && time_initialized);
     assert(temperature_init_calls==2U && temperature_calls==0U);
+    assert(audio_inits==2U && audio_calls==0U);
     assert(write_count == 2U && time_calls == 0U && tx_calls == 0U && observation_calls==0U && observation_init_calls==2U);
     App_Process();
     assert(time_calls == 1U && tx_calls == 1U && lwip_calls == 1U);
@@ -375,10 +398,12 @@ int main(void)
     const uint32_t tx_before = tx_calls;
     const uint32_t obs_before = observation_init_calls;
     const uint32_t temp_before=temperature_init_calls;
+    const unsigned audio_before=audio_inits;
     deinit_ok = false;
     App_Init();
     assert(write_count == writes_before + 1U && tx_calls == tx_before && observation_init_calls==obs_before);
     assert(temperature_init_calls==temp_before);
+    assert(audio_inits==audio_before);
     assert(strcmp(last_line, "$TS_INIT,RESULT=OWNERSHIP_ERROR\r\n") == 0);
     deinit_ok = true;
     puts("PASS: lost wrapper ownership stops application reinitialization");
@@ -486,10 +511,14 @@ int main(void)
     puts("PASS: command RX initializes once and replies use the DHT-safe logger");
     Reset(0U,true);
     assert(codec_inits==1U && codec_calls==0U);
+    assert(audio_inits==1U && audio_calls==0U);
     start_low_in_process=true; App_Process();
     assert(codec_calls==1U && codec_reads==0U);
+    assert(audio_calls==1U && audio_allowed==0U);
     start_low_in_process=false; temperature_low=false; App_Process();
     assert(codec_calls==2U && codec_reads==1U);
+    assert(audio_calls==2U && audio_allowed==1U);
+    puts("PASS: audio follows temperature initialization, defers on current DATA low and preserves reinit ownership guard");
     puts("PASS: codec I/O uses current DHT state after temperature processing and resumes on release");
     return 0;
 }

@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-T1.1%20%7C%20Temperature%20Baseline-0f766e?style=flat-square" alt="T1.1正常温度采样通过，拔插恢复未测">
+  <img src="https://img.shields.io/badge/Stage-M3.1%20%7C%20Audio%20Capture-0f766e?style=flat-square" alt="M3.1单板音频采集与幅度响应通过">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -31,7 +31,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | --- | --- |
 | 时间同步 | ETH IEEE1588硬件时间为唯一测量时间源，A主/B从 |
 | PPS观测 | TIM2仅执行PTP整秒脉冲输出，计划使用PA15，不另建测量时钟 |
-| 声音测量 | 后续通过SAI/DMA采集声音事件，以统一时间计算TDOA |
+| 声音测量 | 单板SAI/DMA连续采集已验收；后续建立样本时间映射、声音事件与TDOA |
 | 温度补偿 | A板读取一只DHT11，经UDP共享温度快照；两端使用同一整数公式 |
 | 显示 | LTDC、帧缓冲、DMA2D和绘图数据统一RGB565 |
 | 双板身份 | 同一固件根据真实MCU UID固定分配A/B角色 |
@@ -40,7 +40,9 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**T1.1正常温度采样通过：当前SBCG-T1.1-TEMP-R1经授权烧录，90秒取得17个正式版本，25.7℃、声速346.874m/s，温度及串口错误0；原70个UDP包零缺口，两组30请求及板端计算核对通过。用户延后传感器拔插测试，故障恢复尚未实测。** 见[本轮记录与边界](Docs/Milestones/T1_1_Temperature.md)。
+**M3.1单板音频采集已验收：SAI2/DMA、标称48kHz、PCM16双通道。受控发声两路RMS中位数提高30.44×/28.75×，连续采集无丢块及硬件错误；通道0有3条瞬时峰值触顶，边界如实记录。5分钟稳定性、自动/手动温度切换及原网络/PTP联合回归通过，仍LOCAL/SYNC=0。** 见[完整结果与限制](Docs/Milestones/M3_1_Audio_DMA.md)、[安静稳定性](Docs/Milestones/M3_1_Quiet_Stability.md)、[温度联动](Docs/Milestones/M3_1_Temperature_Coexistence.md)。采样到PTP的映射、声音检测和测距仍为后续目标。
+
+**此前T1.1正常温度采样通过：当时SBCG-T1.1-TEMP-R1经授权烧录，90秒取得17个正式版本，25.7℃、声速346.874m/s，温度及串口错误0；原70个UDP包零缺口，两组30请求及板端计算核对通过。用户延后传感器拔插测试，故障恢复尚未实测。** 见[本轮记录与边界](Docs/Milestones/T1_1_Temperature.md)。
 
 **此前M2.2.4板端实时估算观测通过：当时SBCG-M2.2-OBS经本版本授权烧录、校验和复位，30组板端结果与真实C参考逐条完全一致；旧30组RX/TX/ACK、70包零缺口、90条PTP/心跳连续，异常计数0。248项检查、两配置构建/布局、457文件实际再生成及独立软件审查通过。仍为单板LOCAL/SYNC=0。** 见[本轮记录](Docs/Milestones/M2_2_Board_Observation.md)。
 
@@ -72,7 +74,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M2.2.3 真实样本估算链 | 归档30组均由原C返回OK；219项检查通过，固件和原始数据不变 | [主机回放验证](Docs/Milestones/M2_2_Sync_Observation.md) |
 | M2.2.2 时间戳数据链 | 30组新样本、原30组RX/TX/ACK、70包零缺口、90条PTP/心跳；本版本实物验收通过 | [实现及验收记录](Docs/Milestones/M2_2_Time_Exchange.md) |
 | M2.2.1 估算数学内核 | 13组/1044次调用、含1000物理模型；未接入运行或校时，加载内容保持不变 | [纯算法结果与复验](Docs/Milestones/M2_2_Sync_Estimator.md) |
-| 显示 / 同步 / 音频 / 测距 | 资源约定已记录，功能尚未实现 | [资源规划](Docs/Hardware_Resources.md) |
+| 显示 / 双板同步 / 测距 | 后续目标；音频单板采集已在M3.1验收 | [资源规划](Docs/Hardware_Resources.md) |
 
 完整要求及实施顺序见[任务书路线与验收矩阵](Docs/Project_Roadmap.md)，当前实测范围见[项目状态](Docs/Project_State.md)。路线优先建立观测、网络与统一时间，再完成声音检测、测距和基础LCD；基础60分闭环后推进提高功能。所有文档从[Docs入口](Docs/README.md)阅读。
 
@@ -81,7 +83,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M0 | 资源规划与系统基线 | 本板启动通过；M0.2启动/心跳发送已通过用户实物日志验收；MCU接收未实现 |
 | M1 | 以太网链路与双向UDP通信 | 本板与电脑正常请求/应答、两次链路恢复及5005接收已验证；两板UDP未实现 |
 | M2 | 时间同步及PPS精度验证 | 本地时钟、RX/TX、UDP时间戳回报及板端估算观测通过；两板同步及PPS待实现 |
-| M3 | 音频DMA采集 | 未开始 |
+| M3 | 音频DMA采集 | M3.1连续采集/幅度响应已验收；M3.2时间映射待设计 |
 | M4 | 声音事件检测 | 未开始 |
 | M5 | TDOA测量及标定 | 未开始 |
 | M6 / M7 | 课程基础 / 提高要求验收 | 未开始 |

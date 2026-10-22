@@ -16,4 +16,7 @@ uint32_t HAL_I2C_GetError(const I2C_HandleTypeDef *h);
 uint32_t HAL_GetTick(void);
 HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h, uint16_t address,
     uint16_t reg, uint16_t width, uint8_t *bytes, uint16_t count, uint32_t timeout_ms);
+HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *h, uint16_t address,
+    uint16_t reg, uint16_t width, uint8_t *bytes, uint16_t count, uint32_t timeout_ms);
+void HAL_Delay(uint32_t delay_ms);
 #endif
