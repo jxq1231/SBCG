@@ -10,6 +10,9 @@
 #ifdef SBCG_USE_AUDIO_ANCHOR
 #include "Audio/audio_time_anchor.h"
 #endif
+#ifdef SBCG_USE_AUDIO_MAP
+#include "Audio/audio_time_map_monitor.h"
+#endif
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
@@ -25,7 +28,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(SBCG_USE_AUDIO_ANCHOR)
+#if defined(SBCG_USE_AUDIO_MAP)
+#define APP_FIRMWARE_ID "SBCG-M3.2-MAP"
+#elif defined(SBCG_USE_AUDIO_ANCHOR)
 #define APP_FIRMWARE_ID "SBCG-M3.2-ANCHOR"
 #elif defined(SBCG_USE_AUDIO)
 #define APP_FIRMWARE_ID "SBCG-M3.2-INDEX"
@@ -136,6 +141,9 @@ void App_Init(void)
 #ifdef SBCG_USE_AUDIO_ANCHOR
     AudioTimeAnchor_Init(BSP_Console_GetTickMs(), SendLine);
 #endif
+#ifdef SBCG_USE_AUDIO_MAP
+    AudioTimeMapMonitor_Init(SendLine);
+#endif
     CodecMonitor_Init(BSP_Console_GetTickMs(), SendLine);
     if (!BSP_Console_RxInit())
     {
@@ -183,6 +191,9 @@ void App_Process(void)
 #endif
 #ifdef SBCG_USE_AUDIO_ANCHOR
     AudioTimeAnchor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#endif
+#ifdef SBCG_USE_AUDIO_MAP
+    AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
     FlushOneLine();
 }

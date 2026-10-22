@@ -38,9 +38,16 @@ int main(void)
     AudioTimeAnchor_Process(999,true);AudioTimeAnchor_Process(1000,false);CHECK(logs==0 && cursor_reads==0);
     AudioTimeAnchor_Process(1000,true);CHECK(logs==1 && cursor_reads==2 && ptp_reads==1);
     CHECK(strstr(line,"$AUDIO_ANCHOR,SEQ=1,STATUS=OK,VALID=1,SESSION=1,F_LO=47991,F_HI=47992,SEC=1,NSEC=0,WIDTH=1,SYNC=0,OK=1,REJECTS=0\r\n"));
+    AudioTimeAnchorObservation observation;
+    CHECK(!AudioTimeAnchor_TakeObservation(NULL));
+    CHECK(AudioTimeAnchor_TakeObservation(&observation));
+    CHECK(observation.sequence==1 && observation.captured_ms==1000 && observation.anchor.valid && observation.anchor.frame_lo==47991);
+    CHECK(!AudioTimeAnchor_TakeObservation(&observation) && !observation.anchor.valid);
     AudioTimeAnchor_Process(1000,true);CHECK(logs==1);
     Prepare(95982,95984,2);AudioTimeAnchor_Process(2000,true);CHECK(strstr(line,",OK=2,REJECTS=0"));
     Prepare(143973,143978,3);AudioTimeAnchor_Process(3000,true);Failure("STATUS=WIDE");
+    CHECK(AudioTimeAnchor_TakeObservation(&observation) && observation.sequence==3 && !observation.anchor.valid);
+    CHECK(observation.anchor.session==0 && observation.anchor.frame_lo==0 && observation.anchor.sec==0);
     Prepare(191964,191965,4);cursor_ok[0]=false;AudioTimeAnchor_Process(4000,true);Failure("STATUS=CURSOR");CHECK(ptp_reads==0);
     Prepare(239955,239956,5);ptp_status=BSP_PTP_BAD_CONFIG;AudioTimeAnchor_Process(5000,true);Failure("STATUS=PTP");CHECK(strstr(line,"PTP_ERR=5"));
     Prepare(287946,287947,6);cursor_ok[1]=false;AudioTimeAnchor_Process(6000,true);Failure("STATUS=CURSOR");
@@ -60,6 +67,8 @@ int main(void)
     AudioTimeAnchor_Init(0,Log);Prepare(UINT64_MAX-4,UINT64_MAX,UINT32_MAX);
     cursors[0].session=cursors[1].session=UINT32_MAX;stamp.nanoseconds=999999999;
     AudioTimeAnchor_Process(1000,true);CHECK(strstr(line,"F_LO=18446744073709551611,F_HI=18446744073709551615") && strlen(line)<256);
+    AudioTimeAnchor_Init(0,Log);
+    CHECK(!AudioTimeAnchor_TakeObservation(&observation) && !observation.anchor.valid && observation.sequence==0);
     AudioTimeAnchor_Init(0,NULL);Prepare(0,0,0);before=logs;AudioTimeAnchor_Process(1000,true);CHECK(logs==before && cursor_reads==0);
     puts("PASS: tick wrap, zero-width frame quantization, full-width fields and null logger");
     return 0;

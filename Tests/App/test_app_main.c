@@ -13,6 +13,7 @@
 #include "Audio/codec_monitor.h"
 #include "Audio/audio_capture.h"
 #include "Audio/audio_time_anchor.h"
+#include "Audio/audio_time_map_monitor.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -55,6 +56,18 @@ static unsigned codec_inits, codec_calls, codec_reads;
 static bool start_low_in_process;
 static unsigned audio_inits, audio_calls, audio_allowed;
 static unsigned anchor_inits, anchor_calls, anchor_allowed;
+static unsigned map_inits, map_calls, map_allowed;
+void AudioTimeMapMonitor_Init(AudioTimeMapLog log)
+{
+    assert(anchor_inits>0 && log!=NULL);
+    ++map_inits;map_calls=map_allowed=0;
+}
+void AudioTimeMapMonitor_Process(uint32_t now_ms,bool processing_allowed)
+{
+    assert(map_inits>0 && now_ms==tick_ms && anchor_calls==audio_calls);
+    assert(processing_allowed==!temperature_low);
+    ++map_calls;if(processing_allowed){++map_allowed;}
+}
 
 void AudioTimeAnchor_Init(uint32_t now_ms, AudioTimeAnchorLog log)
 {
@@ -303,6 +316,7 @@ static void Reset(uint32_t start_ms, bool initial_write_ok)
     codec_inits=codec_calls=codec_reads=0; start_low_in_process=false;
     audio_inits=audio_calls=audio_allowed=0;
     anchor_inits=anchor_calls=anchor_allowed=0;
+    map_inits=map_calls=map_allowed=0;
     App_Init();
 }
 
@@ -319,8 +333,9 @@ int main(void)
     assert(temperature_initialized && temperature_init_calls==1U);
     assert(console_inits==1U && rx_inits==1U && console_log!=NULL);
     assert(anchor_inits==1U && anchor_calls==0U);
+    assert(map_inits==1U && map_calls==0U);
     assert(strcmp(last_line,
-        "$BOOT,FW=SBCG-M3.2-ANCHOR,HCLK_HZ=200000000,UID_W0=001A002D,"
+        "$BOOT,FW=SBCG-M3.2-MAP,HCLK_HZ=200000000,UID_W0=001A002D,"
         "UID_W1=30365105,UID_W2=36363631\r\n") == 0);
     puts("PASS: startup identifies firmware, clock and UID");
 
@@ -532,10 +547,12 @@ int main(void)
     assert(codec_calls==1U && codec_reads==0U);
     assert(audio_calls==1U && audio_allowed==0U);
     assert(anchor_calls==1U && anchor_allowed==0U);
+    assert(map_calls==1U && map_allowed==0U);
     start_low_in_process=false; temperature_low=false; App_Process();
     assert(codec_calls==2U && codec_reads==1U);
     assert(audio_calls==2U && audio_allowed==1U);
     assert(anchor_calls==2U && anchor_allowed==1U);
+    assert(map_calls==2U && map_allowed==1U);
     puts("PASS: anchor initializes after audio/PTP, follows audio each loop and defers with current DHT state");
     puts("PASS: audio follows temperature initialization, defers on current DATA low and preserves reinit ownership guard");
     puts("PASS: codec I/O uses current DHT state after temperature processing and resumes on release");

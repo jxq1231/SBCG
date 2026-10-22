@@ -4,7 +4,7 @@
 
 > 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。
 
-当前进展（2026-10-22）：T1.2 串口手动设温已通过主机测试、Debug/Release 构建、布局及本版本90秒联合实物验收。操作和完整边界见 [T1.2 手动设温](Milestones/T1_2_Manual_Temperature.md)。USART1 接收中断已由用户通过 CubeMX 生成为优先级 5/0，无 UART DMA。该次验收运行 SBCG-T1.2-MANUAL；当前板端版本为 SBCG-M3.2-ANCHOR，保留同一命令接口；25℃手动保持16250ms、零/负温、非法输入、分段命令及恢复自动均通过，UART错误0。
+当前进展（2026-10-22）：T1.2 串口手动设温已通过主机测试、Debug/Release 构建、布局及本版本90秒联合实物验收。操作和完整边界见 [T1.2 手动设温](Milestones/T1_2_Manual_Temperature.md)。USART1 接收中断已由用户通过 CubeMX 生成为优先级 5/0，无 UART DMA。该次验收运行 SBCG-T1.2-MANUAL；当前板端版本为 SBCG-M3.2-MAP，保留同一命令接口；25℃手动保持16250ms、零/负温、非法输入、分段命令及恢复自动均通过，UART错误0。
 
 在本页所用 SerialWeb 的文本发送框输入 `TEMP?`、`TEMP SET 25.0`、`TEMP AUTO` 或 `PING`，开启结尾补换行并选 CRLF。手动设温范围 -20.0～60.0℃，最多一位小数；发送后等待响应。手动模式会保持设定值，切回 AUTO 后重新等待 DHT11 预读/采样。不会自动保存到 Flash。请勿在 R1 固件上把“发送成功”当作板端命令执行成功。
 

@@ -85,7 +85,7 @@ ETH已生成时，构建后另运行`python -B Tools/Monitor/check_eth_layout.py
 
 ## 5. 验证边界与工具来源
 
-初期10项主机行为测试、Debug/Release构建、clangd及地址定位已有当时通过记录；工具测试83项、Analysis78项（M3.2.3软件增量），测试范围见当前里程碑；2026-10-18再次Debug构建和单板调试复位启动通过，随后用户确认VS Code Build界面正常。其它电脑的路径、驱动和扩展仍需按实际环境核对。
+初期10项主机行为测试、Debug/Release构建、clangd及地址定位已有当时通过记录；工具测试83项、Analysis87项（M3.2.4，含复位边界证据校验），测试范围见当前里程碑；2026-10-18再次Debug构建和单板调试复位启动通过，随后用户确认VS Code Build界面正常。其它电脑的路径、驱动和扩展仍需按实际环境核对。
 
 主机脚本参考[STM32_AutoDebug_Universal_Kit](https://github.com/TaoCosmo-Dev/STM32_AutoDebug_Universal_Kit/tree/8434f26644ba4c677dc7db489d3a9570db00cf71)的阶段化诊断思路，独立实现CMake/GCC适配。当前没有自动采集固件运行日志、异常现场或自动修复闭环；不能把脚本名称理解成这些功能已具备。
 

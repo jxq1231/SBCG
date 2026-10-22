@@ -83,9 +83,9 @@ def check_anchor_rows(rows, minimum_valid=60):
             "scope": "DMA cursor interval relative to unsynchronized local PTP; includes frame quantization, excludes codec/FIFO/acoustic delay calibration"}
 
 
-def parse_anchor_records(records):
+def parse_anchor_records(records, expected_firmware=FIRMWARE):
     # Also enforce the preserved AUDIO -> AUDIO_POS order when present.
-    parse_records(records, expected_firmware=FIRMWARE)
+    parse_records(records, expected_firmware=expected_firmware)
     rows, boot_seen = [], False
     for record in records:
         line = record.get("line", "").rstrip("\r\n")

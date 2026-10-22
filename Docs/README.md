@@ -4,7 +4,9 @@
 
 更新：2026-10-23。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
-当前已验收板端版本为 `SBCG-M3.2-ANCHOR`（M3.2.2）；90个本地PTP/DMA锚点全部有效，原音频/温度/网络正常。本轮 **M3.2.3：纯C帧位置→本地PTP时间估算与已有日志回放** 已完成软件验证，30留出点最大绝对残差13.004us；[完整结果与模型限制](Milestones/M3_2_3_Audio_Time_Map.md)。未接入运行、未烧录，不新增硬件通过结论。
+当前已验收板端版本为 **SBCG-M3.2-MAP（M3.2.4）**。120秒采集取得120个有效锚点、40组板端估算与真实C/Fraction一致，最大绝对留出残差14.884us，音频/温度/三路UDP复验通过。[本轮完整结果](Milestones/M3_2_4_Audio_Time_Map_Board.md)。
+
+M3.2.4[实施计划](Plans/2026-10-23_Audio_Time_Map_Board_Implementation.md)已完成并归档，不重复实施。前置M3.2.3为当时纯软件验证，历史“未接入”不描述当前固件。下一独立增量尚未启动。
 
 ## 按问题选择文档
 
@@ -12,14 +14,14 @@
 | --- | --- | --- |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
-| 本次任务执行到哪里 | [M3.2.3工作计划](Plans/M3_2_3/task_plan.md) | 本轮已完成的执行记录；不重复执行，板端接入另行规划 |
+| 本次任务执行到哪里 | [M3.2.4实施计划](Plans/2026-10-23_Audio_Time_Map_Board_Implementation.md) | 已完成的最近增量，按需追溯，不重复烧录 |
 | 课程目标和未实现部分 | [Project_Roadmap](Project_Roadmap.md) | 基础/提高指标和整机路线仍有效，不是一次实现全部功能的授权 |
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
 | 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；显示/PPS/双板等明确为未实现目标 |
 | 串口和UDP字段 | [Protocol](Protocol.md) | 协议为现行接口，历史固件标识仅说明首次引入版本 |
 | 网页串口怎么使用 | [SerialWeb](SerialWeb.md) | 115200/8N1；当前已支持手动温度命令；后半为早期发送实验 |
 | 仅核对SYS/RCC | [CubeMX_Step1](CubeMX_Step1.md) | 已完成的系统基线，不重复启用外设 |
-| 最近一次板端实验详情 | [M3.2.2验收](Milestones/M3_2_2_Audio_PTP_Anchor.md) | 需要复核原始证据/限制时读 |
+| 最近一次板端实验详情 | [M3.2.4验收](Milestones/M3_2_4_Audio_Time_Map_Board.md) | 需要复核原始证据/限制时读 |
 | 团队规则 | [AGENTS](../AGENTS.md)、[CONTRIBUTING](../CONTRIBUTING.md) | 持续有效 |
 
 ## 已完成文档的使用规则

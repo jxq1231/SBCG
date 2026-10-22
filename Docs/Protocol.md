@@ -2,9 +2,9 @@
 
 <!-- doc-status: current-interface; reviewed: 2026-10-23 -->
 
-更新：2026-10-23。当前板端已验收标识为 **SBCG-M3.2-ANCHOR**。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS和AUDIO_ANCHOR仅为串口行。
+更新：2026-10-23。当前板端已验收标识为 **SBCG-M3.2-MAP**。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
 
-M3.2.3已完成纯算法与离线回放验证，不新增网络字段、串口命令或板端运行入口。当前状态见[Project_State](Project_State.md)。
+M3.2.3当时完成纯算法与离线回放验证；M3.2.4现已将原内核接入板端，当前已烧录/实测版本为SBCG-M3.2-MAP。当前状态见[Project_State](Project_State.md)。
 
 ## M3.1 音频串口状态（连续数据流及受控幅度响应已实测）
 
@@ -215,7 +215,7 @@ FIRST 是 DMA 数据帧位置，不是麦克风物理到达时间；completed_ms
 
 ## M3.2.2 本地PTP/DMA位置锚点（正常窗口实机通过）
 
-当前已验收FW=SBCG-M3.2-ANCHOR；旧AUDIO/AUDIO_POS、UDP type1～7及端口不变。
+M3.2.2首次引入时FW=SBCG-M3.2-ANCHOR；当前MAP固件保留该接口，旧AUDIO/AUDIO_POS、UDP type1～7及端口不变。
 新增ASCII/CRLF行，每1000ms最多一次尝试，DHT起始低电平期间延后；SEQ与AUDIO/POS独立，不据同序号强行配对：
 
 ```text
@@ -251,4 +251,19 @@ NDTR语义及[ST AN4031依据](https://www.st.com/resource/en/application_note/d
 
 本轮不新增UDP/串口报文。`AudioTimeMap_Estimate`接受同一BOOT/UID及SESSION的两端锚点和目标NDTR坐标，输出uint64纳秒的estimate/model_lower/model_upper及valid；状态0..8定义见[接口](../App/Audio/audio_time_map.h)。这是线性模型下的游标量化区间，不是麦克风声学时间误差界；不外推，失败输出清零。
 
-该内核未接入固件源列表或App调度，当前板端输出仍按M3.2.2。4030组C/Fraction对照及30留出点回放通过，不新增实物同步/检测/测距结论；见[M3.2.3软件记录](Milestones/M3_2_3_Audio_Time_Map.md)。
+在M3.2.3增量中，该内核尚未接入固件源列表或App调度；后续M3.2.4已完成接入。M3.2.3的4030组C/Fraction对照及30留出点回放通过，不新增实物同步/检测/测距结论；见[M3.2.3软件记录](Milestones/M3_2_3_Audio_Time_Map.md)。
+
+## M3.2.4 板端时间估算观测（已实物验收）
+
+原UDP type1～7、温度命令、AUDIO/POS/ANCHOR格式保持。新SBCG-M3.2-MAP在每三个连续有效锚点后输出MAP→CHECK，ASCII/CRLF、每行<256字节；不新增网络报文：
+
+```text
+$AUDIO_MAP,SEQ=1,STATUS=OK,CORE=0,VALID=1,SESSION=1,L=1,M=2,R=3,FRAME=95983,EST_NS=2000000000,LO_NS=1999979000,HI_NS=2000021000,SYNC=0
+$AUDIO_MAP_CHECK,SEQ=1,OBS_NS=2000005000,RES_NS=5000,SYNC=0
+```
+
+仅为字段格式示例，不是已采集结果。SEQ为新服务独立uint32模序号；L/M/R为来源锚点uint32序号，SESSION为本启动内uint32会话。FRAME为uint64 NDTR相位坐标，用middle.lo+(middle.hi-middle.lo+1)/2避免绝对数相加溢出。EST_NS/LO_NS/HI_NS/OBS_NS为uint64本地PTP纳秒；RES_NS为int64，定义OBS−EST。SYNC固定0。
+
+失败仅有`$AUDIO_MAP,SEQ=...,STATUS=ANCHOR|STALE|SEQUENCE|SESSION|ORDER|CORE,CORE=...,VALID=0,SRC=...,SYNC=0`，省略会话/位置/所有时间，不输出CHECK，不复用旧值。CORE仅内核拒绝时取原状态1..8，其他为0。失败和成功都消耗独立SEQ，窗口前两点静默；失败重建不跨断序/会话/过期窗口。新源到达前必须完成上一组CHECK配对。
+
+服务是前台三点自检观测，不是声音事件查询接口。模型继承M3.2.3，未校准codec/SAI/FIFO/DMA物理延迟；新区间不代表声学误差界。`Analysis/audio_time_map_board_analysis.py --serial <从新BOOT开始的JSONL> --output-dir <新目录>`核对≥90原音频位置/锚点、≥30组MAP/CHECK，并与真实C及Fraction逐项比较。工具恒hardware_verified=false；本轮120秒实物采集结合UID/固件、原网络及温度联合验收通过，40组全部一致、最大绝对残差14.884us，仍LOCAL/SYNC=0。详见[M3.2.4验收记录](Milestones/M3_2_4_Audio_Time_Map_Board.md)。

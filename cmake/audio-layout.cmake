@@ -16,6 +16,9 @@ if(_sbcg_audio_mode)
     if(TARGET LwIP)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_ANCHOR=1)
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Audio/audio_time_anchor.c)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_MAP=1)
+        target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+            App/Audio/audio_time_map.c App/Audio/audio_time_map_monitor.c)
     endif()
     set(_audio_script "${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_audio.ld")
     # Supplement the existing primary script, without editing CubeMX's script.

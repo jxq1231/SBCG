@@ -17,6 +17,7 @@ def main():
     environment["PATH"] = str(Path(compiler).parent) + os.pathsep + environment["PATH"]
     failures = 0
     cases = [
+        ("audio_time_map_monitor", "stubs", ["App/Audio/audio_time_map_monitor.c", "App/Audio/audio_time_map.c"]),
         ("audio_time_map", "stubs", ["App/Audio/audio_time_map.c"]),
         ("audio_time_anchor", "stubs", ["App/Audio/audio_time_anchor.c"]),
         ("audio_frame_index", "stubs", ["App/Audio/audio_frame_index.c"]),

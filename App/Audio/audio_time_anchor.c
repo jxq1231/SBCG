@@ -4,6 +4,7 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 #define ANCHOR_PERIOD_MS 1000U
 #define ANCHOR_LINE_CAPACITY 256U
@@ -24,6 +25,8 @@ static AudioTimeAnchorLog log_line;
 static uint32_t last_attempt_ms, sequence, successes, rejections, previous_session;
 static uint64_t previous_time_ns, previous_frame_hi;
 static bool have_previous, clock_faulted;
+static AudioTimeAnchorObservation latest_observation;
+static bool observation_pending;
 
 static void Increment(uint32_t *value) { if (*value != UINT32_MAX) { ++*value; } }
 static void Decimal64(uint64_t value, char output[21])
@@ -59,6 +62,18 @@ void AudioTimeAnchor_Init(uint32_t now_ms, AudioTimeAnchorLog log)
     sequence = successes = rejections = previous_session = 0U;
     previous_time_ns = previous_frame_hi = 0U;
     have_previous = clock_faulted = false;
+    memset(&latest_observation, 0, sizeof latest_observation);
+    observation_pending = false;
+}
+
+bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *observation)
+{
+    if (observation == NULL) { return false; }
+    memset(observation, 0, sizeof *observation);
+    if (!observation_pending) { return false; }
+    *observation = latest_observation;
+    observation_pending = false;
+    return true;
 }
 
 void AudioTimeAnchor_Process(uint32_t now_ms, bool processing_allowed)
@@ -76,6 +91,17 @@ void AudioTimeAnchor_Process(uint32_t now_ms, bool processing_allowed)
         { clock_faulted = true; status = ANCHOR_BACKWARD; }
         else if (anchor.before.complete_frames <= previous_frame_hi) { status = ANCHOR_ORDER; }
     }
+    /* CPU scalar snapshot only; no DMA buffer ownership or second PTP read. */
+    latest_observation = (AudioTimeAnchorObservation){0};
+    latest_observation.sequence = sequence;
+    latest_observation.captured_ms = now_ms;
+    if (status == ANCHOR_OK)
+    {
+        latest_observation.anchor = (AudioTimeMapAnchor){true,
+            anchor.before.session, anchor.before.complete_frames,
+            anchor.after.complete_frames, anchor.stamp.seconds, anchor.stamp.nanoseconds};
+    }
+    observation_pending = true;
     char line[ANCHOR_LINE_CAPACITY];
     int length;
     if (status == ANCHOR_OK)
