@@ -15,9 +15,13 @@ typedef struct {SAI_Block_TypeDef *Instance; SAI_InitTypeDef Init; DMA_HandleTyp
 #define RESET 0U
 #define __HAL_SAI_ENABLE(h) ((h)->Instance->CR1 |= SAI_xCR1_SAIEN)
 #define __HAL_SAI_DISABLE(h) ((h)->Instance->CR1 &= ~SAI_xCR1_SAIEN)
-#define __HAL_DMA_GET_COUNTER(h) ((h)->remaining)
+uint32_t TestDmaCounter(DMA_HandleTypeDef *handle);
+#define __HAL_DMA_GET_COUNTER(h) TestDmaCounter(h)
 #define __HAL_DMA_GET_HT_FLAG_INDEX(h) 1U
 #define __HAL_DMA_GET_TC_FLAG_INDEX(h) 2U
+#define __HAL_DMA_GET_TE_FLAG_INDEX(h) 4U
+#define __HAL_DMA_GET_FE_FLAG_INDEX(h) 8U
+#define __HAL_DMA_GET_DME_FLAG_INDEX(h) 16U
 #define __HAL_DMA_GET_FLAG(h,f) ((h)->flags & (f))
 extern uint32_t test_primask;
 static inline uint32_t __get_PRIMASK(void) {return test_primask;}

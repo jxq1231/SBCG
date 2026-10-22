@@ -13,6 +13,7 @@ static volatile int16_t audio_dma_buffer[BSP_AUDIO_DMA_ELEMENTS]
 static volatile BSP_AudioSnapshot state;
 static AudioFrameIndex frame_index;
 static uint32_t session_counter;
+static uint32_t capture_started_ms;
 static uint64_t delivered_end_frame;
 static BSP_AudioBlock claim;
 _Static_assert(BSP_AUDIO_HALF_FRAMES == AUDIO_INDEX_BLOCK_FRAMES,
@@ -92,7 +93,8 @@ bool BSP_Audio_Start(void)
     { state.start_error = 2U; (void)BSP_Audio_Stop(); return false; }
     /* Boot-local, non-reused attempt identity. Reserve before DMA can IRQ. */
     state.session = ++session_counter;
-    AudioFrameIndex_Init(&frame_index, HAL_GetTick());
+    capture_started_ms = HAL_GetTick();
+    AudioFrameIndex_Init(&frame_index, capture_started_ms);
     state.running = true;
     accepting_callbacks = true;
     /* Own cleanup of partially-started HAL transfers as well as successful ones. */
@@ -113,6 +115,46 @@ void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *output)
 {
     if (output == NULL) { return; }
     const uint32_t old = Lock(); *output = state; Unlock(old);
+}
+
+bool BSP_Audio_ReadCursor(BSP_AudioCursor *output)
+{
+    if (output == NULL) { return false; }
+    *output = (BSP_AudioCursor){0};
+    const uint32_t old = Lock();
+    const uint32_t last_ms = state.observed_frames == 0U ? capture_started_ms : state.last_callback_ms;
+    if (!state.running || !dma_owned || state.session == 0U || state.index_faults != 0U ||
+        hsai_BlockB2.hdmarx == NULL ||
+        HAL_SAI_GetState(&hsai_BlockB2) != HAL_SAI_STATE_BUSY_RX ||
+        HAL_DMA_GetState(hsai_BlockB2.hdmarx) != HAL_DMA_STATE_BUSY ||
+        (hsai_BlockB2.Instance->CR1 & SAI_xCR1_SAIEN) == 0U ||
+        (hsai_BlockB2.hdmarx->Instance->CR & DMA_SxCR_EN) == 0U ||
+        (uint32_t)(HAL_GetTick() - last_ms) > AUDIO_INDEX_MAX_INTERVAL_MS)
+    { Unlock(old); return false; }
+    const uint32_t first = __HAL_DMA_GET_COUNTER(hsai_BlockB2.hdmarx);
+    const uint32_t second = __HAL_DMA_GET_COUNTER(hsai_BlockB2.hdmarx);
+    /* IRQs are masked only for these bounded reads. DMA keeps running; flags
+       read AFTER NDTR catch boundaries/errors even before the IRQ executes. */
+    const uint32_t flags = __HAL_DMA_GET_FLAG(hsai_BlockB2.hdmarx,
+        __HAL_DMA_GET_HT_FLAG_INDEX(hsai_BlockB2.hdmarx) |
+        __HAL_DMA_GET_TC_FLAG_INDEX(hsai_BlockB2.hdmarx) |
+        __HAL_DMA_GET_TE_FLAG_INDEX(hsai_BlockB2.hdmarx) |
+        __HAL_DMA_GET_FE_FLAG_INDEX(hsai_BlockB2.hdmarx) |
+        __HAL_DMA_GET_DME_FLAG_INDEX(hsai_BlockB2.hdmarx));
+    const bool first_half = first > BSP_AUDIO_HALF_ELEMENTS;
+    if (flags != RESET || first == 0U || first > BSP_AUDIO_DMA_ELEMENTS ||
+        second == 0U || second > first ||
+        first_half != (second > BSP_AUDIO_HALF_ELEMENTS) ||
+        (state.callback_count & 1U) != (first_half ? 0U : 1U))
+    { Unlock(old); return false; }
+    const uint32_t base = first_half ? BSP_AUDIO_DMA_ELEMENTS : BSP_AUDIO_HALF_ELEMENTS;
+    const uint32_t complete = (base - second) / 2U;
+    if (state.observed_frames > UINT64_MAX - complete)
+    { Unlock(old); return false; }
+    *output = (BSP_AudioCursor){state.observed_frames + complete,
+                              state.session, state.callback_count};
+    Unlock(old);
+    return true;
 }
 
 static bool HalfIsInactive(uint8_t half)

@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M3.2.1%20%7C%20Frame%20Index-0f766e?style=flat-square" alt="M3.2.1单板音频帧编号通过">
+  <img src="https://img.shields.io/badge/Stage-M3.2.2%20%7C%20Local%20PTP%20Anchor-0f766e?style=flat-square" alt="M3.2.2本地PTP与音频DMA位置锚点通过">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -39,6 +39,8 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 > 测距布置和声源位置决定TDOA对应的物理含义，详见[硬件资源与测量约定](Docs/Hardware_Resources.md)。电脑用于开发、观察和设参，最终测量在板端完成。
 
 ## 项目进度
+
+**M3.2.2本地PTP/DMA位置锚点已通过正常窗口验收：90次观测全部有效，夹取宽度0～1帧；原采集无丢块，80包UDP、两组30请求/板端计算和自动温度/codec通过。** 相对本地PTP的DMA进度长窗口平均率约47991.046～47991.091Hz。codec轮询最大2068ms如实保留；仍LOCAL/SYNC=0，尚未校准物理声学到达时间或完成双板同步。见[完整结果与边界](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md)。
 
 **M3.2.1单板音频帧编号已验收：90秒取得89对有效位置、522块/4276224帧，无已知缺口、丢块或编号错误；80包UDP、两组30请求/板端计算和自动温度通过。** 新增采集会话、连续帧范围与异常标记；codec最大2051ms使旧2050ms经验警戒未通过、心跳最大1052ms均保留说明。仍LOCAL/SYNC=0，不代表PTP样本映射、事件检测或测距通过。见[本轮结果与边界](Docs/Milestones/M3_2_1_Audio_Frame_Index.md)。
 

@@ -212,3 +212,38 @@ FIRST 是 DMA 数据帧位置，不是麦克风物理到达时间；completed_ms
 主机报告恒为hardware_verified=false；采集持续时间、固件哈希、原始串口及原网络联合验收另行核对，不能用行数代替90秒实际运行时间。
 
 2026-10-22本版本实测：89对有效位置、SESSION=1、末观察4276224帧，缺口/编号错误0；原业务联合验收通过。codec最大2051ms和心跳1052ms保留为前台轮询抖动边界，见[M3.2.1完整记录](Milestones/M3_2_1_Audio_Frame_Index.md)。未作PTP时间映射或故障注入实物验收。
+
+
+## M3.2.2 本地PTP/DMA位置锚点（正常窗口实机通过）
+
+当前已验收FW=SBCG-M3.2-ANCHOR；旧AUDIO/AUDIO_POS、UDP type1～7及端口不变。
+新增ASCII/CRLF行，每1000ms最多一次尝试，DHT起始低电平期间延后；SEQ与AUDIO/POS独立，不据同序号强行配对：
+
+```text
+$AUDIO_ANCHOR,SEQ=1,STATUS=OK,VALID=1,SESSION=1,F_LO=47991,F_HI=47992,SEC=1,NSEC=0,WIDTH=1,SYNC=0,OK=1,REJECTS=0
+$AUDIO_ANCHOR,SEQ=2,STATUS=BOUNDARY,VALID=0,PTP_ERR=0,SYNC=0,OK=1,REJECTS=1
+```
+
+以上仅格式示例，不是实机结果。
+
+| 字段 | 宽度、单位及含义 |
+| --- | --- |
+| SEQ | uint32十进制，尝试号模递增；从初始化后的1开始 |
+| STATUS / VALID | OK/1或CURSOR、PTP、SESSION、BOUNDARY、ORDER、WIDE、BACKWARD/0 |
+| SESSION | 成功时才有，沿用本次启动内的采集会话，不能跨BOOT唯一标识 |
+| F_LO / F_HI | 成功时uint64十进制，按NDTR折算的双通道传输组计数闭区间；不是PCM内存读取权或物理声学时刻 |
+| SEC / NSEC | 成功时uint32十进制，本板PTP秒和0～999999999纳秒，来源为原BSP_PTP_Read；不是UTC |
+| WIDTH | 成功时uint32十进制，F_HI-F_LO，最大4；0仍有一帧量化 |
+| PTP_ERR | 仅失败时uint32十进制，原BSP_PtpStatus；0表示不是PTP读取错误，5为BAD_CONFIG，6为BAD_SNAPSHOT（含非法纳秒） |
+| SYNC | 固定0；本板时钟仍为LOCAL |
+| OK / REJECTS | uint32饱和累计的有效/拒绝尝试数；不是丢PCM块计数 |
+
+CURSOR表示只读DMA位置无效；BOUNDARY表示两端边界generation变化；SESSION表示两端会话不一致或为0；ORDER表示帧倒退或同会话相对上个有效锚点不前进；WIDE表示区间>4帧。
+PTP读取失败/非法纳秒为PTP；同会话相对前个已接受锚点PTP倒退/重复为BACKWARD并锁存，后续时间重新增长也不自动清除，只有新会话或服务重新初始化才重建基线。
+失败省略SESSION/F_LO/F_HI/SEC/NSEC/WIDTH，禁止沿用旧值；固定字段和最宽整数的成功行编译期限制在256字节以内。
+
+`Analysis/audio_anchor_analysis.py --serial <从新版BOOT开始的JSONL窗口> --output <新JSON路径>`核对全部尝试、计数、宽度、单调性、有效比例，并输出首末与相邻有效锚点之间的相对PTP平均率范围。
+下/上界分别使用last.lo-first.hi-1和last.hi+1-first.lo，计入一帧量化；不是精密瞬时率或声学到达时间校准。报告hardware_verified=false，原音频位置及网络/温度/心跳仍须独立联合验收。
+NDTR语义及[ST AN4031依据](https://www.st.com/resource/en/application_note/dm00046011.pdf)、完整限制和实机门槛见[M3.2.2记录](Milestones/M3_2_2_Audio_PTP_Anchor.md)。
+
+2026-10-23本版本实测90次锚点全部有效，宽度0/1帧；原音频/位置、80包UDP、两组30请求及温度/codec联合检查通过。相对本地PTP的DMA进度平均率范围不等于声学时间校准；codec最大2068ms作为前台轮询抖动保留，详见本轮milestone。

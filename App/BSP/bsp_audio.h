@@ -30,6 +30,18 @@ typedef struct
     bool index_valid, contiguous;
 } BSP_AudioBlock;
 
+typedef struct
+{
+    uint64_t complete_frames;
+    uint32_t session, boundary_generation;
+} BSP_AudioCursor;
+
+/* Foreground only; a read-only NDTR-based stereo transfer-group count, not
+   proof of SRAM write visibility or an acoustic timestamp. PCM ownership
+   still requires Begin/End. Rejects boundary/error/reload ambiguity.
+   Clears output on failure; does not consume blocks or clear IRQ flags. */
+bool BSP_Audio_ReadCursor(BSP_AudioCursor *output);
+
 /* Main-loop only. Uses already-generated SAI2 and DMA; no peripheral init.
    Start errors: 1=not ready/owned, 2=codec, 3=DMA start, 4=clock, 5=stop,
    6=boot-local session identity exhausted. */

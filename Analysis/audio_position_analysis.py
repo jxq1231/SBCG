@@ -71,16 +71,16 @@ def check_positions(audio, positions, minimum_rows=60):
             "hardware_verified": False}
 
 
-def parse_records(records):
+def parse_records(records, expected_firmware="SBCG-M3.2-INDEX"):
     audio, positions = [], []
     boot_seen = False
     pending_seq = None
     for record in records:
         require("incomplete_tail_hex" not in record, "incomplete serial tail")
-        line = record.get("line", "")
+        line = record.get("line", "").rstrip("\r\n")
         if line.startswith("$BOOT,"):
             require(not boot_seen and not audio and not positions, "multiple/late BOOT records")
-            require("FW=SBCG-M3.2-INDEX" in line.split(","), "unexpected firmware")
+            require("FW="+expected_firmware in line.split(","), "unexpected firmware")
             boot_seen = True
         if not line.startswith(("$AUDIO,", "$AUDIO_POS,")):
             continue
