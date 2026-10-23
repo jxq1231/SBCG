@@ -16,6 +16,8 @@ if(_sbcg_audio_mode)
         App/BSP/bsp_audio.c App/Audio/audio_capture.c App/Audio/audio_statistics.c
         App/Audio/audio_frame_index.c)
     if(TARGET LwIP)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_SOUND_TIME=1)
+        target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Detector/sound_event_time.c)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_ANCHOR=1)
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Audio/audio_time_anchor.c)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_MAP=1)

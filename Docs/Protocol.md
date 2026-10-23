@@ -314,3 +314,13 @@ $AUDIO_MAP_CHECK,SEQ=1,OBS_NS=2000005000,RES_NS=5000,SYNC=0
 - `SOUND_STATE`：VALID_BLOCKS、REJECTED、RESETS、CANDIDATES、DROPPED、ERRORS为uint32饱和计数；PENDING为0..4队列长度，ARMED为0/1，CH为声道，SYNC=0。候选序号缺口可能来自有记录的队列丢弃；不可当作跨启动唯一键。
 
 唯一的Audio Begin/End内暂算，真实End通过才提交；失败/断流清除确认历史与旧队列。候选至多每250ms发送一条，状态至多每1000ms一条；队列超龄1000ms丢弃计数，不补发。只能表明实验能量候选及其采样帧，不能当作标准音频识别、物理声到达时间或同步精度证明。字段与实测范围见[M4.1.2记录](Milestones/M4_1_2_Sound_Candidate_Integration.md)。
+
+## M4.1.3 本地传输模型时间
+
+SBCG-M4.1-TIME-R1新增ASCII/CRLF、每行<256字节，无新UDP：
+
+- `SOUND_TIME`成功：SEQ/SESSION为uint32候选身份，FIRST为uint64零起点PCM帧号；STATUS=OK，L/R为uint32源锚序号；EST_NS/LO_NS/HI_NS为uint64本地PTP模型纳秒，查询坐标FIRST+1表示该组完整传输后位置。LOCAL=1/SYNC=0。
+- 失败：相同SEQ/SESSION/FIRST，STATUS为CLOCK/STREAM/ANCHOR/SESSION/ORDER/GAP/STALE/NO_LEFT/TIMEOUT/CORE，CORE仅真实内核拒绝时为1..8、其他为0；不带L/R或任何模型时间字段。
+- `SOUND_TIME_STATE`：QUEUED/OK/REJECT/DROPPED为uint32饱和累计，PENDING为0..4，LOCAL=1/SYNC=0。队满/非法提交计DROPPED；排队后失败计REJECT，不能将缺失结果补为0纳秒。
+
+固定4锚点/4候选；等待2500ms超时、末锚年龄>1500ms拒绝。校时/调频及采集断流清旧模型。R1本组合日志统一排队，每主循环最多发送一行；接收时间不是模型时间。模型仅为线性传输进度，区间不包含物理声学延迟或同步误差。见[M4.1.3实测](Milestones/M4_1_3_Sound_Event_Time.md)。

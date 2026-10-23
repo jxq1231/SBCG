@@ -5,6 +5,9 @@
  * @note        仅串行前台，不调用BSP Begin/End、不保留样本指针；无新IRQ/DMA/PTP时间查询。
  */
 #include "sound_detector_service.h"
+#ifdef SBCG_USE_SOUND_TIME
+#include "sound_event_time.h"
+#endif
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -46,6 +49,9 @@ static void DropQueue(void)
 /** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
 static void ResetHistory(void)
 {
+#ifdef SBCG_USE_SOUND_TIME
+    if(current.have_input || count!=0U || active)SoundEventTime_Invalidate(SOUND_TIME_STREAM);
+#endif
     if(current.have_input || count!=0U || active)Add(&diagnostics.resets,1U);
     (void)SoundDetector_Reset(&current);DropQueue();active=stage_valid=false;staged_count=0U;staged_total=0U;
 }
@@ -122,7 +128,11 @@ bool SoundDetectorService_Complete(bool accepted)
     if(!diagnostics.configured)return false;
     if(!active){Add(&diagnostics.errors,1U);ResetHistory();return false;}
     if(!accepted || !stage_valid){Add(&diagnostics.rejected_blocks,1U);ResetHistory();return false;}
-    if(boundary){Add(&diagnostics.resets,1U);DropQueue();}
+    if(boundary){Add(&diagnostics.resets,1U);DropQueue();
+#ifdef SBCG_USE_SOUND_TIME
+        SoundEventTime_Invalidate(SOUND_TIME_STREAM);
+#endif
+    }
     current=working;Add(&diagnostics.valid_blocks,1U);
     uint32_t sequence=diagnostics.candidates;
     Add(&diagnostics.candidates,staged_total);Add(&diagnostics.dropped,staged_total-staged_count);
@@ -175,6 +185,10 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
             ",PEAK=%" PRIu32 ",CLIP=%u,LOCAL=1,SYNC=0\r\n",
             item.sequence,item.event.session,(unsigned)diagnostics.channel,first,confirmed,item.event.mean_square_ac,
             item.event.peak_abs,item.event.clipped ? 1U:0U));
+#ifdef SBCG_USE_SOUND_TIME
+        /* 已归还并验证且已发布的元数据副本；时间服务不访问PCM。 */
+        (void)SoundEventTime_Submit(now_ms,item.sequence,&item.event);
+#endif
     }
     if((uint32_t)(now_ms-last_state_ms)<STATE_LOG_PERIOD_MS)return;
     last_state_ms=now_ms;

@@ -7,6 +7,9 @@
  *              内部锁定仅是闭环观测状态，不代表独立精度验收。无新的IRQ/DMA/缓存配置。
  */
 #include "Sync/time_sync.h"
+#ifdef SBCG_USE_SOUND_TIME
+#include "Detector/sound_event_time.h"
+#endif
 #include "Sync/clock_servo.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/sync_observation.h"
@@ -115,6 +118,10 @@ static void Fault(uint32_t now_ms)
  */
 static bool InvalidateConsumers(uint32_t now_ms)
 {
+#ifdef SBCG_USE_SOUND_TIME
+    /* 模型失效不得被可失败的协议卸载阻断。 */
+    SoundEventTime_Invalidate(SOUND_TIME_CLOCK);
+#endif
     if (!UDPTimeExchange_NotifyClockChange()) { return false; }
     PtpClock_NotifyClockChange();
     AudioTimeAnchor_NotifyClockChange(now_ms);
@@ -178,6 +185,10 @@ static void CheckClockGeneration(uint32_t now_ms)
     const uint32_t epoch=BSP_PTP_GetEpoch(), revision=BSP_PTP_GetRateRevision();
     if (epoch!=cached_epoch || revision!=cached_revision)
     {
+#ifdef SBCG_USE_SOUND_TIME
+        /* 外部代际已改变；即使PPS撤资格失败，旧模型也绝不能继续有效。 */
+        SoundEventTime_Invalidate(SOUND_TIME_CLOCK);
+#endif
         if (!InvalidateConsumers(now_ms)) { Fault(now_ms); return; }
         cached_epoch=epoch; cached_revision=revision;
         if (board_role==BOARD_ROLE_B) { ClockServo_Invalidate(&servo,now_ms); }

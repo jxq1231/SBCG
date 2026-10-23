@@ -7,6 +7,9 @@
  *              不承担IRQ处理、GUI绘制或双板校时。
  */
 #include "app_main.h"
+#ifdef SBCG_USE_SOUND_TIME
+#include "Detector/sound_event_time.h"
+#endif
 #include "BSP/bsp_console.h"
 #ifdef SBCG_USE_BOARD_SYNC
 #include "Sync/time_sync.h"
@@ -44,10 +47,12 @@
 
 /**
  * ==================== 模块：构建标识与前台日志状态 ====================
- * 作用：按编译功能组合标识固件，维护心跳与16行、单行256字节的日志队列。
+ * 作用：按编译功能组合标识固件，维护心跳与有界日志队列；常规16行，事件时间版本32行，每行256字节。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_SOUND_DETECTOR)
+#if defined(SBCG_USE_SOUND_TIME)
+#define APP_FIRMWARE_ID "SBCG-M4.1-TIME-R1"
+#elif defined(SBCG_USE_SOUND_DETECTOR)
 #define APP_FIRMWARE_ID "SBCG-M4.1-CAND-R1"
 #elif defined(SBCG_USE_BOARD_SYNC)
 #define APP_FIRMWARE_ID "SBCG-M2.3-SYNC"
@@ -66,7 +71,12 @@
 #endif
 #define APP_HEARTBEAT_PERIOD_MS 1000U
 #define APP_LOG_LINE_CAPACITY 256U
+#ifdef SBCG_USE_SOUND_TIME
+/* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。 */
+#define APP_LOG_QUEUE_CAPACITY 32U
+#else
 #define APP_LOG_QUEUE_CAPACITY 16U
+#endif
 /* BOOT/heartbeat remain short; allow longer service logs without larger locals. */
 #define APP_STATUS_LINE_CAPACITY 160U
 
@@ -101,7 +111,7 @@ static void FlushOneLine(void)
 }
 
 /**
- * @brief   直接发送服务日志，或在温度时序保护/队列未排空时复制到有界队列。
+ * @brief   复制或直接发送前台日志；事件时间版本统一入队，其他版本沿用温度时序保护。
  * @param   line 有效ASCII日志缓冲区；由调用者持有，必要时本函数同步复制。
  * @param   length 待发字节数，合法范围1～255，不包括字符串结尾的空字符。
  * @return  无返回值（void）。
@@ -116,7 +126,12 @@ static void SendLine(const char *line, int length)
         return;
     }
 
-    if (TemperatureService_IsStartLowActive() || pending_count != 0U)
+#ifdef SBCG_USE_SOUND_TIME
+    const bool enqueue = true;
+#else
+    const bool enqueue = TemperatureService_IsStartLowActive() || pending_count != 0U;
+#endif
+    if (enqueue)
     {
         if (pending_count == APP_LOG_QUEUE_CAPACITY)
         {
@@ -178,6 +193,7 @@ static void EmitBoardIdentity(const BoardIdentityProfile *profile)
  * @brief   读取板卡身份并按依赖顺序初始化当前构建启用的应用服务。
  * @return  无返回值（void）。
  * @note    依赖已初始化的UART/I2C/LwIP/SAI等资源；服务通过SendLine报告状态。
+ *          事件时间版本统一排队，App_Process每轮至多排空一行，避免周期突发阻塞PCM归还。
  *          先拆PTP最外层再拆UDPTimeExchange；任一所有权不能安全拆除时立即返回。
  */
 void App_Init(void)
@@ -253,6 +269,9 @@ void App_Init(void)
 #endif
 #ifdef SBCG_USE_AUDIO_MAP
     AudioTimeMapMonitor_Init(SendLine);
+#ifdef SBCG_USE_SOUND_TIME
+    SoundEventTime_Init(SendLine);
+#endif
 #endif
     CodecMonitor_Init(BSP_Console_GetTickMs(), SendLine);
     if (!BSP_Console_RxInit())
@@ -322,7 +341,22 @@ void App_Process(void)
 #ifdef SBCG_USE_AUDIO_ANCHOR
     AudioTimeAnchor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
-#ifdef SBCG_USE_AUDIO_MAP
+#ifdef SBCG_USE_SOUND_TIME
+    /* 单次消费锚点，同一副本分发给旧自检与候选模型，DHT低态不发布。 */
+    if(!TemperatureService_IsStartLowActive())
+    {
+        AudioTimeAnchorObservation observation;
+        if(AudioTimeAnchor_TakeObservation(&observation))
+        {
+            const uint32_t observation_ms=BSP_Console_GetTickMs();
+            AudioTimeMapMonitor_Observe(observation_ms,&observation);
+            SoundEventTime_Observe(BSP_Console_GetTickMs(),&observation);
+        }
+        BSP_AudioSnapshot snapshot;
+        BSP_Audio_GetSnapshot(&snapshot);
+        SoundEventTime_Process(BSP_Console_GetTickMs(),&snapshot);
+    }
+#elif defined(SBCG_USE_AUDIO_MAP)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
     FlushOneLine();

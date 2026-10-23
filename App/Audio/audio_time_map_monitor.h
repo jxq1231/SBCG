@@ -8,6 +8,7 @@
 #define SBCG_AUDIO_TIME_MAP_MONITOR_H
 #include <stdbool.h>
 #include <stdint.h>
+#include "audio_time_anchor.h"
 /**
  * @brief   前台日志输出回调类型。
  * @param   line 只读日志字节，仅回调期间有效；返回前须消费或复制，不可保留指针。
@@ -33,6 +34,13 @@ void AudioTimeMapMonitor_Init(AudioTimeMapLog log);
  * @note    App_Process前台调度；超过250毫秒判陈旧，失败清窗；序号或会话变化时可用当前有效观测开启新窗。
  */
 void AudioTimeMapMonitor_Process(uint32_t now_ms, bool processing_allowed);
+/**
+ * @brief 接受唯一消费者分发的锚点副本，不再读取单槽。
+ * @param now_ms 副本取得后的当前HAL毫秒。
+ * @param observation 非NULL只读副本，不保留指针；NULL不操作。
+ * @return 无返回值；与兼容Process入口二选一，不得重复交付同一观测。
+ */
+void AudioTimeMapMonitor_Observe(uint32_t now_ms,const AudioTimeAnchorObservation *observation);
 /**
  * @brief   清空三点窗口，禁止模型跨相位或速率修订插值。
  * @return  无返回值。

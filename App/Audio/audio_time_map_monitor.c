@@ -156,6 +156,19 @@ void AudioTimeMapMonitor_Process(uint32_t now_ms, bool processing_allowed)
 {
     AudioTimeAnchorObservation observation;
     if (log_line == NULL || !processing_allowed || !AudioTimeAnchor_TakeObservation(&observation)) { return; }
+    AudioTimeMapMonitor_Observe(now_ms,&observation);
+}
+
+/**
+ * @brief 接受唯一分发器复制的锚点，保留原三点留中验证。
+ * @param now_ms 取副本后刷新取得的HAL毫秒。
+ * @param input 非NULL只读观测，复制使用，不消费单槽，不保留指针。
+ * @return 无返回值；失败沿用原诊断与清窗规则，不新增硬件访问。
+ */
+void AudioTimeMapMonitor_Observe(uint32_t now_ms,const AudioTimeAnchorObservation *input)
+{
+    if(log_line==NULL || input==NULL)return;
+    const AudioTimeAnchorObservation observation=*input;
     const bool sequence_gap = have_sequence && observation.sequence != last_sequence + 1U;
     have_sequence = true;last_sequence = observation.sequence;
     if (!Valid(&observation.anchor)) { Failure("ANCHOR",observation.sequence,AUDIO_TIME_MAP_OK);return; }
