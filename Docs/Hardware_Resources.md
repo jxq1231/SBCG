@@ -2,6 +2,8 @@
 
 <!-- doc-status: current-reference-with-future-designs; reviewed: 2026-10-24 -->
 
+> **U1实物更新：** 工作区FMC/MPU Region1已生成，PC3及tRCD已修正；初始化访问0xA0000140被Region0拦截，当前等待CubeMX新增Region2 A0000000/4KB共享Device。已恢复TIME-R1，SDRAM与LCD未通过。见[U1记录](Milestones/U1_SDRAM_Bringup.md)。
+
 > 2026-10-24显示现行步骤见[LTDC RGB565起步](Plans/2026-10-24_LTDC_RGB565_Bringup.md)：先FMC/MPU、后LTDC；旧100MHz/CAS2仅保留为历史BSP对照。
 
 > 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。

@@ -2,6 +2,8 @@
 
 <!-- doc-status: completed-software-awaiting-display-hardware; reviewed: 2026-10-24 -->
 
+> 后续状态：用户已完成FMC/Region1生成；U1启动被遗漏的FMC寄存器Region2阻断，当前按[U1记录](U1_SDRAM_Bringup.md)补正。本页保留U0交付时的未生成边界，不重复实施。
+
 用户要求修复问题后推进显示，并明确先LTDC RGB565、后TouchGFX；参考指定聊天及GUI_FOR_TEST。M4.1.3本地模型/日志修复已先提交1d4dfde，本增量只做显示的软件准备，没有开启第二个并行硬件里程碑。
 
 ## 已交付

@@ -10,7 +10,7 @@
 
 **当前U0 RGB565状态页的软件准备完成，尚未点屏。** 用户选择先LTDC RGB565、后TouchGFX；已参考指定聊天及GUI_FOR_TEST，只移植显示思路。新增纯C状态/绘图/行带渲染并通过主机测试，预览和实测边界见[U0报告](Milestones/U0_RGB565_Status_Page.md)。当前板上仍为上述TIME-R1，UI未链接/烧录，不访问外部内存。
 
-下一步U1只通过CubeMX配置FMC SDRAM1及MPU Region1，先内存测试，再启LTDC。请按[现行配置步骤](Plans/2026-10-24_LTDC_RGB565_Bringup.md)，不要执行旧100MHz/CAS2或旧LCD时序。当前无网线、B或示波器，温度未就绪；声音识别及外部精度仍待后续。
+**U1 SDRAM软件/两构建已准备，实物启动未通过。** 用户已生成FMC和MPU Region1，但FMC寄存器0xA0000140被Region0禁止，MemManage发生在MX_FMC_Init、无BOOT；已恢复上述TIME-R1，8秒心跳/音频恢复正常。下一步只通过CubeMX新增Region2（A0000000/4KB、共享Device、Full Access、XN），再适配BSP区域选择器并重新验收。见[U1失败与恢复](Milestones/U1_SDRAM_Bringup.md)及[现行步骤](Plans/2026-10-24_LTDC_RGB565_Bringup.md)。当前未点屏，仍无网线/B/示波器；不播放声音。
 
 ## 暂缓验收：M2.3.3 PPS
 
@@ -49,9 +49,10 @@
 | SAI2 | A主接收提供时钟，B内部同步从接收；16位双通道，4时隙中1/3有效；标称48kHz，推导约47991.071Hz，PLLI2S344/Q7/DivQ1 |
 | 音频DMA/IRQ | DMA2 Stream7 Channel0，P→M halfword circular，32768元素/64KiB；DMA2_Stream7和SAI2 IRQ均4/0；半满/满每8192帧 |
 | 内存/Cache | 音频SRAM1 0x20010000..0x20020000、32字节对齐；主栈0x20047000..0x20048000，LwIP堆窗0x20048000..0x2004C000；ETH描述符/RX池在SRAM2；I/D Cache关闭 |
-| 当前未完成 | PPS波形/双板同步外部精度、FMC/外部SDRAM、LTDC/DMA2D、温度共享、标准声音识别/到达校准与测距；实验能量候选已接入 |
+| FMC/SDRAM | 工作区已生成38脚/PC3 SDCKE0、CAS3/HCLK3与8MB Region1；Region2缺失导致初始化异常，尚未实物通过；板上已恢复不含FMC的TIME-R1 |
+| 当前未完成 | PPS波形/双板同步外部精度、SDRAM实物验收、LTDC/DMA2D、温度共享、标准声音识别/到达校准与测距；实验能量候选已接入 |
 
-生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；本次仅UDP PCB池配置已由用户在CubeMX更新，其余硬件配置不变。
+生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；此前M2.3.2仅调整UDP PCB池。本次U1由用户新增FMC/MPU Region1，当前等待Region2；板上恢复版不包含这次FMC配置。
 
 ## 前一M3.2.4实物证据与已知限制
 
