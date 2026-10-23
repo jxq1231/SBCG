@@ -16,10 +16,11 @@
 
 ## 逐文件状态
 
-当前登记79份自有Markdown：原76份，本轮新增M2.3.2批准方案、软件交付报告和Tests/ClockServo/README。
+当前登记80份自有Markdown：原79份，新增M2.3.3 PA15/PTP整秒输出配置方案。
 
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
+| [M2.3.3 PA15 PPS方案](Plans/2026-10-23_PTP_PPS_PA15.md) | 当前目标·待CubeMX生成 | PA15/D9、TIM2/PTP remap配置；尚未实现/验收 |
 | [M2.3.2软件交付](Milestones/M2_3_2_Dual_Board_Clock_Software.md) | 软件与短时运行通过 | 冻结固件及60秒内部观测，初始异常/未测边界保留 |
 | [M2.3.2批准方案](Plans/2026-10-23_Dual_Board_Clock_Closed_Loop.md) | 当前方案·配置/扩展已批准 | 只实现当前闭环，烧录另行授权 |
 | [纯C伺服测试](../Tests/ClockServo/README.md) | 当前验证参考 | 控制增益、符号、边界与仿真限制 |
