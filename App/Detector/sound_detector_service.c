@@ -1,0 +1,186 @@
+/**
+ * @file        sound_detector_service.c
+ * @brief       在PCM唯一借用中暂存检测，归还验证成功后发布有界本地帧候选。
+ * @details     工作副本隔离未验证PCM，固定两级4条队列；失败/断流清历史，限速发送并统计损失。
+ * @note        仅串行前台，不调用BSP Begin/End、不保留样本指针；无新IRQ/DMA/PTP时间查询。
+ */
+#include "sound_detector_service.h"
+#include <inttypes.h>
+#include <stddef.h>
+#include <stdio.h>
+#define BLOCK_MAX_AGE_MS 250U
+#define STREAM_MAX_AGE_MS 1000U
+#define EVENT_LOG_PERIOD_MS 250U
+#define STATE_LOG_PERIOD_MS 1000U
+const SoundDetectorConfig SoundDetectorService_DefaultConfig={64U,256U,128U,2U,8U,24000U};
+typedef struct { SoundCandidate event; uint32_t completed_ms,sequence; } QueuedCandidate;
+static SoundDetector current,working;
+static SoundDetectorServiceSnapshot diagnostics;
+static SoundCandidate staged[SOUND_DETECTOR_QUEUE_CAPACITY];
+static QueuedCandidate queue[SOUND_DETECTOR_QUEUE_CAPACITY];
+static uint32_t staged_total,staged_ms,last_event_ms,last_state_ms;
+static uint8_t staged_count,head,count;
+static bool active,stage_valid,boundary;
+static void (*emit_line)(const char *,int);
+
+/** @brief 饱和增加计数；value为非NULL可写计数、amount为增加条数，无返回值，仅前台。 */
+static void Add(uint32_t *value,uint32_t amount)
+{ *value=UINT32_MAX-*value<amount ? UINT32_MAX:*value+amount; }
+/** @brief 将uint64数值value转为output至少21字节缓冲的十进制字符串，无返回值；避免nano的64位printf。 */
+static void Decimal(uint64_t value,char output[21])
+{
+    char reverse[20];unsigned length=0U;
+    do { reverse[length++]=(char)('0'+value%10U);value/=10U; } while(value!=0U);
+    for(unsigned i=0U;i<length;++i)output[i]=reverse[length-i-1U];
+    output[length]='\0';
+}
+/** @brief 发送已完成格式化的临时line；length为snprintf长度，无返回值；回调须返回前消费，禁止截断行。 */
+static void Emit(const char *line,int length)
+{
+    if(emit_line!=NULL && length>0 && length<256)emit_line(line,length);
+    else if(emit_line!=NULL)Add(&diagnostics.errors,1U);
+}
+/** @brief 丢弃已验证但尚未发送的队列并记录损失；无参数，无返回值，不访问PCM。 */
+static void DropQueue(void)
+{ Add(&diagnostics.dropped,count);head=count=0U; }
+/** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
+static void ResetHistory(void)
+{
+    if(current.have_input || count!=0U || active)Add(&diagnostics.resets,1U);
+    (void)SoundDetector_Reset(&current);DropQueue();active=stage_valid=false;staged_count=0U;staged_total=0U;
+}
+/**
+ * @brief 初始化实验配置、工作副本和发送限速。
+ * @param now_ms 当前HAL毫秒。
+ * @param config 只读非NULL配置，复制使用。
+ * @param channel 输入声道0/1。
+ * @param log 可空日志，NULL使服务停用。
+ * @return true为就绪，false为停用或参数非法。
+ * @note 软件状态整体复位，不启动或停止采集；参数在初始化行报告，未经标准音频标定。
+ */
+bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config,
+    uint8_t channel,void (*log)(const char *,int))
+{
+    diagnostics=(SoundDetectorServiceSnapshot){0};diagnostics.channel=channel;
+    head=count=staged_count=0U;staged_total=0U;active=stage_valid=boundary=false;
+    emit_line=log;last_event_ms=last_state_ms=now_ms;
+    const bool valid=SoundDetector_Init(&current,config);
+    diagnostics.configured=valid && channel<2U && log!=NULL;
+    if(!diagnostics.configured)return false;
+    char line[256];
+    Emit(line,snprintf(line,sizeof line,
+        "$SOUND_INIT,RESULT=OK,CH=%u,WIN_FRAMES=%u,ON_RMS=%u,OFF_RMS=%u,ON_WIN=%u,QUIET_WIN=%u,"
+        "HOLDOFF_FRAMES=%" PRIu32 ",PROFILE=EXPERIMENTAL,SYNC=0\r\n",
+        (unsigned)channel,(unsigned)config->window_frames,(unsigned)config->on_rms_pcm,
+        (unsigned)config->off_rms_pcm,(unsigned)config->on_windows,(unsigned)config->quiet_windows,
+        config->refractory_frames));
+    return true;
+}
+/**
+ * @brief 在已有Begin认领内暂算整个交错PCM半块。
+ * @param now_ms 当前HAL毫秒，校验完成块年龄。
+ * @param block 非NULL借用描述符，仅本次调用访问其中PCM。
+ * @return true为暂存完成，false为元数据/生命周期错误，之后都须Complete。
+ * @note 工作副本推进全部8192帧；不打印、不保存PCM指针，不改已提交计数或状态。
+ */
+bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
+{
+    if(!diagnostics.configured)return false;
+    if(active){Add(&diagnostics.errors,1U);ResetHistory();return false;}
+    active=true;stage_valid=false;staged_count=0U;staged_total=0U;boundary=false;
+    if(block==NULL || block->samples==NULL || block->frame_count!=BSP_AUDIO_HALF_FRAMES ||
+        !block->index_valid || block->session==0U ||
+        block->first_frame>UINT64_MAX-block->frame_count ||
+        (uint32_t)(now_ms-block->completed_ms)>=BLOCK_MAX_AGE_MS)return false;
+    working=current;staged_ms=block->completed_ms;
+    boundary=current.have_input && (!block->contiguous || block->gap_frames!=0U ||
+        block->session!=current.session || current.last_frame==UINT64_MAX ||
+        block->first_frame!=current.last_frame+1U);
+    if(boundary)(void)SoundDetector_Reset(&working);
+    for(uint32_t i=0U;i<block->frame_count;++i)
+    {
+        SoundCandidate event;
+        const SoundDetectorResult result=SoundDetector_Push(&working,block->session,block->first_frame+i,
+            block->samples[2U*i+diagnostics.channel],&event);
+        if(result==SOUND_DETECTOR_INVALID || result==SOUND_DETECTOR_DISCONTINUITY)return false;
+        if(result==SOUND_DETECTOR_EVENT)
+        {
+            ++staged_total;
+            if(staged_count<SOUND_DETECTOR_QUEUE_CAPACITY)staged[staged_count++]=event;
+        }
+    }
+    stage_valid=true;return true;
+}
+/**
+ * @brief 仅在真实End成功后提交工作副本及候选。
+ * @param accepted BSP_Audio_EndBlock真实返回值，不得由暂算成功替代。
+ * @return true表示已验证提交；false清历史且拒绝本块。
+ * @note 不读取PCM；未验证候选不增加有效候选数，验证后两级队列损失均计入dropped。
+ */
+bool SoundDetectorService_Complete(bool accepted)
+{
+    if(!diagnostics.configured)return false;
+    if(!active){Add(&diagnostics.errors,1U);ResetHistory();return false;}
+    if(!accepted || !stage_valid){Add(&diagnostics.rejected_blocks,1U);ResetHistory();return false;}
+    if(boundary){Add(&diagnostics.resets,1U);DropQueue();}
+    current=working;Add(&diagnostics.valid_blocks,1U);
+    uint32_t sequence=diagnostics.candidates;
+    Add(&diagnostics.candidates,staged_total);Add(&diagnostics.dropped,staged_total-staged_count);
+    for(uint8_t i=0U;i<staged_count;++i)
+    {
+        Add(&sequence,1U);
+        if(count==SOUND_DETECTOR_QUEUE_CAPACITY){Add(&diagnostics.dropped,1U);continue;}
+        const uint8_t tail=(uint8_t)((head+count)%SOUND_DETECTOR_QUEUE_CAPACITY);
+        queue[tail]=(QueuedCandidate){staged[i],staged_ms,sequence};++count;
+    }
+    active=stage_valid=false;staged_count=0U;staged_total=0U;return true;
+}
+/**
+ * @brief 复制软件状态。
+ * @param out 非NULL调用方输出；NULL不写。
+ * @return 无返回值。
+ * @note 不授予PCM访问权，不读硬件或改变发送队列。
+ */
+void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
+{
+    if(out==NULL)return;
+    *out=diagnostics;out->pending=count;out->armed=current.armed;out->staging=active;
+}
+/**
+ * @brief 归还后检查流健康、候选年龄，并按固定上限发送。
+ * @param now_ms 当前HAL毫秒，使用无符号差。
+ * @param snapshot 当前非NULL只读采集快照，函数不保留指针。
+ * @return 无返回值。
+ * @note staging时不执行任何发布；故障清旧历史，不补发日志。候选仅含本地帧，SYNC始终0。
+ */
+void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
+{
+    if(!diagnostics.configured || active)return;
+    if(snapshot==NULL || !snapshot->running || snapshot->index_faults!=0U ||
+        snapshot->session==0U || snapshot->callback_count==0U ||
+        (uint32_t)(now_ms-snapshot->last_callback_ms)>=STREAM_MAX_AGE_MS ||
+        (current.have_input && current.session!=snapshot->session))ResetHistory();
+    for(uint8_t i=0U;i<SOUND_DETECTOR_QUEUE_CAPACITY && count!=0U;++i)
+    {
+        if((uint32_t)(now_ms-queue[head].completed_ms)<STREAM_MAX_AGE_MS)break;
+        head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;Add(&diagnostics.dropped,1U);
+    }
+    char line[256];
+    if(count!=0U && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
+    {
+        const QueuedCandidate item=queue[head];head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;
+        last_event_ms=now_ms;char first[21],confirmed[21];Decimal(item.event.onset_frame,first);Decimal(item.event.confirmed_frame,confirmed);
+        Emit(line,snprintf(line,sizeof line,
+            "$SOUND_CAND,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",CH=%u,FIRST=%s,CONFIRMED=%s,E_AC=%" PRIu32
+            ",PEAK=%" PRIu32 ",CLIP=%u,LOCAL=1,SYNC=0\r\n",
+            item.sequence,item.event.session,(unsigned)diagnostics.channel,first,confirmed,item.event.mean_square_ac,
+            item.event.peak_abs,item.event.clipped ? 1U:0U));
+    }
+    if((uint32_t)(now_ms-last_state_ms)<STATE_LOG_PERIOD_MS)return;
+    last_state_ms=now_ms;
+    Emit(line,snprintf(line,sizeof line,
+        "$SOUND_STATE,VALID_BLOCKS=%" PRIu32 ",REJECTED=%" PRIu32 ",RESETS=%" PRIu32 ",CANDIDATES=%" PRIu32
+        ",DROPPED=%" PRIu32 ",ERRORS=%" PRIu32 ",PENDING=%u,ARMED=%u,CH=%u,SYNC=0\r\n",
+        diagnostics.valid_blocks,diagnostics.rejected_blocks,diagnostics.resets,diagnostics.candidates,
+        diagnostics.dropped,diagnostics.errors,(unsigned)count,current.armed ? 1U:0U,(unsigned)diagnostics.channel));
+}

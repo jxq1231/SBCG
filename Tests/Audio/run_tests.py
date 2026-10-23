@@ -17,6 +17,7 @@ def main():
     environment["PATH"] = str(Path(compiler).parent) + os.pathsep + environment["PATH"]
     failures = 0
     cases = [
+        ("sound_capture", "stubs", ["App/Audio/audio_capture.c", "App/Audio/audio_statistics.c", "App/Detector/sound_detector.c", "App/Detector/sound_detector_service.c"]),
         ("audio_time_map_monitor", "stubs", ["App/Audio/audio_time_map_monitor.c", "App/Audio/audio_time_map.c"]),
         ("audio_time_map", "stubs", ["App/Audio/audio_time_map.c"]),
         ("audio_time_anchor", "stubs", ["App/Audio/audio_time_anchor.c"]),
@@ -34,6 +35,8 @@ def main():
                    "-I", str(ROOT / "Tests/Audio" / stubs), "-I", str(ROOT / "App"),
                    str(ROOT / f"Tests/Audio/test_{name}.c"), *map(str, (ROOT / s for s in sources)),
                    "-o", str(executable)]
+        if name == "sound_capture":
+            command.insert(1,"-DSBCG_USE_SOUND_DETECTOR=1")
         built = subprocess.run(command, env=environment, timeout=30, check=False)
         if built.returncode:
             failures += 1

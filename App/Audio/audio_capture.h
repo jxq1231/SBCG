@@ -1,6 +1,6 @@
 /**
  * @file        audio_capture.h
- * @brief       消费音频DMA半缓冲并输出电平和帧位置。
+ * @brief       消费音频DMA半缓冲并输出电平、帧位置及已验证声音候选。
  * @details     声明本模块接口、数据类型或配置常量。经BSP领取8192帧双声道PCM16块，计算峰值/RMS并在归还验证成功后发布；状态日志按至少一秒间隔输出。
  * @note        依赖生成的SAI/DMA及音频BSP；前台门控不停止DMA。
  */
@@ -29,7 +29,7 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log);
  * @param   now_ms 当前HAL毫秒计数；使用无符号差处理常规32位回绕。
  * @param   processing_allowed 本次是否允许前台处理；DHT11启动拉低期间应为false。
  * @return  无返回值。
- * @note    App_Process重复调度，非精确周期；Begin成功后必调用End，End通过才发布统计，之后不再解引用DMA指针。
+ * @note    App_Process重复调度，非精确周期；Begin成功后必调用End，End通过才提交统计和候选，失败清检测历史；之后不再解引用DMA指针。
  */
 void AudioCapture_Process(uint32_t now_ms, bool processing_allowed);
 #endif

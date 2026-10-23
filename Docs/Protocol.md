@@ -304,3 +304,13 @@ $AUDIO_MAP_CHECK,SEQ=1,OBS_NS=2000005000,RES_NS=5000,SYNC=0
 失败仅有`$AUDIO_MAP,SEQ=...,STATUS=ANCHOR|STALE|SEQUENCE|SESSION|ORDER|CORE,CORE=...,VALID=0,SRC=...,SYNC=0`，省略会话/位置/所有时间，不输出CHECK，不复用旧值。CORE仅内核拒绝时取原状态1..8，其他为0。失败和成功都消耗独立SEQ，窗口前两点静默；失败重建不跨断序/会话/过期窗口。新源到达前必须完成上一组CHECK配对。
 
 服务是前台三点自检观测，不是声音事件查询接口。模型继承M3.2.3，未校准codec/SAI/FIFO/DMA物理延迟；新区间不代表声学误差界。`Analysis/audio_time_map_board_analysis.py --serial <从新BOOT开始的JSONL> --output-dir <新目录>`核对≥90原音频位置/锚点、≥30组MAP/CHECK，并与真实C及Fraction逐项比较。工具恒hardware_verified=false；本轮120秒实物采集结合UID/固件、原网络及温度联合验收通过，40组全部一致、最大绝对残差14.884us，仍LOCAL/SYNC=0。详见[M3.2.4验收记录](Milestones/M3_2_4_Audio_Time_Map_Board.md)。
+
+## M4.1.2 本地声音候选（实验能量检测）
+
+固件SBCG-M4.1-CAND-R1。沿用ASCII/CRLF，每行<256字节；无新UDP端口。
+
+- `SOUND_INIT`：RESULT、CH（0/1）、WIN_FRAMES、ON_RMS、OFF_RMS（PCM幅度）、ON_WIN、QUIET_WIN、HOLDOFF_FRAMES；PROFILE固定EXPERIMENTAL、SYNC固定0。
+- `SOUND_CAND`：SEQ为uint32饱和候选序号，SESSION为本次采集uint32会话，CH为0/1；FIRST、CONFIRMED为uint64本地帧坐标，分别是首个合格窗起点、末确认窗末帧。E_AC为uint32去直流均方幅度，PEAK为uint32原始绝对峰值，CLIP为0/1截幅标志。LOCAL=1、SYNC=0，不包含PTP到达时刻。
+- `SOUND_STATE`：VALID_BLOCKS、REJECTED、RESETS、CANDIDATES、DROPPED、ERRORS为uint32饱和计数；PENDING为0..4队列长度，ARMED为0/1，CH为声道，SYNC=0。候选序号缺口可能来自有记录的队列丢弃；不可当作跨启动唯一键。
+
+唯一的Audio Begin/End内暂算，真实End通过才提交；失败/断流清除确认历史与旧队列。候选至多每250ms发送一条，状态至多每1000ms一条；队列超龄1000ms丢弃计数，不补发。只能表明实验能量候选及其采样帧，不能当作标准音频识别、物理声到达时间或同步精度证明。字段与实测范围见[M4.1.2记录](Milestones/M4_1_2_Sound_Candidate_Integration.md)。

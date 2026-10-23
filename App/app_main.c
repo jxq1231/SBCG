@@ -47,7 +47,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与16行、单行256字节的日志队列。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_BOARD_SYNC)
+#if defined(SBCG_USE_SOUND_DETECTOR)
+#define APP_FIRMWARE_ID "SBCG-M4.1-CAND-R1"
+#elif defined(SBCG_USE_BOARD_SYNC)
 #define APP_FIRMWARE_ID "SBCG-M2.3-SYNC"
 #elif defined(SBCG_USE_BOARD_IDENTITY)
 #define APP_FIRMWARE_ID "SBCG-M2.3-ROLE"

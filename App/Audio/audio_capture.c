@@ -1,10 +1,14 @@
 /**
  * @file        audio_capture.c
- * @brief       消费音频半缓冲并输出电平、帧位置和运行状态。
+ * @brief       消费音频半缓冲并输出电平、帧位置及归还验证后的声音候选。
  * @details     前台经BSP领取一个已完成的8192帧双声道PCM16块，计算统计并在归还验证成功后发布；按毫秒差节流输出观测日志。
- * @note        依赖已生成的SAI/DMA及音频BSP；处理门控只暂停前台消费，不停止DMA。
+ * @note        依赖已生成的SAI/DMA及音频BSP；处理门控只暂停前台消费，不停止DMA。检测服务在原唯一认领中暂算，不保存PCM指针。
  */
 #include "audio_capture.h"
+#ifdef SBCG_USE_SOUND_DETECTOR
+#include "Detector/sound_detector_service.h"
+#include "BSP/bsp_console.h"
+#endif
 #include "audio_statistics.h"
 #include "BSP/bsp_audio.h"
 #include <inttypes.h>
@@ -55,6 +59,9 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
     level_block = (BSP_AudioBlock){0};
     const bool stopped = BSP_Audio_Stop();
     const bool started = stopped && log != NULL && BSP_Audio_Start();
+#ifdef SBCG_USE_SOUND_DETECTOR
+    (void)SoundDetectorService_Init(now_ms,&SoundDetectorService_DefaultConfig,0U,started ? log:NULL);
+#endif
     if (log == NULL) { return; }
     BSP_AudioSnapshot snapshot;
     BSP_Audio_GetSnapshot(&snapshot);
@@ -74,7 +81,7 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
  * @param   now_ms 前台获取的当前HAL毫秒计数；无符号差用于处理常规32位回绕。
  * @param   processing_allowed 是否允许本次前台处理；DHT11启动拉低期间应为false。
  * @return  无返回值。
- * @note    由App_Process调度，非精确周期；Begin成功后必调用End，End通过才发布电平，之后不再解引用该块DMA指针。
+ * @note    由App_Process调度，非精确周期；Begin成功后必调用End，End通过才提交电平及候选，失败清检测历史；之后不再解引用该块DMA指针。
  */
 void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
 {
@@ -84,14 +91,35 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
     {
         AudioStatistics next;
         const bool computed = AudioStatistics_Compute(block.samples, BSP_AUDIO_HALF_FRAMES, &next);
-        if (BSP_Audio_EndBlock(&block, computed))
+#ifdef SBCG_USE_SOUND_DETECTOR
+        /* 暂算不能代表DMA仍有效；候选只在真实End结果之后提交。 */
+        /* Begin可能刚好跨DMA IRQ，入口now_ms可能早于completed_ms；取新鲜时钟。 */
+        (void)SoundDetectorService_Stage(BSP_Console_GetTickMs(),&block);
+#endif
+        const bool accepted=BSP_Audio_EndBlock(&block, computed);
+#ifdef SBCG_USE_SOUND_DETECTOR
+        (void)SoundDetectorService_Complete(accepted);
+#endif
+        if (accepted)
         { levels = next; level_ms = block.completed_ms; level_block = block; level_valid = true; }
         else { level_valid = false; }
     }
+#ifdef SBCG_USE_SOUND_DETECTOR
+    /* 归还后才检查采集会话并限速输出；DHT门控已在函数入口处理。 */
+    BSP_AudioSnapshot sound_snapshot;
+    BSP_Audio_GetSnapshot(&sound_snapshot);
+    /* 快照之后再读tick，避免新回调时间晚于旧入口时间而无符号下溢。 */
+    now_ms=BSP_Console_GetTickMs();
+    SoundDetectorService_Process(now_ms,&sound_snapshot);
+#endif
     if ((uint32_t)(now_ms - last_log_ms) < AUDIO_LOG_PERIOD_MS) { return; }
-    last_log_ms = now_ms;
     BSP_AudioSnapshot snapshot;
     BSP_Audio_GetSnapshot(&snapshot);
+#ifdef SBCG_USE_SOUND_DETECTOR
+    /* 候选/状态发送也可能跨过DMA回调；音频摘要的第二次快照同样要后读时间。 */
+    now_ms=BSP_Console_GetTickMs();
+#endif
+    last_log_ms = now_ms;
     const uint32_t age_ms = snapshot.callback_count == 0U ? now_ms - initialized_ms
                                                         : now_ms - snapshot.last_callback_ms;
     const char *name = !snapshot.running ? "ERROR" : age_ms >= AUDIO_LOG_PERIOD_MS ? "STALLED" : "RUN";
