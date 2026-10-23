@@ -196,3 +196,14 @@ void SyncObservation_Process(uint32_t now_ms)
             observation.expired, observation.queue_full, observation.format_err));
     }
 }
+
+/**
+ * @brief   清除尚未计算的旧时间域配对，保留日志与累计统计。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void SyncObservation_NotifyClockChange(void)
+{
+    memset(observation.queue, 0, sizeof observation.queue);
+    observation.head = observation.count = 0U;
+}

@@ -6,43 +6,38 @@
 
 ## 当前工作
 
-- **当前增量M2.3.1：UID角色与唯一网络身份，软件与A板实物验收通过，B待更新。** 新固件SBCG-M2.3-ROLE按完整UID自动选择A=.1/MAC尾01、B=.2/MAC尾02，未知身份禁用网络与业务。见[交付与验收步骤](Milestones/M2_3_1_Dual_Board_Identity.md)、[当前设计](Plans/2026-10-23_Dual_Board_Time_Sync_Design.md)。
-- 用户确认交换机A接2号口、B接1号口、电脑接3号口；最新要求本次先完成A板程序，B板之后由用户烧录。物理接好不等于双板通信通过；用户已确认B网线断开，本轮仅验收A。B保持旧固件时继续隔离，之后更新再参与双板验收。
-- 同一份固件已冻结：Debug SHA256 `2457a4666a7bb4aa20c0c29097ca5ce92c2f8da93d87c36794b18f466e10590a`；Release `e88eca5268bc35da988db07d0c4868dfd7a63fcc8408448ec6ebb5a49a248cff`。11组原生模块、Tools108/Analysis87、两配置构建及ETH/音频布局通过，独立复核通过；用户“验收A板”后已按本版授权烧录一次；123.144秒A联合验收通过：110包UDP零缺口、两组各30请求、123有效音频锚点/41组MAP对照、24个温度版本、61次codec均通过，全部相关错误0。B未连接/烧录/验收。
-- M2.3.1仍LOCAL/SYNC=0，只建立后续同步的网络前提。板间硬件四时刻交换、校时/校频/失锁恢复尚未实现。当前不启动下一增量。
-
-### 前一实物基线M3.2.4（历史）
-
-- **M3.2.4板端时间估算接入已完成并通过本板实物验收。** [结果与限制](Milestones/M3_2_4_Audio_Time_Map_Board.md)：120.190秒，120个有效锚点/位置、40组MAP/CHECK全部与真实C及Fraction一致，最大绝对留出残差14.884us。原音频、温度和三路UDP同时通过。
-- 此前已烧录并验收版本 **SBCG-M3.2-MAP**（现A板已更新为上方SBCG-M2.3-ROLE）；Debug SHA256 `9921f102cc605a63d162655474bf98732f132a7be901f3372787155f619f20ad`。Release已构建但未烧录，SHA256 `99566cbc92a16c935e2ece7890c0ec5b696330bf95ea4b55d3c3045bce726253`。
-- 当时只做三锚点前台自检，仍LOCAL/SYNC=0，尚无声音事件查询API或声学延迟校准。最近纯算法前置增量M3.2.3见[归档记录](Milestones/M3_2_3_Audio_Time_Map.md)，其“未接入/未烧录”仅是当时边界。
-- M3.2.4当时已批准该SHA单次program/verify/reset，采集已关闭；该授权不作为新M2.3.1的烧录许可。历史实验没有检查B板。
-- 继续使用现有分支`jxq/m0-clock-review`；用户改动受保护，生成初始化和.ioc不手改。
+- **M2.3.2已实现，并通过用户指定的1分钟运行窗口验证。** 同一固件`SBCG-M2.3-SYNC`按UID固定A参考/B跟随，319/320固定PTPv2子集、四硬件时刻及B有界fine调相/调频。用户报告已手动烧录两板；助手本次未重复烧录/复位。详见[实现与短时证据](Milestones/M2_3_2_Dual_Board_Clock_Software.md)。
+- A=COM3、B=COM5，交换机仍为A2/B1/PC3口。B60秒236组原始四时刻与真实C/Fraction完全一致，协议估算时差−65～+340ns，漂移估计−61～+35ppb，8次成功调频，控制拒绝/错误0。CTRL35条内部锁、25条TRACKING，变频后重新建立锁证据；不是全程连续锁定。
+- 后续60秒稳定网络A/B各60包、零缺口/重复/乱序；probe和旧time exchange各板各15次全通过，音频位置各60条连续、codec各30次成功；A温度正常，B本地温度按UID禁用。初始准备窗口B序号回退FAIL原样保留，原因未证实，不能合并成全绿实验。
+- 本次用户明确将10分钟缩短为1分钟。各串口/网络窗口部分重叠，未捕获BOOT及冷启动相位步进，未读回Flash哈希；未测正向频率/正负大相位、断网恢复或外部同步精度，所有`SYNC=0`保持。内部估计不表示±10us课程独立验收或测距精度通过。
+- 已有软件证据：15组原生运行器、9412断言伺服、12组协调层、Tools113/Analysis98、两种构建/布局及独立复核通过。冻结Debug前缀`8fea8c54cc27`，Release前缀`ca5b89440a5b`；用户手动烧录报告与观测行为相符，实物精确哈希未读回。
+- 本次CubeMX仅用户再生成UDP PCB6，BSP fine扩展已明确批准。无引脚/RCC/DMA/NVIC/Cache改动，HAL原文件未改；旧配对/音频模型按时间代际失效，PCM DMA持续运行。
+- 下一步需单独选择冷启动/故障恢复或PPS独立精度，不自动扩大到UI、温度共享、声音检测/测距。
 
 ## 最近一次文档与可读性维护
 
-2026-10-23完成[系统架构](System_Architecture.md)、[答辩稿](Defense_Guide.md)及58个App C/H中文注释；156个函数定义、72个声明已覆盖，非注释token及两配置Flash镜像均与修改前一致，构建/布局通过。Debug调试信息因源码行号改变而有新ELF哈希，板上仍是上述已验收旧ELF；本轮没有连接设备或新实物验收。详见[维护记录](Architecture_Comment_Review.md)。
+2026-10-23完成[系统架构](System_Architecture.md)、[答辩稿](Defense_Guide.md)及58个App C/H中文注释；156个函数定义、72个声明已覆盖，非注释token及两配置Flash镜像均与修改前一致，构建/布局通过。Debug调试信息因源码行号改变而有新ELF哈希，该注释维护当时板上仍是旧ELF、未进行新实物验收；之后用户已手动更新两板SBCG-M2.3-SYNC，并按当前工作所述完成短时运行观测。详见[维护记录](Architecture_Comment_Review.md)。
 
 ## 当前已生成并使用的资源
 
 | 资源 | 当前配置及边界 |
 | --- | --- |
-| 板/MCU | STM32F746G-DISCO，STM32F746NGH6/TFBGA216；已登记A/B两块板；本轮先交付A，B延后烧录 |
-| UID | A `001A002D:30365105:36363631`；B `00380050:35385104:37313532`，新固件A映射已实测，B映射仅软件测试通过 |
+| 板/MCU | STM32F746G-DISCO，STM32F746NGH6/TFBGA216；已登记A/B两块板；双板网络及短时内部闭环已通过 |
+| UID | A `001A002D:30365105:36363631`；B `00380050:35385104:37313532`，A/B网络身份均已实测 |
 | 工具 | CubeMX6.18.1、CubeF7 V1.17.4、ARM GCC/CMake/Ninja、VS Code |
 | SYS/RCC | Trace Asynchronous Sw；HSE Bypass25MHz，M25/N400/P2，HCLK200MHz，PCLK1 50MHz/PCLK2 100MHz；PLLQ/2，不提供48MHz域 |
 | USART1 | PA9 TX/PB7 RX，115200 8N1无流控；RX IRQ5/0，无UART DMA；本机ST-LINK VCP COM3 |
 | 网络 | ETH/RMII、LAN8742地址0/ID0007:C131，100Mbps全双工；NO_SYS LwIP2.1.2轮询，无ETH IRQ；ETH有专用内部DMA |
-| 地址/端口 | 旧实测板192.168.10.1/24；新固件A=.1已实测、B=.2/24待用户更新；PC物理以太网192.168.10.100/24；板5005→PC5005，PC6006↔板5006，PC6007↔板5007 |
-| PTP | 原BSP本地时钟与RX/TX硬件戳、板端四时刻估算观测已实测；仍LOCAL/SYNC=0，无校时/校频/PPS |
+| 地址/端口 | 旧实测板192.168.10.1/24；A=.1、B=.2/24身份已实测；PC物理以太网192.168.10.100/24；板5005→PC5005，PC6006↔板5006，PC6007↔板5007 |
+| PTP | 原BSP本地时钟与RX/TX硬件戳、板端四时刻估算观测已实测；M2.3.2 B校时/校频短时观测通过；仍SYNC=0，PPS未实现 |
 | 温度 | DHT11模块3.3V，DATA为PG7/D4、开漏释放；5秒采集、预读/超龄机制；AUTO/手动及串口命令已实测，无温度UDP共享 |
 | I2C3 | PH7 SCL/PH8 SDA；WM8994地址0x1A，ID8994已实测；触控业务未实现 |
 | SAI2 | A主接收提供时钟，B内部同步从接收；16位双通道，4时隙中1/3有效；标称48kHz，推导约47991.071Hz，PLLI2S344/Q7/DivQ1 |
 | 音频DMA/IRQ | DMA2 Stream7 Channel0，P→M halfword circular，32768元素/64KiB；DMA2_Stream7和SAI2 IRQ均4/0；半满/满每8192帧 |
 | 内存/Cache | 音频SRAM1 0x20010000..0x20020000、32字节对齐；主栈0x20047000..0x20048000，LwIP堆窗0x20048000..0x2004C000；ETH描述符/RX池在SRAM2；I/D Cache关闭 |
-| 尚未启用 | TIM2/PPS、FMC/外部SDRAM、LTDC/DMA2D显示、双板同步/温度共享（A角色已实测，B待实测）；声音检测与测距尚未实现 |
+| 尚未启用 | TIM2/PPS、FMC/外部SDRAM、LTDC/DMA2D显示、双板同步外部精度验收/温度共享；声音检测与测距尚未实现 |
 
-生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；当前板端软件接入任务 **No CubeMX change required**。
+生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；本次仅UDP PCB池配置已由用户在CubeMX更新，其余硬件配置不变。
 
 ## 前一M3.2.4实物证据与已知限制
 
@@ -56,4 +51,6 @@ NDTR进度不是SRAM读取授权；WIDTH=0仍有一帧量化；codec/SAI/FIFO/DM
 
 ## 后续与验收分层
 
-M3.2.4通过10组原生模块（Audio10程序）、Tools83/Analysis87项及两配置构建/布局，并完成上述Debug实物验收。声学延迟校准、事件查询/检测、双板同步/PPS及LCD仍需独立规划；完整课程指标见[路线图](Project_Roadmap.md)，本轮先完成A程序、B延后烧录，最终双板要求保留。
+M3.2.4通过10组原生模块（Audio10程序）、Tools83/Analysis87项及两配置构建/布局，并完成上述Debug实物验收。声学延迟校准、事件查询/检测、双板同步/PPS及LCD仍需独立规划；完整课程指标见[路线图](Project_Roadmap.md)，M2.3.2已通过短时运行观测，最终整机要求保留。
+
+本次软件验证、冻结固件与实物验收步骤见[M2.3.2交付记录](Milestones/M2_3_2_Dual_Board_Clock_Software.md)；仅短时运行窗口实测，不代表外部精度。

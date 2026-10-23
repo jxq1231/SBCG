@@ -12,6 +12,7 @@ def main():
         print("Native GCC is required", file=sys.stderr)
         return 1
     for name, source in [("bsp_ptp", "App/BSP/bsp_ptp.c"),
+                         ("bsp_ptp_fine", None),
                          ("ptp_clock", "App/Sync/ptp_clock.c"),
                          ("ptp_rx", "App/Sync/ptp_rx.c"),
                          ("bsp_ptp_tx", "App/BSP/bsp_ptp_tx.c"),
@@ -29,12 +30,16 @@ def main():
             command += ["-Wl,--wrap=__mingw_snprintf", "-Wl,--wrap=snprintf"]
         if name == "bsp_ptp_tx":
             command += ["-DSBCG_TEST_PTP_TX"]
+        if name == "bsp_ptp_fine":
+            command += ["-DSBCG_TEST_PTP_FINE"]
         if name in ("ptp_rx", "ptp_tx"):
             for directory in ["LWIP/Target", "Middlewares/Third_Party/LwIP/src/include",
                               "Middlewares/Third_Party/LwIP/system"]:
                 command += ["-I", str(root / directory)]
-        command += [str(root / "Tests/Ptp" / ("test_" + name + ".c")),
-                    str(root / source), "-o", str(output)]
+        command += [str(root / "Tests/Ptp" / ("test_" + name + ".c"))]
+        if source is not None:
+            command += [str(root / source)]
+        command += ["-o", str(output)]
         result = subprocess.run(command, cwd=root, check=False, timeout=30)
         if result.returncode:
             return result.returncode

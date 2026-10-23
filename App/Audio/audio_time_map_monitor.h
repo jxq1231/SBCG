@@ -33,4 +33,11 @@ void AudioTimeMapMonitor_Init(AudioTimeMapLog log);
  * @note    App_Process前台调度；超过250毫秒判陈旧，失败清窗；序号或会话变化时可用当前有效观测开启新窗。
  */
 void AudioTimeMapMonitor_Process(uint32_t now_ms, bool processing_allowed);
+/**
+ * @brief   清空三点窗口，禁止模型跨相位或速率修订插值。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void AudioTimeMapMonitor_NotifyClockChange(void);
+
 #endif

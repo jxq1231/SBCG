@@ -13,3 +13,15 @@
 已冻结Debug/Release ELF至build/Firmware/SBCG-M2.3-ROLE并核对与当前构建哈希相同。当前76份自有Markdown、426处本地链接无缺失；两处生成网络文件去除USER CODE内容后与基线完全一致。详细交付及先A后B验收步骤见Docs/Milestones/M2_3_1_Dual_Board_Identity.md。本版Flash/Runtime仍NOT_RUN。
 
 用户随后明确“验收A板”，并确认B网线已断开。核对冻结ELF/源码后，仅A按原OpenOCD配置烧录一次；写入前同连接读取并比对96位UID。123.144秒联合窗口通过：110包SEQ14～123零缺口，两组各30请求及全部RX/TX/ACK/REPORT/板端估算对应；123有效音频锚点、41组真实C/Fraction一致，残差最大17393ns；24温度版本、61次codec无错。ARP实际MAC尾01、ping通过。原始12文件/121份冻结源码哈希未变；串口/UDP/进程关闭，A保持运行。B仍未更新/验收、LOCAL/SYNC=0保持。按用户最新的A范围作验证提交，不声明完整双板身份/同步完成。
+
+用户最新要求在一个增量中实现观察时差/漂移并加入校时，替代此前先只观察的分步边界。双板网络日志复核：A60/B60零错误，B30/30应答；粘贴与本地原始日志逐条相同，120个wire负载重解码和summary重放完全一致。现有UDP PCB默认4，原服务3，标准PTPv2新增2至少需5，提议CubeMX改6。BSP coarse5ns必须有明确fine运行时扩展，HAL存在无界等待/相对更新误用风险。应用、音频和在途报文必须感知校时代际。当前未改功能代码，完整边界见2026-10-23_Dual_Board_Clock_Closed_Loop.md。
+
+
+## M2.3.2软件冻结，2026-10-23
+
+用户完成CubeMX UDP PCB6生成并明确批准B fine BSP扩展；已核对生成差异和用户区，保留原组件许可。固定PTPv2、9412断言真C伺服、12组协调器、跨时域失效与App集成通过；15组原生运行器、Tools113/Analysis98、Debug/Release及四次布局通过。独立复核两项质量拒绝/lastvalid边界均有RED→GREEN并解除阻断。新固件SBCG-M2.3-SYNC已冻结，详见软件交付记录；新固件未烧录，硬件NOT_RUN、未提交当前功能，待本版明确授权后进入双板验收。
+
+
+## 用户手动烧录后的1分钟观测
+
+用户报告两板均手动烧录，并明确用1分钟代替原10分钟。仅采集未烧录/复位；COM3=A、COM5=B。B236组硬件四时刻经原生C/Fraction全部一致，协议估算−65～+340ns；B35/60条CTRL内部锁、25/60TRACKING，8次成功调频，控制拒绝/错误0。A/B独立各60秒串口及后续60秒稳定网络（部分重叠），各60包无缺口、各15probe和15time exchange通过，原音频/温度/codec复核通过。初始准备网络FAIL的B序号回退原样保留，具体原因未证实。无BOOT/Flash哈希读回/冷启动/故障注入/外部精度证据，不能宣称长期稳定或独立同步精度。完整证据manual-acceptance-01/acceptance.json，准备按此范围提交。

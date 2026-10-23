@@ -7,6 +7,9 @@
 
 #include "ptp_clock.h"
 #include "BSP/bsp_ptp.h"
+#ifdef SBCG_USE_BOARD_SYNC
+#include "BSP/bsp_board_identity.h"
+#endif
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -56,6 +59,10 @@ static const char *StatusName(BSP_PtpStatus status)
         case BSP_PTP_INIT_TIMEOUT: return "INIT_TIMEOUT";
         case BSP_PTP_BAD_CONFIG: return "BAD_CONFIG";
         case BSP_PTP_BAD_SNAPSHOT: return "BAD_SNAPSHOT";
+        case BSP_PTP_BUSY: return "BUSY";
+        case BSP_PTP_OUT_OF_RANGE: return "OUT_OF_RANGE";
+        case BSP_PTP_UPDATE_TIMEOUT: return "UPDATE_TIMEOUT";
+        case BSP_PTP_GENERATION_EXHAUSTED: return "GENERATION_EXHAUSTED";
         default: return "UNKNOWN";
     }
 }
@@ -65,7 +72,7 @@ static const char *StatusName(BSP_PtpStatus status)
  * @param   now_ms 前台初始化毫秒计数，作为日志节流起点。
  * @param   log 日志回调，可为NULL；后续处理期间须有效。
  * @return  无返回值；BSP初始化状态保存至后续日志。
- * @note    在MX_LWIP_Init之后前台执行；初始化本地计数不代表与PC同步。
+ * @note    在MX_LWIP_Init之后前台执行；初始化本地计数不代表与PC同步；固定B身份重装时仅复用读时校验通过的时钟。
  */
 void PtpClock_Init(uint32_t now_ms, PtpClock_Log log)
 {
@@ -74,7 +81,22 @@ void PtpClock_Init(uint32_t now_ms, PtpClock_Log log)
     sequence = errors = 0U;
     previous_ns = 0U;
     have_previous = false;
+#ifdef SBCG_USE_BOARD_SYNC
+    const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+    if (profile != NULL && profile->role == BOARD_ROLE_B)
+    {
+        init_status = BSP_PTP_InitFine();
+        /* 固定B角色重装应用时复用健康时钟，避免清零已校正的频率和计数。 */
+        if (init_status == BSP_PTP_NOT_READY)
+        {
+            BSP_PtpTime existing;
+            init_status = BSP_PTP_Read(&existing);
+        }
+    }
+    else { init_status = BSP_PTP_Init(); }
+#else
     init_status = BSP_PTP_Init();
+#endif
 }
 
 /**
@@ -126,4 +148,15 @@ void PtpClock_Process(uint32_t now_ms)
         have_previous = true;
     }
     emit(line, length);
+}
+
+/**
+ * @brief   清除上次读时快照，使受控校时后的首个样本不与旧时间域比较。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void PtpClock_NotifyClockChange(void)
+{
+    previous_ns = 0U;
+    have_previous = false;
 }

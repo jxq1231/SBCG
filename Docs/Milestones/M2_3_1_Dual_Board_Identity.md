@@ -1,8 +1,8 @@
-# M2.3.1 UID角色与网络身份：A板已验收，B板待用户更新
+# M2.3.1 UID角色与网络身份：A板已验收，双板网络共存通过
 
-<!-- doc-status: a-verified-b-pending; reviewed: 2026-10-23 -->
+<!-- doc-status: verified-network-b-ptp-pending; reviewed: 2026-10-23 -->
 
-当前唯一目标：同一份固件在两块已登记的STM32F746G-DISCO上自动选择唯一角色、IPv4和MAC，为后续板间同步消除地址冲突。**实现、软件检查及A板授权烧录/联合实物验收已通过；B板尚未更新/验收，双板网络共存及校时未完成。** 用户本轮明确要求“验收A板”，并确认B网线已断开。B板之后自行烧录。
+当前唯一目标：同一份固件在两块已登记的STM32F746G-DISCO上自动选择唯一角色、IPv4和MAC，为后续板间同步消除地址冲突。**实现、软件检查及A板授权烧录/联合实物验收已通过；B板随后由用户更新，双板网络共存及B请求应答已通过；B串口/精确固件哈希/硬件戳及双板校时尚未验收。** 用户本轮明确要求“验收A板”，并确认B网线已断开。B板之后自行烧录。
 
 ## 身份、接线与固件
 
@@ -124,3 +124,21 @@ python -B Tools/Monitor/dual_board_monitor.py --duration 60 --min-packets 50 --l
 ## 当前交付结论
 
 Build/软件回归：PASS；Flash：A PASS、B NOT_RUN；Runtime：A PASS，双板共存待B更新；Git：按A板已验证范围提交，不宣称B实物或双板同步通过。停在本增量，不自动开始校时实现。
+
+## 后续双板网络共存复核（2026-10-23，用户实测）
+
+用户提供ping/ARP及两份工具输出，本机同时存在`Logs/TimeSync/M2_3_1/dual-board-01.jsonl`和`b-probe-01.jsonl`。粘贴的184条JSON与两份本地日志拼接逐条相同；120个原始raw_hex负载重新解码与显示的序号/tick/UID一致；独立重放DualBoardTracker得到与原summary完全相同结果。
+
+| 检查 | 结果 |
+| --- | --- |
+| ping/ARP | A/B各4发4收；.1→MAC尾01，.2→MAC尾02，均在PC192.168.10.100接口 |
+| A逐秒UDP | 60秒60包、SEQ163～222，tick间隔991～1009ms |
+| B逐秒UDP | 同一窗口60包、SEQ175～234，tick间隔994～1006ms |
+| 来源/序号 | 两块完整UID及源IP/5005均正确；缺包/重复/乱序/窗口前包/非法/外来/身份冲突/序号错误全0 |
+| B请求应答 | 30发30收，无超时/发送错/非法/外来/未应答；RTT1.819～29.231ms、均值6.990ms |
+
+本轮接受结论为“交换机下双板网络共存与B基本请求应答通过”。两板上电时间不同，序号不相等正常；不能从相邻到包时间、tick差或ping毫秒值推导硬件时差。Starship目录扫描警告来自终端提示符，不是固件错误。
+
+未提供新B的BOOT/BOARD串口或独立B硬件戳记录，不将网络窗口升级为B全部外设/硬件时间验收。主机工具hardware_verified=false保持；本报告记录用户实际硬件证据及离线复核，不冒称本轮亲自连接B。复核证据在`Logs/TimeSync/M2_3_1/user-dual-check-01/checked-result.json`，原始日志未改写。
+
+下一目标按用户最新要求合并时差/漂移与校时，见[闭环方案](../Plans/2026-10-23_Dual_Board_Clock_Closed_Loop.md)。进入实现前需CubeMX扩大UDP控制块及确认BSP fine运行时扩展；不沿用旧版本烧录批准。

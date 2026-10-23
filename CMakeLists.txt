@@ -72,6 +72,10 @@ include(cmake/audio-layout.cmake)
 if(TARGET LwIP)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_LWIP=1)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_BOARD_IDENTITY=1)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_BOARD_SYNC=1)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        App/Network/ptp_wire.c App/Network/ptp_board_sync.c
+        App/Sync/clock_servo.c App/Sync/time_sync.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/BSP/board_identity.c App/BSP/bsp_board_identity.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_heartbeat.c)

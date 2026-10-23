@@ -171,3 +171,15 @@ void AudioTimeMapMonitor_Process(uint32_t now_ms, bool processing_allowed)
     window[count++] = observation;
     if (count == 3U) { Calculate(); }
 }
+
+/**
+ * @brief   清空三点窗口，禁止模型跨相位或速率修订插值。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void AudioTimeMapMonitor_NotifyClockChange(void)
+{
+    count = last_sequence = last_session = 0U;
+    have_sequence = have_session = false;
+    memset(window, 0, sizeof window);
+}

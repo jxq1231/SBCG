@@ -11,3 +11,5 @@
 - 本地HAL_ETH_PTP_AddTimeOffset还会调用含无界等待的AddendUpdate，且将时间偏差混入addend；不能未经核对直接接为伺服。后续需受控BSP扩展，HAL原文件不改。
 - 角色方案已见Hardware_Resources 5.8：同源同固件、96位UID允许名单；不按启动顺序或传感器响应猜角色。未知/配置重复必须拒绝联网业务。
 - ST RM0385官方手册：https://www.st.com/resource/en/reference_manual/dm00124865.pdf；网页工具因大于10MB无法全文打开，当前实现以仓库本地HAL为准；不拿上游master替换本地驱动。
+
+用户最新要求在一个增量中实现观察时差/漂移并加入校时，替代此前先只观察的分步边界。双板网络日志复核：A60/B60零错误，B30/30应答；粘贴与本地原始日志逐条相同，120个wire负载重解码和summary重放完全一致。现有UDP PCB默认4，原服务3，标准PTPv2新增2至少需5，提议CubeMX改6。BSP coarse5ns必须有明确fine运行时扩展，HAL存在无界等待/相对更新误用风险。应用、音频和在途报文必须感知校时代际。当前未改功能代码，完整边界见2026-10-23_Dual_Board_Clock_Closed_Loop.md。

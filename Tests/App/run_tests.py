@@ -15,11 +15,12 @@ def main():
     output_dir = root / "Logs" / "M0_2"
     output_dir.mkdir(parents=True, exist_ok=True)
     cases = [("test_app_main", []),
-             ("test_app_identity", ["-DSBCG_USE_BOARD_IDENTITY=1"])]
+             ("test_app_identity", ["-DSBCG_USE_BOARD_IDENTITY=1"]),
+             ("test_app_sync", ["-DSBCG_USE_BOARD_IDENTITY=1", "-DSBCG_USE_BOARD_SYNC=1"])]
     for name, flags in cases:
         output = output_dir / (name + ".exe")
         sources = [root / "Tests/App" / (name + ".c"), root / "App/app_main.c"]
-        if name == "test_app_identity":
+        if name in ("test_app_identity", "test_app_sync"):
             sources.append(root / "App/BSP/board_identity.c")
         command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
                    "-DSBCG_USE_LWIP=1", "-DSBCG_USE_AUDIO=1", "-DSBCG_USE_AUDIO_ANCHOR=1", "-DSBCG_USE_AUDIO_MAP=1",

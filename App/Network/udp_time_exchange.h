@@ -52,4 +52,11 @@ bool UDPTimeExchange_Init(uint32_t now_ms, const uint32_t uid_words[3],
  */
 void UDPTimeExchange_Process(uint32_t now_ms);
 
+/**
+ * @brief   在回调之外清除旧硬件配对，保留PCB、钩子与累计统计。
+ * @return  true表示已清除；false表示回调活动，未修改状态。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+bool UDPTimeExchange_NotifyClockChange(void);
+
 #endif

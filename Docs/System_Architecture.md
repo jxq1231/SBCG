@@ -2,7 +2,7 @@
 
 <!-- doc-status: current-architecture; reviewed: 2026-10-23 -->
 
-本文依据当前源码、CMake登记、Debug编译数据库和M3.2.4实物记录整理。它是当前系统的阅读地图，历史计划不再按顺序重复执行。当前源码和A实物版本为M2.3.1/SBCG-M2.3-ROLE，UID身份及原业务已通过123秒联合验收；B待用户更新/验收。原M3.2.4采集/时间模型链路保留。当前进度统一见[Project_State](Project_State.md)。
+本文依据当前源码、CMake登记、Debug编译数据库和M3.2.4实物记录整理。它是当前系统的阅读地图，历史计划不再按顺序重复执行。当前源码为M2.3.2/SBCG-M2.3-SYNC，软件及1分钟运行内部观测通过，用户手动烧录；此前网络基线M2.3.1/SBCG-M2.3-ROLE的A联合验收及双板网络共存证据按历史范围保留，当前两板已手动更新SYNC并完成短时运行观测。原M3.2.4采集/时间模型链路保留。当前进度统一见[Project_State](Project_State.md)。
 
 ## A. 架构总结：硬件生成层、应用服务层与主机验证层
 
@@ -95,7 +95,7 @@ flowchart TD
 | 3 | EthernetMonitor_Init | 取得PHY与链路观测基线 |
 | 4 | UDPHeartbeat_Init、UDPProbe_Init | 建立周期UDP与请求/应答服务 |
 | 5 | PtpClock_Init、PtpRx_Init、PtpTx_Init | 本地PTP配置/观察及旧服务硬件戳包装 |
-| 6 | SyncObservation_Init、UDPTimeExchange_Init | 初始化整数估算观测，最后安装时间交换外层包装 |
+| 6 | SyncObservation_Init、UDPTimeExchange_Init、TimeSync_Init | 原服务后安装最外层板间PTP包装；重装先卸TimeSync再卸UDPTimeExchange |
 | 7 | TemperatureService_Init、TemperatureConsole_Init | 初始化DHT状态、声速与命令解析器 |
 | 8 | AudioCapture_Init | 配置codec业务寄存器并启动既有SAI/DMA采集资源，不重配DMA映射 |
 | 9 | AudioTimeAnchor_Init、AudioTimeMapMonitor_Init | 建立游标/PTP锚点及三点自检窗口 |
@@ -166,7 +166,7 @@ NDTR表示DMA传输进度，不是麦克风膜片的物理到达时间；codec/S
 
 板192.168.10.1/24，电脑物理网卡192.168.10.100/24；5005是板到电脑心跳，电脑6006↔板5006为原请求/ACK，电脑6007↔板5007为时间交换。PTP模块读取MAC本地硬件时钟并关联收发描述符时间戳；电脑提交的t1/t4为软件时间，板端t2/t3为硬件时间，来源不能混写。
 
-SyncObservation用已配对的四时刻调用纯整数SyncEstimator，输出offset/delay观测，**尚未把结果反馈给PTP进行校时/校频**。因此当前始终LOCAL/SYNC=0，不存在已锁定的双板共同纪元或PPS输出。
+SyncObservation继续处理原PC交换观测。M2.3.2新增`TimeSync_Process → PtpBoardSync_Process/TakeExchange → SyncEstimator_Calculate → ClockServo_Observe → BSP_PTP_Step/SetFrequencyPpb → ClockServo_Commit`，只在B运行实际闭环。A保留coarse参考，B启动fine10ns。该源码已通过用户手动烧录后的1分钟运行观测；内部锁日志与独立精度分开，所有SYNC仍0，PPS未实现。
 
 ### 既有网络返回值限制
 
@@ -184,3 +184,9 @@ I/D Cache当前关闭，无新增缓存维护。音频区0x20010000～0x20020000
 - 每个注释文件、覆盖统计、等价性/构建结果及建议见[注释与验证记录](Architecture_Comment_Review.md)。
 - 当前硬件通过结论引用[M3.2.4报告](Milestones/M3_2_4_Audio_Time_Map_Board.md)。本轮不新烧录、不把新编译ELF替换成已验收固件哈希。
 - 后续显示需单独启用FMC/SDRAM、LTDC等实际资源并验证帧缓冲，再考虑TouchGFX页面。当前阶段不虚构GUI调用链或擅自加入显示框架。
+
+## M2.3.2新增调度与时间边界
+
+温度服务和温度命令处理之后、codec/音频处理之前调用TimeSync，门控取本轮DHT DATA状态；禁止处理时不发送、不估计、不校时。NO_SYS网络输入仍在前台同步执行，新增PTP硬件戳包装不增加ETH中断。B校正前须清理旧TX令牌，统一失效PtpClock基线、UDPTimeExchange配对、SyncObservation队列、AudioTimeAnchor历史和AudioTimeMapMonitor窗口；失败则FAULT，不伪称硬件回滚。真正动作完成后记录epoch/rate，并立即提交纯C控制器。音频DMA、缓存配置及原IRQ保持。
+
+源码状态和板上状态分开：新闭环已通过1分钟运行观测，冷启动/故障恢复及外部精度未测，原A/B网络共存证据不证明该闭环已收敛。

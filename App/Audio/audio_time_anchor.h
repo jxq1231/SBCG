@@ -56,4 +56,12 @@ void AudioTimeAnchor_Process(uint32_t now_ms, bool processing_allowed);
  * @note    仅前台单消费者；新尝试覆盖单槽，失败尝试的anchor.valid=false，序号暴露遗漏。
  */
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *observation);
+/**
+ * @brief   撤销旧锚点与单调性历史，延后至少一秒采集新时间域锚点。
+ * @param   now_ms 前台当前HAL毫秒值；以无符号差节流，允许自然回绕。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void AudioTimeAnchor_NotifyClockChange(uint32_t now_ms);
+
 #endif

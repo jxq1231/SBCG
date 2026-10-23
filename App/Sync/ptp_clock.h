@@ -36,4 +36,11 @@ void PtpClock_Init(uint32_t now_ms, PtpClock_Log log);
  */
 void PtpClock_Process(uint32_t now_ms);
 
+/**
+ * @brief   清除上次读时快照，使受控校时后的首个样本不与旧时间域比较。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void PtpClock_NotifyClockChange(void);
+
 #endif

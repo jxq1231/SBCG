@@ -2,13 +2,13 @@
 
 <!-- doc-status: current-interface; reviewed: 2026-10-23 -->
 
-更新：2026-10-23。当前A板已验收标识为 **SBCG-M2.3-ROLE**，B板待用户更新。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
+更新：2026-10-23。当前A/B板网络基线为 **SBCG-M2.3-ROLE**；**SBCG-M2.3-SYNC**已由用户手动烧录并通过1分钟运行内部观测。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
 
 M3.2.3当时完成纯算法与离线回放验证；M3.2.4已将原内核接入板端并以SBCG-M3.2-MAP实测；其后M2.3.1以SBCG-M2.3-ROLE复验原业务并验收A身份。当前状态见[Project_State](Project_State.md)。
 
-## M2.3.1 UID角色与网络身份（A本版已实测，B待更新）
+## M2.3.1 UID角色与网络身份（A联合实测、双板网络已通过）
 
-新构建BOOT的FW为`SBCG-M2.3-ROLE`，HCLK_HZ及UID_W0/W1/W2格式不变。随后新增ASCII/CRLF行；以下为配置格式示例；本轮A行已在授权烧录/123秒联合验收中观察到，B及UNCONFIGURED仅软件覆盖，不能据示例宣称B已实测：
+M2.3.1的BOOT FW为`SBCG-M2.3-ROLE`；M2.3.2改为`SBCG-M2.3-SYNC`，HCLK_HZ及UID_W0/W1/W2格式不变。随后新增ASCII/CRLF行；以下为配置格式示例；本轮A行已在授权烧录/123秒联合验收中观察到，B网络身份已由双板UDP/ARP验证，B本版BOOT/完整外设未在所供网络日志覆盖；UNCONFIGURED仅软件测试：
 
 ```text
 $BOARD,ROLE=A,IP=192.168.10.1,MAC=02:00:00:00:00:01,PEER_IP=192.168.10.2,SYNC=0
@@ -18,7 +18,30 @@ $BOARD,ROLE=UNCONFIGURED,NET=DISABLED,SYNC=0
 
 每次正常启动仅输出匹配的一行。ROLE为A/B/UNCONFIGURED文本；IP/PEER_IP为点分十进制IPv4，MAC为6个十六进制字节，SYNC为0。UID按BOOT的三个uint32字精确匹配；A/B真实UID见[当前状态](Project_State.md)。身份未知时不启动LwIP或业务，不回退到默认A。字段是软件配置声明，实际网口需用带UID的UDP来源与ARP另验；本行不声明硬件读回或同步已锁定。
 
-原UDP type1～7字节布局/宽度/字节序和端口不变，只改变B的源IP/MAC。`dual_board_monitor.py`可在同一PC5005分别核对两UID及来源，严格窗口不足/重复/乱序/缺包均不能PASS。本次用户先交付A，使用原`udp_monitor.py --uid`验A即可；双板工具留待B更新后使用，详见[验收步骤](Milestones/M2_3_1_Dual_Board_Identity.md)。
+原UDP type1～7字节布局/宽度/字节序和端口不变，只改变B的源IP/MAC。`dual_board_monitor.py`可在同一PC5005分别核对两UID及来源，严格窗口不足/重复/乱序/缺包均不能PASS。双板工具已经在60秒窗口核对各60包且无身份冲突，详见[验收步骤](Milestones/M2_3_1_Dual_Board_Identity.md)。
+
+## M2.3.2 固定A/B PTPv2与闭环日志（软件及1分钟运行观测通过，外部精度未测）
+
+沿用全部旧UDP字节布局与端口；新增板间UDP319事件/320一般消息，LwIP `MEMP_NUM_UDP_PCB=6`由用户CubeMX生成。固定domain0、portNumber1、单播、two-step Sync/Follow_Up/Delay_Req/Delay_Resp；34字节标准头，前三者44字节，Delay_Resp54字节。消息时间为48位秒+32位纳秒的大端编码，但实现只接受可落入uint32秒且纳秒<1e9的值；sourcePortIdentity按已登记MAC映射EUI64+port1，Delay_Resp校验requestingPortIdentity。非零correctionField拒绝。本实现不含BMCA/Announce选主，不宣称完整第三方互操作。
+
+A实际Sync TX=t1，B实际Sync RX=t2，B实际Delay_Req TX=t3，A实际Delay_Req RX=t4。B计算 `OFFSET_X2_NS=(t2-t1)-(t4-t3)`，`DELAY_X2_NS=(t2-t1)+(t4-t3)`，正时差为B领先A。B仅一项在途/待消费，TTL1000ms；A每至少250ms发送，启动及检测重启后6秒静默，依赖受控网络/前台推进，不保证跨掉电唯一会话。
+
+新增ASCII/CRLF日志（以下仅字段格式，不是实测证据）：
+
+```text
+$PTP_SYNC_RAW,T1_NS=1000000000,T2_NS=1000001100,T3_NS=1000002100,T4_NS=1000003000,EPOCH=1
+$SYNC_CTRL,ROLE=B,STATE=TRACKING,INTERNAL_LOCK=0,SYNC=0,OFFSET_X2_NS=200,DELAY_X2_NS=2000,DRIFT_PPB=100,FREQ_PPB=-100,EPOCH=1,RATE_REV=2,VALID=10,REJECT=0,ERRORS=0
+$SYNC_ADJUST,KIND=FREQUENCY,PHASE_NS=0,FREQ_PPB=-100,STATUS=0,EPOCH=1,RATE_REV=2,SYNC=0
+```
+
+- `PTP_SYNC_RAW`四时刻是无符号uint64纳秒、EPOCH为本地uint32时间代际。仅B消费完整交换时输出；未带与CTRL共享的样本ID，不得按时间邻近假称逐项配对。
+- `SYNC_CTRL`每至少1秒输出：A=`REFERENCE`；B=`ACQUIRING/TRACKING/LOCKED_INTERNAL/HOLDOVER/UNSYNCED/FAULT`。`INTERNAL_LOCK`为协议内部证据；`SYNC`始终0，不表示独立精度通过。OFFSET/DELAY为有符号int64的两倍纳秒；DRIFT为残余漂移int32 ppb，FREQ为已成功加载的绝对int32修正ppb，范围±100000。EPOCH/RATE_REV/VALID/REJECT/ERRORS为uint32计数；CTRL的REJECT是协调器计数，协议详细拒绝另看STATS。
+- `SYNC_ADJUST`记录每个硬件请求：KIND=`STEP/FREQUENCY`；PHASE为有符号int64纳秒，正值推进B；FREQ正值加速B。STATUS是BSP枚举，0为成功，非0不得视为校正通过。STEP行FREQ字段是动作参数，不代表重设实际频率；实际修正看CTRL。
+- `PTP_SYNC_STATS`每至少1秒输出OK/BAD/FOREIGN/CORRECTION/SEQ/EXPIRED/MISSING/TX_ERR/SEND_ERR/BIND_ERR/EPOCH，均uint32；OK为完成交换统计，SEQ是序号拒绝计数。
+- B初始大偏差在3个一致样本后只做受控对齐，之后有界调频；连续8个样本且偏差≤10us、已有真实斜率≤500ppb、平均路径≤2ms才允许内部锁。坏时效/非法四时刻立即清除锁与连续证据，但不刷新最后有效时刻；无有效数据2秒HOLDOVER、5秒UNSYNCED。命令不确定或频率记录不符进入FAULT。
+- 频率变化清除旧配对和音频三点模型，等待稳定分段重新建立；PCM DMA不停。没有新增IRQ、DMA或Cache维护。
+
+采集：`python -B Tools/Monitor/serial_monitor.py --port COM3 --duration 620 --log-prefix Logs/TimeSync/M2_3_2/a-01`。B用其电脑实际COM号及`b-01`前缀；采集器不复位目标、拒绝覆盖文件、保存原始bin和JSONL，返回CAPTURED_PENDING_ANALYSIS仅表示采集结束。分析：`python -B Analysis/board_sync_analysis.py --serial <b-01-serial.jsonl> --out <新结果.json>`；Fraction重算原始时差/时延，CTRL独立汇总，不把同源内部锁定当作外部同步误差。
 
 ## M3.1 音频串口状态（连续数据流及受控幅度响应已实测）
 

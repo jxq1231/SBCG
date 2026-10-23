@@ -177,3 +177,20 @@ void AudioTimeAnchor_Process(uint32_t now_ms, bool processing_allowed)
     }
     if (length > 0 && (size_t)length < sizeof line) { log_line(line, length); }
 }
+
+/**
+ * @brief   撤销旧锚点与单调性历史，延后至少一秒采集新时间域锚点。
+ * @param   now_ms 前台当前HAL毫秒值；以无符号差节流，允许自然回绕。
+ * @return  无返回值。
+ * @note    仅串行前台，校时或频率变化边界调用；不重启外设，不重置输出序号/累计计数。
+ */
+void AudioTimeAnchor_NotifyClockChange(uint32_t now_ms)
+{
+    last_attempt_ms = now_ms;
+    have_previous = false;
+    clock_faulted = false;
+    previous_time_ns = previous_frame_hi = 0U;
+    previous_session = 0U;
+    observation_pending = false;
+    memset(&latest_observation, 0, sizeof latest_observation);
+}

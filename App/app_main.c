@@ -8,6 +8,9 @@
  */
 #include "app_main.h"
 #include "BSP/bsp_console.h"
+#ifdef SBCG_USE_BOARD_SYNC
+#include "Sync/time_sync.h"
+#endif
 #ifdef SBCG_USE_BOARD_IDENTITY
 #include "BSP/bsp_board_identity.h"
 #endif
@@ -44,7 +47,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与16行、单行256字节的日志队列。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_BOARD_IDENTITY)
+#if defined(SBCG_USE_BOARD_SYNC)
+#define APP_FIRMWARE_ID "SBCG-M2.3-SYNC"
+#elif defined(SBCG_USE_BOARD_IDENTITY)
 #define APP_FIRMWARE_ID "SBCG-M2.3-ROLE"
 #elif defined(SBCG_USE_AUDIO_MAP)
 #define APP_FIRMWARE_ID "SBCG-M3.2-MAP"
@@ -163,7 +168,7 @@ static void EmitBoardIdentity(const BoardIdentityProfile *profile)
 
 /**
  * ==================== 模块：应用初始化 ====================
- * 作用：发布BOOT并建立网络/PTP、温度、音频观测和串口命令入口。
+ * 作用：发布BOOT/身份，建立网络/PTP闭环、温度、音频观测和串口命令入口。
  * 调度顺序：外设生成初始化之后执行；先拆外层网络包装，再按依赖顺序安装。
  * 调用关系：main调用一次；保留既有重复初始化保护，不在这里改外设配置。
  */
@@ -171,10 +176,19 @@ static void EmitBoardIdentity(const BoardIdentityProfile *profile)
  * @brief   读取板卡身份并按依赖顺序初始化当前构建启用的应用服务。
  * @return  无返回值（void）。
  * @note    依赖已初始化的UART/I2C/LwIP/SAI等资源；服务通过SendLine报告状态。
- *          UDPTimeExchange外层包装所有权不能安全拆除时立即返回，避免覆盖别人的钩子。
+ *          先拆PTP最外层再拆UDPTimeExchange；任一所有权不能安全拆除时立即返回。
  */
 void App_Init(void)
 {
+#ifdef SBCG_USE_BOARD_SYNC
+    /* 最外层PTP包装必须先安全卸载；失败时不动原网络/音频服务。 */
+    if (!TimeSync_Deinit())
+    {
+        static const char error[] = "$SYNC_INIT,RESULT=OWNERSHIP_ERROR\r\n";
+        SendLine(error, (int)(sizeof(error) - 1U));
+        return;
+    }
+#endif
 #ifdef SBCG_USE_LWIP
     /* Remove the outer wrapper before the existing observers capture pointers. */
     if (!UDPTimeExchange_Deinit())
@@ -219,6 +233,13 @@ void App_Init(void)
         static const char error[] = "$TS_INIT,RESULT=INIT_ERROR\r\n";
         SendLine(error, (int)(sizeof(error) - 1U));
     }
+#ifdef SBCG_USE_BOARD_SYNC
+    if (!TimeSync_Init(BSP_Console_GetTickMs(), profile, BSP_Console_GetTickMs, SendLine))
+    {
+        static const char error[] = "$SYNC_INIT,RESULT=INIT_ERROR\r\n";
+        SendLine(error, (int)(sizeof(error) - 1U));
+    }
+#endif
 #endif
     TemperatureService_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
     TemperatureConsole_Init(SendLine);
@@ -288,6 +309,10 @@ void App_Process(void)
 #endif
     TemperatureService_Process(BSP_Console_GetTickMs());
     TemperatureConsole_Process(BSP_Console_GetTickMs());
+#ifdef SBCG_USE_BOARD_SYNC
+    /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
+    TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#endif
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #ifdef SBCG_USE_AUDIO
     AudioCapture_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
