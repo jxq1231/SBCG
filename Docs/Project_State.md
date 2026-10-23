@@ -12,6 +12,10 @@
 - 用户已批准该SHA单次program/verify/reset；串口和UDP采集现已关闭，未做发声、拔插或第二板实验。下一增量尚未启动。
 - 继续使用现有分支`jxq/m0-clock-review`；用户改动受保护，生成初始化和.ioc不手改。
 
+## 最近一次文档与可读性维护
+
+2026-10-23完成[系统架构](System_Architecture.md)、[答辩稿](Defense_Guide.md)及58个App C/H中文注释；156个函数定义、72个声明已覆盖，非注释token及两配置Flash镜像均与修改前一致，构建/布局通过。Debug调试信息因源码行号改变而有新ELF哈希，板上仍是上述已验收旧ELF；本轮没有连接设备或新实物验收。详见[维护记录](Architecture_Comment_Review.md)。
+
 ## 当前已生成并使用的资源
 
 | 资源 | 当前配置及边界 |

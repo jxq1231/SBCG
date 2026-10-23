@@ -1,3 +1,11 @@
+/**
+ * @file        app_main.c
+ * @brief       协调单板网络、时间观测、温度与音频服务的初始化和前台调度。
+ * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
+ *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
+ * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
+ *              不承担IRQ处理、GUI绘制或双板校时。
+ */
 #include "app_main.h"
 #include "BSP/bsp_console.h"
 #include "Network/ethernet_monitor.h"
@@ -28,6 +36,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/**
+ * ==================== 模块：构建标识与前台日志状态 ====================
+ * 作用：按编译功能组合标识固件，维护心跳与16行、单行256字节的日志队列。
+ * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
+ */
 #if defined(SBCG_USE_AUDIO_MAP)
 #define APP_FIRMWARE_ID "SBCG-M3.2-MAP"
 #elif defined(SBCG_USE_AUDIO_ANCHOR)
@@ -55,6 +68,12 @@ static char pending_lines[APP_LOG_QUEUE_CAPACITY][APP_LOG_LINE_CAPACITY];
 static uint16_t pending_lengths[APP_LOG_QUEUE_CAPACITY];
 static uint32_t pending_head, pending_count;
 
+/**
+ * @brief   在DHT起始低电平结束后，尝试发送队首的一行日志。
+ * @return  无返回值（void）。
+ * @note    输入来自本模块待发队列；无数据或start-low期间不发送。
+ *          串口写失败累计错误但仍移除该行，每次调用最多处理一行。
+ */
 static void FlushOneLine(void)
 {
     if (pending_count == 0U || TemperatureService_IsStartLowActive()) { return; }
@@ -66,6 +85,14 @@ static void FlushOneLine(void)
     --pending_count;
 }
 
+/**
+ * @brief   直接发送服务日志，或在温度时序保护/队列未排空时复制到有界队列。
+ * @param   line 有效ASCII日志缓冲区；由调用者持有，必要时本函数同步复制。
+ * @param   length 待发字节数，合法范围1～255，不包括字符串结尾的空字符。
+ * @return  无返回值（void）。
+ * @note    各服务以前台回调方式调用；长度非法、队满或串口失败累计TX_ERRORS。
+ *          此处未检查line是否为NULL，调用方必须保证长度范围内的内存有效。
+ */
 static void SendLine(const char *line, int length)
 {
     if ((length <= 0) || ((size_t)length >= APP_LOG_LINE_CAPACITY))
@@ -94,6 +121,18 @@ static void SendLine(const char *line, int length)
     }
 }
 
+/**
+ * ==================== 模块：应用初始化 ====================
+ * 作用：发布BOOT并建立网络/PTP、温度、音频观测和串口命令入口。
+ * 调度顺序：外设生成初始化之后执行；先拆外层网络包装，再按依赖顺序安装。
+ * 调用关系：main调用一次；保留既有重复初始化保护，不在这里改外设配置。
+ */
+/**
+ * @brief   读取板卡身份并按依赖顺序初始化当前构建启用的应用服务。
+ * @return  无返回值（void）。
+ * @note    依赖已初始化的UART/I2C/LwIP/SAI等资源；服务通过SendLine报告状态。
+ *          UDPTimeExchange外层包装所有权不能安全拆除时立即返回，避免覆盖别人的钩子。
+ */
 void App_Init(void)
 {
 #ifdef SBCG_USE_LWIP
@@ -153,6 +192,18 @@ void App_Init(void)
     FlushOneLine();
 }
 
+/**
+ * ==================== 模块：主循环协同调度 ====================
+ * 作用：先处理LwIP收包/定时器/链路，再执行网络和本地时钟观测、温度与音频服务。
+ * 调度顺序：温度服务先更新当前DATA状态，后续模块据此门控，末尾最多排空一行日志。
+ * 调用关系：由main的while(1)反复调用；各服务自行节流，不代表固定频率任务。
+ */
+/**
+ * @brief   推进一轮前台处理、周期状态输出及延后日志发送。
+ * @return  无返回值（void）。
+ * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
+ *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
+ */
 void App_Process(void)
 {
 #ifdef SBCG_USE_LWIP

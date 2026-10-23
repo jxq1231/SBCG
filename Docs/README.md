@@ -8,10 +8,15 @@
 
 M3.2.4[实施计划](Plans/2026-10-23_Audio_Time_Map_Board_Implementation.md)已完成并归档，不重复实施。前置M3.2.3为当时纯软件验证，历史“未接入”不描述当前固件。下一独立增量尚未启动。
 
+本轮已完成系统架构、答辩资料及App中文注释整理；只读/注释维护不改变M3.2.4业务基线。[系统总览](System_Architecture.md)、[答辩稿](Defense_Guide.md)、[验证记录](Architecture_Comment_Review.md)。
+
 ## 按问题选择文档
 
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
+| 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
+| 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 30秒、两分钟和追问，当前无TouchGFX/RTOS |
+| 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
 | 本次任务执行到哪里 | [M3.2.4实施计划](Plans/2026-10-23_Audio_Time_Map_Board_Implementation.md) | 已完成的最近增量，按需追溯，不重复烧录 |

@@ -1,3 +1,9 @@
+/**
+ * @file        audio_capture.c
+ * @brief       消费音频半缓冲并输出电平、帧位置和运行状态。
+ * @details     前台经BSP领取一个已完成的8192帧双声道PCM16块，计算统计并在归还验证成功后发布；按毫秒差节流输出观测日志。
+ * @note        依赖已生成的SAI/DMA及音频BSP；处理门控只暂停前台消费，不停止DMA。
+ */
 #include "audio_capture.h"
 #include "audio_statistics.h"
 #include "BSP/bsp_audio.h"
@@ -16,6 +22,13 @@ static BSP_AudioBlock level_block;
 
 /* newlib-nano and native MinGW differ in long-long printf support. Keep
    the observed-frame counter portable without enabling larger printf libs. */
+/**
+ * @brief   将64位无符号数转成十进制文本。
+ * @param   value 待格式化数值。
+ * @param   output 调用方提供的至少21字节可写缓冲，不可为NULL；写入NUL结尾文本。
+ * @return  无返回值。
+ * @note    仅前台使用；避免依赖精简printf的64位整数支持。
+ */
 static void Decimal64(uint64_t value, char output[21])
 {
     char reverse[20];
@@ -25,6 +38,13 @@ static void Decimal64(uint64_t value, char output[21])
     output[count] = '\0';
 }
 
+/**
+ * @brief   复位前台统计并通过BSP停止旧采集、尝试启动新采集。
+ * @param   now_ms 前台获取的当前HAL毫秒计数；无符号差用于处理常规32位回绕。
+ * @param   log 日志回调，可为NULL以关闭对应前台处理；非空回调须在返回前消费或复制字节，不保留临时缓冲指针。
+ * @return  无返回值。
+ * @note    在生成外设初始化后、前台处理中调用；无日志或停止失败时不启动新采集，结果写入AUDIO_INIT日志。
+ */
 void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
 {
     log_line = log;
@@ -49,6 +69,13 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
     if (length > 0 && (size_t)length < sizeof line) { log(line, length); }
 }
 
+/**
+ * @brief   尝试消费一个DMA半块并按至少一秒间隔输出音频状态。
+ * @param   now_ms 前台获取的当前HAL毫秒计数；无符号差用于处理常规32位回绕。
+ * @param   processing_allowed 是否允许本次前台处理；DHT11启动拉低期间应为false。
+ * @return  无返回值。
+ * @note    由App_Process调度，非精确周期；Begin成功后必调用End，End通过才发布电平，之后不再解引用该块DMA指针。
+ */
 void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
 {
     if (log_line == NULL || !processing_allowed) { return; }

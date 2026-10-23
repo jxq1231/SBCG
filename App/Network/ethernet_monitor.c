@@ -1,3 +1,10 @@
+/**
+ * @file        ethernet_monitor.c
+ * @brief       轮询以太网PHY状态并输出初始化与链路日志。
+ * @details     经BSP_Ethernet读取PHY信息、速率与双工状态；初始化失败按2秒重试，链路按250毫秒检查，变化或5秒时输出。
+ * @note        前台串行调用；不配置MAC、DMA、NVIC或CubeMX引脚。
+ */
+
 #include "ethernet_monitor.h"
 #include "BSP/bsp_ethernet.h"
 
@@ -17,6 +24,11 @@ static BSP_EthernetLink last_link;
 static bool ready;
 static bool have_link;
 
+/**
+ * @brief   将PHY访问状态转换为日志用字符串。
+ * @param   status BSP以太网访问结果；未列出的值输出IO_ERROR。
+ * @return  指向静态只读字符串的指针，调用方不得释放。
+ */
 static const char *StatusName(BSP_EthernetStatus status)
 {
     switch (status)
@@ -29,6 +41,13 @@ static const char *StatusName(BSP_EthernetStatus status)
     }
 }
 
+/**
+ * @brief   保存日志接口并复位PHY轮询与重试状态。
+ * @param   now_ms 前台毫秒计数；初始化差值允许无符号回绕。
+ * @param   log_line 日志回调，可为NULL以停用处理；后续调用期间须有效。
+ * @return  无返回值。
+ * @note    不访问PHY；首次Process即可尝试初始化。
+ */
 void EthernetMonitor_Init(uint32_t now_ms, EthernetMonitor_Log log_line)
 {
     emit_line = log_line;
@@ -38,6 +57,12 @@ void EthernetMonitor_Init(uint32_t now_ms, EthernetMonitor_Log log_line)
     last_poll_ms = last_log_ms = now_ms;
 }
 
+/**
+ * @brief   按实际经过的毫秒数重试初始化、读取并报告PHY链路。
+ * @param   now_ms 前台当前毫秒计数，差值以uint32_t处理回绕。
+ * @return  无返回值；读取失败会回到初始化重试状态。
+ * @note    主循环调用，非精确周期任务；同步调用BSP与日志接口。
+ */
 void EthernetMonitor_Process(uint32_t now_ms)
 {
     char line[160];

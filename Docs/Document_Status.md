@@ -16,10 +16,16 @@
 
 ## 逐文件状态
 
-当前登记65份自有Markdown（初次审计57份、M3.2.3新增6份、M3.2.4新增2份）。
+当前登记71份自有Markdown（初次审计57份、M3.2.3新增6份、M3.2.4新增2份、架构/注释维护新增6份）。
 
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
+| [系统架构](System_Architecture.md) | 现行架构参考 | 当前真实启动/调度/数据流，排除未启用GUI路径 |
+| [答辩指南](Defense_Guide.md) | 现行讲解材料 | 按实际实现组织口头回答，不将设计目标当已实现 |
+| [注释与验证](Architecture_Comment_Review.md) | 已完成·维护证据 | 58文件清单、覆盖与代码/镜像等价，非新硬件验收 |
+| [架构整理计划](Plans/Architecture_2026_10_23/task_plan.md) | 已完成·维护计划 | 按需追溯，不重复批量修改 |
+| [架构核对笔记](Plans/Architecture_2026_10_23/findings.md) | 已完成·工作记录 | 本次代码证据和判断边界 |
+| [架构执行记录](Plans/Architecture_2026_10_23/progress.md) | 已完成·工作记录 | 本次验证和工具问题处理 |
 | [M3.2.4实施计划](Plans/2026-10-23_Audio_Time_Map_Board_Implementation.md) | 已完成·历史方案 | 按需追溯，不重复实施 |
 | [M3.2.4验收记录](Milestones/M3_2_4_Audio_Time_Map_Board.md) | 已完成·归档实物证据 | 只证明该版本120秒正常窗口，不代表声学校准 |
 | [.github/ISSUE_TEMPLATE/experiment.md](../.github/ISSUE_TEMPLATE/experiment.md) | 持续有效·协作模板 | 新建Issue/PR时使用，非实验结论 |

@@ -1,0 +1,134 @@
+meta:
+  title: SBCG 启动与前台运行
+  description: 当前裸机工程的主要启动步骤；完整IRQ和调度见System_Architecture.md。
+  profile: engineering-review
+  theme: tech-blue
+  layout: vertical
+nodes:
+  - id: reset
+    label: |-
+      Reset_Handler
+      startup_stm32f746xx.s
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 48
+  - id: system
+    label: |-
+      SystemInit
+      Core/Src/system_stm32f7xx.c
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 192
+  - id: crt
+    label: |-
+      复制.data / 清零.bss
+      __libc_init_array
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 336
+  - id: main
+    label: 'main: MPU_Config → HAL_Init'
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 480
+  - id: clock
+    label: |-
+      SystemClock_Config
+      PeriphCommonClock_Config
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 624
+  - id: hardware
+    label: |-
+      GPIO / DMA / USART1 / I2C3
+      LwIP / SAI2初始化
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 768
+  - id: init
+    label: |-
+      App_Init
+      App/app_main.c
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 912
+  - id: loop
+    label: 'while(1): App_Process'
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 1056
+  - id: net
+    label: |-
+      MX_LWIP_Process
+      收包 / 超时 / 链路
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 1200
+  - id: services
+    label: |-
+      网络/PTP → 温度/命令
+      codec / 音频 / 锚点 / MAP
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 1344
+  - id: logs
+    label: |-
+      FlushOneLine
+      随后进入下一轮App_Process
+    type: process
+    size: xl
+    position:
+      x: 64
+      'y': 1488
+edges:
+  - from: reset
+    to: system
+    type: primary
+  - from: system
+    to: crt
+    type: primary
+  - from: crt
+    to: main
+    type: primary
+  - from: main
+    to: clock
+    type: primary
+  - from: clock
+    to: hardware
+    type: primary
+  - from: hardware
+    to: init
+    type: primary
+  - from: init
+    to: loop
+    type: primary
+  - from: loop
+    to: net
+    type: primary
+  - from: net
+    to: services
+    type: primary
+  - from: services
+    to: logs
+    type: primary
+modules: []

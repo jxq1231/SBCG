@@ -1,3 +1,9 @@
+/**
+ * @file        audio_time_map.c
+ * @brief       由两锚点估计目标帧进度的本地PTP模型时间。
+ * @details     校验会话、顺序、时间窗口和速率区间，在所有端点相位均夹住目标时作线性插值，输出纳秒估计及边界。
+ * @note        纯计算；调用方隔离板卡与启动域，输入输出存储不重叠；边界不覆盖变速、编解码器延迟或同步误差。
+ */
 #include "audio_time_map.h"
 #include <stddef.h>
 #include <string.h>
@@ -5,6 +11,12 @@
 #define NS_PER_SEC UINT64_C(1000000000)
 #define NS_PER_SEC_X_MILLI UINT64_C(1000000000000)
 
+/**
+ * @brief   检查锚点标志、纳秒范围及帧区间宽度。
+ * @param   anchor 只读锚点，不可为NULL，调用方先检查指针。
+ * @return  满足核心局部约束返回true，否则false。
+ * @note    会话归属与两点顺序由估计函数继续校验。
+ */
 static bool ValidAnchor(const AudioTimeMapAnchor *anchor)
 {
     return anchor->valid && anchor->nsec < NS_PER_SEC &&
@@ -12,6 +24,16 @@ static bool ValidAnchor(const AudioTimeMapAnchor *anchor)
            anchor->frame_hi - anchor->frame_lo <= AUDIO_TIME_MAP_MAX_WIDTH_FRAMES;
 }
 
+/**
+ * @brief   由两锚点估计被夹住的帧进度所对应的模型时间。
+ * @param   left 左端只读锚点，不可为NULL。
+ * @param   right 右端只读锚点，不可为NULL，须与左端同板同启动域。
+ * @param   target_session 非零目标采集会话，必须匹配两端。
+ * @param   frame_position NDTR传输进度的整数帧坐标，并非PCM声学时刻。
+ * @param   result 调用方可写结果，不可为NULL且不与输入重叠；失败清零非NULL输出。
+ * @return  OK表示模型输入有效；其余枚举说明拒绝原因。
+ * @note    纯函数，不外推；纳秒边界仅含线性进度假设下相位量化和取整，不含变速、编解码器/SAI/FIFO延迟或同步误差。
+ */
 AudioTimeMapStatus AudioTimeMap_Estimate(const AudioTimeMapAnchor *left,
                                         const AudioTimeMapAnchor *right,
                                         uint32_t target_session,

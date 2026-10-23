@@ -1,3 +1,10 @@
+/**
+ * @file        udp_heartbeat.c
+ * @brief       通过LwIP RAW UDP周期发送板端心跳。
+ * @details     将序号、毫秒计数与三个UID字序列化为28字节大端报文，统计协议栈提交、链路跳过和遗漏时隙。
+ * @note        MX_LWIP_Init后在裸机前台调用；发送成功只表示协议栈接受，不证明对端收到。
+ */
+
 #include "udp_heartbeat.h"
 #include "udp_config.h"
 #include "lwip/udp.h"
@@ -14,6 +21,12 @@ static uint32_t last_slot_ms, sequence, board_uid[3];
 static uint32_t stack_ok, errors, link_skips, missed_slots;
 static UDPHeartbeat_Log write_log;
 
+/**
+ * @brief   将32位整数写成四字节网络大端序。
+ * @param   dest 至少4字节可写区域，不可为NULL；仅本次写入，不保存指针。
+ * @param   value 待编码的无符号整数。
+ * @return  无返回值。
+ */
 static void Put32(uint8_t *dest, uint32_t value)
 {
     dest[0] = (uint8_t)(value >> 24);
@@ -22,6 +35,13 @@ static void Put32(uint8_t *dest, uint32_t value)
     dest[3] = (uint8_t)value;
 }
 
+/**
+ * @brief   懒创建并绑定UDP控制块，序列化和提交一次心跳。
+ * @param   now_ms 写入心跳的板端毫秒计数。
+ * @param   result 不可为NULL的输出指针，接收静态结果字符串；调用方不得释放字符串。
+ * @return  LwIP错误码；ERR_OK表示提交成功。
+ * @note    前台调用；发送pbuf始终由本函数释放自身引用，ARP可能另持引用。
+ */
 static err_t Send(uint32_t now_ms, const char **result)
 {
     ip_addr_t destination;
@@ -77,6 +97,14 @@ static err_t Send(uint32_t now_ms, const char **result)
     return err;
 }
 
+/**
+ * @brief   删除旧UDP控制块并复制UID、复位心跳时隙与计数。
+ * @param   now_ms 初始化毫秒计数，作为后续时隙起点。
+ * @param   uid_words 不可为NULL，指向至少3个UID字；内容复制到模块，不保存指针。
+ * @param   log 日志回调，可为NULL；后续处理期间须有效。
+ * @return  无返回值。
+ * @note    MX_LWIP_Init之后前台调用；不会立即发送。
+ */
 void UDPHeartbeat_Init(uint32_t now_ms, const uint32_t uid_words[3], UDPHeartbeat_Log log)
 {
     if (pcb != NULL)
@@ -90,6 +118,12 @@ void UDPHeartbeat_Init(uint32_t now_ms, const uint32_t uid_words[3], UDPHeartbea
     write_log = log;
 }
 
+/**
+ * @brief   经过心跳时隙时至多发送一包并输出统计。
+ * @param   now_ms 前台当前毫秒计数，按无符号差值处理回绕。
+ * @return  无返回值。
+ * @note    错过多时隙时序号递增相应数量且不补发；链路断开仅增加跳过计数。
+ */
 void UDPHeartbeat_Process(uint32_t now_ms)
 {
     const uint32_t slots = (uint32_t)(now_ms - last_slot_ms) / UDP_HEARTBEAT_PERIOD_MS;

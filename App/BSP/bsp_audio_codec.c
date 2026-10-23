@@ -1,3 +1,12 @@
+/**
+ * @file        bsp_audio_codec.c
+ * @brief       WM8994 身份读取和 MIC2 输入通路的同步 I2C 访问。
+ * @details     通过已生成 I2C3 读取 0x8994 标识，再按固定输入配置表写寄存器；保留忙、失败寄存器、成功写入数及
+ *          HAL 错误供前台诊断。
+ * @note        主循环/启动上下文专用；采集配置前需 SAI 主时钟，调用者串行管理共享 I2C3，不重初始化 MCU 外设，
+ *          不进行总线恢复。
+ */
+
 #include "bsp_audio_codec.h"
 #include "main.h"
 #include <stddef.h>
@@ -9,6 +18,7 @@ extern I2C_HandleTypeDef hi2c3;
 #define CODEC_READ_TIMEOUT_MS 2U
 #define CODEC_WRITE_TIMEOUT_MS 2U
 
+/** @brief 固定配置表的一次 16 位寄存器写入，以及成功后等待的毫秒数。 */
 typedef struct
 {
     uint16_t reg;
@@ -50,12 +60,25 @@ static const CodecSetupWrite mic2_setup[] = {
     {0x0405U, 0x01EFU, 0U}
 };
 
+/**
+ * @brief   检查共享 I2C3 的 HAL 状态及硬件 BUSY 标志。
+ * @return  true 表示两者均空闲；false 表示不能立即发起本模块事务。
+ * @note    仅为同步访问前的即时检查，不提供互斥锁或总线恢复；调用方须串行访问 I2C3。
+ */
 static bool CodecBusReady(void)
 {
     return HAL_I2C_GetState(&CODEC_I2C_HANDLE) == HAL_I2C_STATE_READY &&
         __HAL_I2C_GET_FLAG(&CODEC_I2C_HANDLE, I2C_FLAG_BUSY) != SET;
 }
 
+/**
+ * @brief   同步读取 WM8994 寄存器零并按高字节在前还原芯片标识。
+ * @param   result 调用者拥有的输出；NULL 返回 INVALID_ARG，非空时先清零。成功传输后 id_valid 为真，即使标识不
+ *          匹配。read_ms 为 HAL tick 差的毫秒值。
+ * @return  OK 表示 ID 为 0x8994；其余区分参数、总线忙、读失败和 ID 不符。
+ * @note    仅启动/主循环上下文；使用已初始化 I2C3、7 位地址 0x1A，不写复位寄存器。单次传输参数超时 2 ms，HAL
+ *          内部等待可增加耗时；BUSY 路径不复制其它客户的旧错误。
+ */
 BSP_AudioCodecStatus BSP_AudioCodec_ReadId(BSP_AudioCodecResult *result)
 {
     if (result == NULL) { return BSP_CODEC_INVALID_ARG; }
@@ -86,6 +109,14 @@ BSP_AudioCodecStatus BSP_AudioCodec_ReadId(BSP_AudioCodecResult *result)
     return result->id == BSP_AUDIO_CODEC_EXPECTED_ID ? BSP_CODEC_OK : BSP_CODEC_ID_MISMATCH;
 }
 
+/**
+ * @brief   验证芯片身份后按固定寄存器序列配置 MIC2 采集通路。
+ * @param   result 调用者拥有的输出；NULL 返回 INVALID_ARG。writes_ok 只计 HAL_OK 写入；failed_register 成功或
+ *          初始 BUSY 为 UINT16_MAX；其它失败指示当前寄存器，身份读取失败记零。
+ * @return  OK 表示全部配置写入成功；其它状态保留已完成写入数量和可取得的 HAL 错误。
+ * @note    仅启动/前台且不得在 ISR 调用；须先提供 SAI 主时钟并串行独占 I2C3。设置 48 kHz、16 位、SAI 槽 1/3，
+ *          包含一次 50 ms 延时；会复位编解码器寄存器，失败可能留下部分配置，调用方不能继续启动 DMA。
+ */
 BSP_AudioCodecStatus BSP_AudioCodec_ConfigureMic2(BSP_AudioCodecSetupResult *result)
 {
     if (result == NULL) { return BSP_CODEC_INVALID_ARG; }

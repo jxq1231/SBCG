@@ -1,3 +1,9 @@
+/**
+ * @file        audio_time_anchor.c
+ * @brief       采集音频传输进度与本地PTP时钟的夹读锚点。
+ * @details     至少一秒间隔先读游标、读一次PTP、再读游标，检查会话/边界/顺序/宽度后交接单槽观测。
+ * @note        依赖音频与本地PTP初始化；SYNC=0，不代表跨板同步或PCM声学时刻。
+ */
 #include "audio_time_anchor.h"
 #include "BSP/bsp_audio.h"
 #include "BSP/bsp_ptp.h"
@@ -13,8 +19,10 @@ _Static_assert(sizeof("$AUDIO_ANCHOR,SEQ=4294967295,STATUS=OK,VALID=1,"
     "SEC=4294967295,NSEC=999999999,WIDTH=4,SYNC=0,OK=4294967295,REJECTS=4294967295\r\n")
     <= ANCHOR_LINE_CAPACITY, "anchor line exceeds application queue capacity");
 
+/** @brief 夹读及跨次单调性检查的日志拒绝原因。 */
 typedef enum { ANCHOR_OK, ANCHOR_CURSOR, ANCHOR_PTP, ANCHOR_SESSION,
                ANCHOR_BOUNDARY, ANCHOR_ORDER, ANCHOR_WIDE, ANCHOR_BACKWARD } AnchorStatus;
+/** @brief 一次前台夹读的临时快照；含两个进度标量及一次PTP读取结果。 */
 typedef struct
 {
     BSP_AudioCursor before, after;
@@ -28,7 +36,20 @@ static bool have_previous, clock_faulted;
 static AudioTimeAnchorObservation latest_observation;
 static bool observation_pending;
 
+/**
+ * @brief   饱和递增锚点诊断计数。
+ * @param   value 可写uint32_t计数器，不可为NULL。
+ * @return  无返回值。
+ * @note    仅前台，达到UINT32_MAX后保持，不提供并发同步。
+ */
 static void Increment(uint32_t *value) { if (*value != UINT32_MAX) { ++*value; } }
+/**
+ * @brief   将64位无符号数转成十进制文本。
+ * @param   value 待格式化整数。
+ * @param   output 至少21字节可写缓冲，不可为NULL；输出以NUL结尾。
+ * @return  无返回值。
+ * @note    仅前台格式化，避免依赖精简printf的64位整数支持。
+ */
 static void Decimal64(uint64_t value, char output[21])
 {
     char reverse[20]; unsigned count = 0U;
@@ -37,6 +58,12 @@ static void Decimal64(uint64_t value, char output[21])
     output[count] = '\0';
 }
 
+/**
+ * @brief   在两次音频游标之间读取一次PTP并校验夹读。
+ * @param   anchor 调用方可写临时对象，不可为NULL；失败时可能只填写部分字段。
+ * @return  成功或游标、PTP、会话、边界、顺序、宽度拒绝原因。
+ * @note    仅前台；整体夹读不屏蔽IRQ，不领取或读取PCM缓冲。
+ */
 static AnchorStatus ReadAnchor(Anchor *anchor)
 {
     if (!BSP_Audio_ReadCursor(&anchor->before)) { return ANCHOR_CURSOR; }
@@ -56,6 +83,13 @@ static AnchorStatus ReadAnchor(Anchor *anchor)
     return ANCHOR_OK;
 }
 
+/**
+ * @brief   复位锚点历史、故障锁存和单槽状态。
+ * @param   now_ms 当前HAL毫秒计数；使用无符号差处理常规32位回绕。
+ * @param   log 日志回调，可为NULL以关闭对应前台处理；非空回调须返回前消费或复制字节，不保留临时缓冲指针。
+ * @return  无返回值。
+ * @note    应用前台初始化调用，音频与PTP应已准备好；不初始化外设。
+ */
 void AudioTimeAnchor_Init(uint32_t now_ms, AudioTimeAnchorLog log)
 {
     log_line = log; last_attempt_ms = now_ms;
@@ -66,6 +100,12 @@ void AudioTimeAnchor_Init(uint32_t now_ms, AudioTimeAnchorLog log)
     observation_pending = false;
 }
 
+/**
+ * @brief   消费尚未读取的最新一次锚点尝试。
+ * @param   observation 调用方可写输出；NULL不消费，非NULL在无待取数据时清零。
+ * @return  取到观测返回true，无数据或NULL返回false。
+ * @note    仅前台单消费者；新尝试覆盖单槽，失败尝试的anchor.valid=false，序号暴露遗漏。
+ */
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *observation)
 {
     if (observation == NULL) { return false; }
@@ -76,6 +116,13 @@ bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *observation)
     return true;
 }
 
+/**
+ * @brief   按至少一秒间隔采锚、检查单调性并发布观测。
+ * @param   now_ms 当前HAL毫秒计数；使用无符号差处理常规32位回绕。
+ * @param   processing_allowed 本次是否允许前台处理；DHT11启动拉低期间应为false。
+ * @return  无返回值。
+ * @note    App_Process前台调用；同会话时钟不递增会锁存拒绝，需新会话成功或重新初始化恢复；不标记跨板同步。
+ */
 void AudioTimeAnchor_Process(uint32_t now_ms, bool processing_allowed)
 {
     if (log_line == NULL || !processing_allowed ||

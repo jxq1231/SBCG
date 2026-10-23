@@ -1,3 +1,10 @@
+/**
+ * @file        ptp_tx.c
+ * @brief       观测v1 UDP探测应答的MAC发送描述符时间。
+ * @details     包装gnetif.linkoutput，只对UID匹配的type=3单段帧申请TX时间戳，调用原输出后取回快照，4项CPU队列交前台日志。
+ * @note        NO_SYS=1且同步发送；在PTP时钟与RX观察器之后、UDPTimeExchange外层之前初始化；不修改DMA配置。
+ */
+
 #include "ptp_tx.h"
 #include "BSP/bsp_ptp_tx.h"
 #include "Network/udp_config.h"
@@ -30,11 +37,29 @@ static TxRecord queue[TX_QUEUE_CAPACITY];
 static uint32_t head, count, last_log_ms;
 static uint32_t valid, arm_errors, snapshot_errors, unsupported, overflow, init_errors;
 
+/**
+ * @brief   读取网络大端序16位整数。
+ * @param   p 至少2字节可读区域，不可为NULL；借用且不保存。
+ * @return  解码后的无符号整数。
+ */
 static uint16_t Get16(const uint8_t *p)
 { return (uint16_t)((uint16_t)p[0]<<8U | p[1]); }
+/**
+ * @brief   读取网络大端序32位整数。
+ * @param   p 至少4字节可读区域，不可为NULL；借用且不保存。
+ * @return  解码后的无符号整数。
+ */
 static uint32_t Get32(const uint8_t *p)
 { return (uint32_t)p[0]<<24U | (uint32_t)p[1]<<16U | (uint32_t)p[2]<<8U | p[3]; }
 
+/**
+ * @brief   筛选UID和地址匹配的未分片type=3 UDP应答。
+ * @param   netif 有效输出网卡，不可为NULL，只读本机IPv4地址。
+ * @param   packet 借用以太网pbuf，可为NULL；不释放或修改。
+ * @param   key 至少28字节可写输出缓冲，不可为NULL；复制匹配的UDP负载。
+ * @return  true表示匹配并写入key；false时调用方不得使用key内容。
+ * @note    仅决定是否请求TX快照，不替代协议栈校验。
+ */
 static bool ReplyKey(const struct netif *netif,const struct pbuf *packet,uint8_t key[28])
 {
     uint8_t header[34],udp[36];
@@ -60,6 +85,13 @@ static bool ReplyKey(const struct netif *netif,const struct pbuf *packet,uint8_t
     return true;
 }
 
+/**
+ * @brief   围绕原链路输出申请并获取匹配应答的TX硬件时间。
+ * @param   netif 有效输出网卡，不可为NULL，借用并传给原函数。
+ * @param   packet 借用的发送pbuf；本函数不释放，不支持为链式或非连续帧取时间。
+ * @return  原链路输出函数的LwIP错误码。
+ * @note    NO_SYS前台同步输出；先清理已完成请求，再Begin→原输出→End，快照进入CPU队列。
+ */
 static err_t Output(struct netif *netif,struct pbuf *packet)
 {
     /* Reclaim only completed CPU-owned requests before any frame reuses them. */
@@ -87,6 +119,14 @@ static err_t Output(struct netif *netif,struct pbuf *packet)
     return result;
 }
 
+/**
+ * @brief   复制UID、复位TX队列统计并安装链路输出包装。
+ * @param   now_ms 初始化毫秒计数，作为日志节流起点。
+ * @param   uid_words 至少3个UID字，允许NULL以禁用匹配并记录错误；内容复制，不保存指针。
+ * @param   log 日志回调，可为NULL；后续调用期间须有效。
+ * @return  无返回值；缺失UID或原输出时增加初始化错误。
+ * @note    PTP时钟及RX观察器之后前台初始化；重新初始化前须先卸载UDPTimeExchange外层。
+ */
 void PtpTx_Init(uint32_t now_ms, const uint32_t uid_words[3], PtpTx_Log log)
 {
     emit=log; last_log_ms=now_ms;
@@ -108,6 +148,12 @@ void PtpTx_Init(uint32_t now_ms, const uint32_t uid_words[3], PtpTx_Log log)
     gnetif.linkoutput=Output;
 }
 
+/**
+ * @brief   回收已完成TX请求，并限速输出队列记录和统计。
+ * @param   now_ms 前台当前毫秒计数，日志按无符号差值每秒节流。
+ * @return  无返回值。
+ * @note    每次调用先尝试清理；DMA仍持有OWN时不强行回收，日志固定SYNC=0。
+ */
 void PtpTx_Process(uint32_t now_ms)
 {
     const BSP_PtpStatus cleanup=BSP_PTP_TxClean();

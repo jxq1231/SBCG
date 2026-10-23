@@ -108,6 +108,9 @@ VS Code中，`Ctrl+Shift+B`运行默认Debug构建；“运行任务 → STM32: 
 | 文档 | 内容 |
 | --- | --- |
 | [Docs入口](Docs/README.md) | 阅读顺序、资料依据与已验证/目标配置的区别 |
+| [系统架构](Docs/System_Architecture.md) | 实际目录职责、启动/主循环/IRQ与模块数据流 |
+| [答辩指南](Docs/Defense_Guide.md) | 30秒、两分钟回答和常见追问 |
+| [注释与验证](Docs/Architecture_Comment_Review.md) | 58个App文件说明、函数覆盖及代码等价验证 |
 | [Project State](Docs/Project_State.md) | 当前分支、已完成事项、待验收项目和下一步 |
 | [Project Roadmap](Docs/Project_Roadmap.md) | 任务书基础/提高指标、全部开发步骤、误差预算与验收方法 |
 | [CubeMX Step 1](Docs/CubeMX_Step1.md) | SYS/RCC配置、200 MHz基线及启动验收步骤 |
