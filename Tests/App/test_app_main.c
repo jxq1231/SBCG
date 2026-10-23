@@ -1,3 +1,9 @@
+/**
+ * @file        test_app_main.c
+ * @brief       在主机桩环境验证原应用初始化、调度和日志门控。
+ * @details     用可控UID/tick/外设服务桩观察调用顺序、重入与错误；另供身份用例复用桩。
+ * @note        不访问硬件，默认构建不启用身份宏；带身份宏的路径由test_app_identity另测。
+ */
 #include "app_main.h"
 #include "BSP/bsp_console.h"
 #include "Network/ethernet_monitor.h"
@@ -23,6 +29,7 @@
 #undef assert
 #define assert(x) do { if (!(x)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x); exit(1); } } while (0)
 
+static uint32_t info_uid[3] = {0x001A002DU, 0x30365105U, 0x36363631U};
 static uint32_t tick_ms;
 static uint32_t write_count;
 static bool write_ok;
@@ -129,10 +136,18 @@ bool TemperatureService_IsStartLowActive(void)
     return temperature_low;
 }
 
+/**
+ * @brief   模拟温度初始化并核对应用传入的UID与依赖顺序。
+ * @param   now_ms 当前测试毫秒计数。
+ * @param   uid_words 应与info_uid一致的三字测试UID。
+ * @param   log 应非NULL的前台日志回调。
+ * @return  无返回值（void）。
+ * @note    仅主机服务桩，复位温度调用计数与低电平状态。
+ */
 void TemperatureService_Init(uint32_t now_ms,const uint32_t uid_words[3],TemperatureLog log)
 {
     assert(completed_init_calls==deinit_calls && observation_initialized);
-    assert(now_ms==tick_ms && uid_words[0]==0x001A002DU && log!=NULL);
+    assert(now_ms==tick_ms && memcmp(uid_words,info_uid,sizeof info_uid)==0 && log!=NULL);
     temperature_initialized=true; ++temperature_init_calls; temperature_calls=0U;
     temperature_low=false;
 }
@@ -163,12 +178,21 @@ bool UDPTimeExchange_Deinit(void)
     return true;
 }
 
+/**
+ * @brief   模拟时间交换初始化并检查包装安装顺序。
+ * @param   now_ms 当前测试毫秒计数。
+ * @param   uid_words 应与info_uid一致的三字测试UID。
+ * @param   tick 测试毫秒读取回调，须返回当前tick_ms。
+ * @param   log 前台日志回调，保存供后续测试触发。
+ * @return  返回可控time_init_ok，不表示真实网络绑定成功。
+ * @note    仅主机桩，更新安装计数及状态，检查旧包装已卸载。
+ */
 bool UDPTimeExchange_Init(uint32_t now_ms, const uint32_t uid_words[3],
                           UDPTimeExchange_Tick tick, UDPTimeExchange_Log log)
 {
     assert(tx_initialized && observation_initialized && now_ms == tick_ms && log != NULL);
     assert(tick != NULL && tick() == tick_ms && deinit_calls == completed_init_calls + 1U);
-    assert(uid_words[0] == 0x001A002D && uid_words[2] == 0x36363631);
+    assert(memcmp(uid_words,info_uid,sizeof info_uid)==0);
     time_initialized = time_init_ok;
     time_log = log;
     time_calls = 0;
@@ -182,10 +206,18 @@ void UDPTimeExchange_Process(uint32_t now_ms)
     ++time_calls;
 }
 
+/**
+ * @brief   模拟TX观察器初始化并检查RX先行。
+ * @param   now_ms 当前测试毫秒计数。
+ * @param   uid_words 应与info_uid一致的三字测试UID。
+ * @param   log 应非NULL的日志回调。
+ * @return  无返回值（void）。
+ * @note    仅记录主机初始化状态，不读取硬件时间戳。
+ */
 void PtpTx_Init(uint32_t now_ms,const uint32_t uid_words[3],PtpTx_Log log)
 {
     assert(rx_initialized && now_ms==tick_ms && log!=NULL);
-    assert(uid_words[0]==0x001A002D && uid_words[2]==0x36363631);
+    assert(memcmp(uid_words,info_uid,sizeof info_uid)==0);
     tx_initialized=true;tx_calls=0;
 }
 void PtpTx_Process(uint32_t now_ms)
@@ -221,10 +253,18 @@ void PtpClock_Process(uint32_t now_ms)
     ++ptp_calls;
 }
 
+/**
+ * @brief   模拟原UDP探测服务初始化。
+ * @param   now_ms 当前测试毫秒计数。
+ * @param   uid_words 应与info_uid一致的三字测试UID。
+ * @param   log 应非NULL的日志回调。
+ * @return  无返回值（void）。
+ * @note    仅主机桩，复位调用计数并记录服务已初始化。
+ */
 void UDPProbe_Init(uint32_t now_ms, const uint32_t uid_words[3], UDPProbe_Log log)
 {
     assert(now_ms == tick_ms && log != NULL);
-    assert(uid_words[0] == 0x001A002DU && uid_words[2] == 0x36363631U);
+    assert(memcmp(uid_words,info_uid,sizeof info_uid)==0);
     probe_initialized = true;
     probe_calls = 0;
 }
@@ -235,11 +275,18 @@ void UDPProbe_Process(uint32_t now_ms)
     ++probe_calls;
 }
 
+/**
+ * @brief   模拟心跳初始化并核对完整三字UID。
+ * @param   now_ms 当前测试毫秒计数。
+ * @param   uid_words 应与info_uid一致的三字测试UID。
+ * @param   log 应非NULL的日志回调。
+ * @return  无返回值（void）。
+ * @note    不发送真实UDP；只记录初始化状态及处理次数。
+ */
 void UDPHeartbeat_Init(uint32_t now_ms, const uint32_t uid_words[3], UDPHeartbeat_Log log)
 {
     assert(now_ms == tick_ms && log != NULL);
-    assert(uid_words[0] == 0x001A002DU && uid_words[1] == 0x30365105U &&
-           uid_words[2] == 0x36363631U);
+    assert(memcmp(uid_words,info_uid,sizeof info_uid)==0);
     udp_initialized = true;
     udp_calls = 0;
 }
@@ -277,12 +324,16 @@ uint32_t BSP_Console_GetTickMs(void)
     return tick_ms;
 }
 
+/**
+ * @brief   返回可控的主机测试时钟与UID信息。
+ * @param   info 调用方可写输出，测试调用必须非NULL。
+ * @return  无返回值（void）。
+ * @note    HCLK模拟为200MHz，UID来自info_uid；不读取MCU寄存器。
+ */
 void BSP_Console_GetInfo(BSP_ConsoleInfo *info)
 {
     info->core_clock_hz = 200000000U;
-    info->uid_words[0] = 0x001A002DU;
-    info->uid_words[1] = 0x30365105U;
-    info->uid_words[2] = 0x36363631U;
+    memcpy(info->uid_words, info_uid, sizeof info_uid);
 }
 
 bool BSP_Console_Write(const char *data, uint16_t length)

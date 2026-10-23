@@ -12,18 +12,26 @@ def main():
     if compiler is None:
         print("Host GCC is required for application behavior tests.", file=sys.stderr)
         return 1
-    output = root / "Logs" / "M0_2" / "test_app_main.exe"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
-         "-DSBCG_USE_LWIP=1", "-DSBCG_USE_AUDIO=1", "-DSBCG_USE_AUDIO_ANCHOR=1", "-DSBCG_USE_AUDIO_MAP=1", "-I", str(root / "Tests/App/stubs"),
-         "-I", str(root / "App"), str(root / "Tests/App/test_app_main.c"),
-         str(root / "App/app_main.c"), "-o", str(output)], cwd=root,
-        check=False,
-    )
-    if result.returncode != 0:
-        return result.returncode
-    return subprocess.run([str(output)], cwd=root, check=False).returncode
+    output_dir = root / "Logs" / "M0_2"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cases = [("test_app_main", []),
+             ("test_app_identity", ["-DSBCG_USE_BOARD_IDENTITY=1"])]
+    for name, flags in cases:
+        output = output_dir / (name + ".exe")
+        sources = [root / "Tests/App" / (name + ".c"), root / "App/app_main.c"]
+        if name == "test_app_identity":
+            sources.append(root / "App/BSP/board_identity.c")
+        command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+                   "-DSBCG_USE_LWIP=1", "-DSBCG_USE_AUDIO=1", "-DSBCG_USE_AUDIO_ANCHOR=1", "-DSBCG_USE_AUDIO_MAP=1",
+                   *flags, "-I", str(root / "Tests/App/stubs"), "-I", str(root / "App"),
+                   *map(str, sources), "-o", str(output)]
+        result = subprocess.run(command, cwd=root, check=False)
+        if result.returncode != 0:
+            return result.returncode
+        result = subprocess.run([str(output)], cwd=root, check=False)
+        if result.returncode != 0:
+            return result.returncode
+    return 0
 
 
 if __name__ == "__main__":

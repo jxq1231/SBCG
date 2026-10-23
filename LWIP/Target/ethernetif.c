@@ -33,6 +33,7 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
+#include "BSP/bsp_board_identity.h"
 
 /* USER CODE END 0 */
 
@@ -187,6 +188,11 @@ static void low_level_init(struct netif *netif)
   heth.Init.RxBuffLen = 1536;
 
   /* USER CODE BEGIN MACADDRESS */
+  /* HAL初始化前复制角色MAC，沿用生成的局部缓冲及初始化调用。 */
+  if (!BSP_BoardIdentity_CopyMac(MACAddr))
+  {
+    return;
+  }
 
   /* USER CODE END MACADDRESS */
 

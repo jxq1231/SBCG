@@ -28,6 +28,7 @@
 #include "ethernetif.h"
 
 /* USER CODE BEGIN 0 */
+#include "BSP/bsp_board_identity.h"
 
 /* USER CODE END 0 */
 /* Private function prototypes -----------------------------------------------*/
@@ -74,6 +75,11 @@ void MX_LWIP_Init(void)
   GATEWAY_ADDRESS[3] = 0;
 
 /* USER CODE BEGIN IP_ADDRESSES */
+  /* UID角色决定应用网络身份；未知UID不得初始化默认同址网卡。 */
+  if (!BSP_BoardIdentity_ConfigureIp(IP_ADDRESS, NETMASK_ADDRESS, GATEWAY_ADDRESS))
+  {
+    return;
+  }
 /* USER CODE END IP_ADDRESSES */
 
   /* Initialize the LwIP stack without RTOS */

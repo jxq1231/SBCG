@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M3.2.4%20%7C%20Verified-15803d?style=flat-square" alt="M3.2.4板端实物验收通过">
+  <img src="https://img.shields.io/badge/Stage-M2.3.1%20A%20%7C%20Verified-15803d?style=flat-square" alt="M2.3.1 A板实物通过，B待更新">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -42,7 +42,11 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**M3.2.4板端时间估算接入已通过实物验收。** 当前固件SBCG-M3.2-MAP：120秒取得120个有效锚点，40组MAP/CHECK与真实C及Fraction逐值一致，最大绝对留出残差14.884us。原音频、自动温度和三路UDP同时通过。[完整结果与限制](Docs/Milestones/M3_2_4_Audio_Time_Map_Board.md)。
+**当前开发M2.3.1：UID角色及唯一IP/MAC已完成软件验证和A板实物验收。** 本轮A已烧录SBCG-M2.3-ROLE并通过123秒联合验收：110包UDP无缺口、两组各30请求通过，音频/温度/PTP保持正常。B板之后由用户自行烧录同一固件，尚未验收。新固件SBCG-M2.3-ROLE自动识别A=192.168.10.1、B=192.168.10.2，仍SYNC=0，尚未实现板间校时。11组原生回归、Tools108/Analysis87及两配置构建/布局通过。[固件与验收步骤](Docs/Milestones/M2_3_1_Dual_Board_Identity.md)。
+
+下方保留前一M3.2.4已验收的硬件基线。
+
+**M3.2.4板端时间估算接入已通过实物验收。** 前一固件SBCG-M3.2-MAP：120秒取得120个有效锚点，40组MAP/CHECK与真实C及Fraction逐值一致，最大绝对留出残差14.884us。原音频、自动温度和三路UDP同时通过。[完整结果与限制](Docs/Milestones/M3_2_4_Audio_Time_Map_Board.md)。
 
 更新：2026-10-23。UDP收到110包零缺口，两组各30请求通过，60次codec ID8994读取及23个温度版本无错。仍 **LOCAL/SYNC=0**，这是DMA位置的线性时间模型自检，尚未校准声音到达延迟，不代表检测、同步或测距精度通过。前置[M3.2.3纯算法/回放](Docs/Milestones/M3_2_3_Audio_Time_Map.md)已归档，其“未接入”仅描述当时版本。
 
@@ -52,7 +56,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | 单板网络/PTP | UDP、重连、RX/TX戳、时间交换和板端估算观测已实测 | [协议](Docs/Protocol.md) |
 | 温度 | DHT11 3.3V/PG7正常采集、手动设温及连续拔插恢复已实测 | [手动温度](Docs/Milestones/T1_2_Manual_Temperature.md)、[恢复](Docs/Milestones/T1_1_Temperature_Replug.md) |
 | 音频 | codec ID、PCM连续采集/受控响应、帧编号、本地PTP锚点和时间估算自检已实测 | [M3.1](Docs/Milestones/M3_1_Audio_DMA.md)、[M3.2.2](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md) |
-| 双板同步/PPS、声学时间校准、检测/测距、LCD | 尚未完成；当前不检查第二板 | [课程路线](Docs/Project_Roadmap.md) |
+| 双板同步/PPS、声学时间校准、检测/测距、LCD | 尚未完成；当前先交付A程序、B延后烧录 | [课程路线](Docs/Project_Roadmap.md) |
 
 历史方案和各版实验按需查[文档状态表](Docs/Document_Status.md)，勿从旧计划重复配置/烧录。
 
@@ -148,7 +152,7 @@ SBCG/
 4. `.ioc`、主PLL、TIM2、DMA、NVIC等共享资源变更先沟通，再通过CubeMX生成；不手改生成硬件配置。
 5. 用Issue记录问题、PR讨论代码、`Docs/`保存可复核结论。尚未验收的硬件快照保持草稿PR状态。
 
-完整约定见[协作指南](CONTRIBUTING.md)。团队成员的模块负责人和真实UID尚未填写，不在仓库中预设分工或虚构设备数据。
+完整约定见[协作指南](CONTRIBUTING.md)。两板真实UID与A/B身份已登记在当前状态和身份模块中；团队成员的模块负责人尚未填写，不预设人员分工。
 
 ## 第三方代码
 

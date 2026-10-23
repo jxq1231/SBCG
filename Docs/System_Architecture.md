@@ -2,7 +2,7 @@
 
 <!-- doc-status: current-architecture; reviewed: 2026-10-23 -->
 
-本文依据当前源码、CMake登记、Debug编译数据库和M3.2.4实物记录整理。它是当前系统的阅读地图，历史计划不再按顺序重复执行。版本基线为`ed3ef57`，业务固件标识`SBCG-M3.2-MAP`。本轮仅补说明和注释，不引入新功能或硬件验收；当前进度统一见[Project_State](Project_State.md)。
+本文依据当前源码、CMake登记、Debug编译数据库和M3.2.4实物记录整理。它是当前系统的阅读地图，历史计划不再按顺序重复执行。当前源码和A实物版本为M2.3.1/SBCG-M2.3-ROLE，UID身份及原业务已通过123秒联合验收；B待用户更新/验收。原M3.2.4采集/时间模型链路保留。当前进度统一见[Project_State](Project_State.md)。
 
 ## A. 架构总结：硬件生成层、应用服务层与主机验证层
 
@@ -29,7 +29,7 @@
 | `LWIP/Target/lwipopts.h` | NO_SYS=1、TCP关闭、内存/接口选项 | 编译配置影响运行 | CubeMX | 否 |
 | `Middlewares/Third_Party/LwIP/` | ARP/IPv4/ICMP/UDP、内存池、超时和网络接口实现 | 是，实际启用路径参与 | 第三方中间件 | 否，通用协议栈 |
 | `App/app_main.c/.h` | 服务初始化/轮询顺序、BOOT/心跳、有界日志队列 | 是 | 自有代码 | 是，协调层 |
-| `App/BSP/` | console、DHT、ETH/PTP、codec/音频资源封装 | 是 | 自有代码 | 硬件抽象，不替代CubeMX配置 |
+| `App/BSP/` | UID角色/IP/MAC选择、console、DHT、ETH/PTP、codec/音频资源封装 | 是 | 自有代码 | 硬件抽象，不替代CubeMX配置 |
 | `App/Network/` | 链路观测、UDP心跳、请求应答和时间戳交换 | 是 | 自有代码 | 是 |
 | `App/Sync/` | 本地PTP观测、收发关联、四时刻整数估算 | 是 | 自有代码 | 是；尚未闭环校时 |
 | `App/Temperature/` | DHT帧校验、温度状态/手动覆盖、整数声速 | 是 | 自有代码 | 是 |
@@ -49,7 +49,7 @@
 | `.github/` | 协作模板、主机测试工作流、README横幅SVG | 仅网页/CI；不入固件 | 自有文档/配置 | 否 |
 | `build/`、`compile_commands.json` | CMake/Ninja输出、ELF/map/obj、索引元数据 | ELF可烧入；目录不是源码 | 构建生成 | 否 |
 
-当前Debug数据库共137个编译单元：App28、Core6、LWIP2、Drivers20、Middlewares80、启动汇编1。**58个App C/H是28个源文件＋30个头文件**；头文件不是单独编译单元。LwIP的生成源码列表较宽，出现PPP/TCP源码不代表当前启用了它们：`LWIP_TCP=0`，具体分支受宏和链接垃圾回收控制。
+当前Debug数据库共139个编译单元：App30、Core6、LWIP2、Drivers20、Middlewares80、启动汇编1。**62个App C/H是30个源文件＋32个头文件**；头文件不是单独编译单元。LwIP的生成源码列表较宽，出现PPP/TCP源码不代表当前启用了它们：`LWIP_TCP=0`，具体分支受宏和链接垃圾回收控制。
 
 原有项目图片资产`.github/assets/sbcg-banner.svg`用于GitHub说明；本轮新增Docs/Diagrams下的架构示意图仅用于文档，两者均不进入LCD帧缓冲或GUI资源。不存在当前固件需要加载的字体、TouchGFX图片或界面资源。
 
@@ -71,7 +71,9 @@ flowchart TD
     K --> H["GPIO → DMA → USART1 → I2C3 → LwIP → SAI2初始化"]
     H --> A["App/app_main.c: App_Init"]
     A --> L["while(1): App_Process"]
-    L --> N["MX_LWIP_Process: 收包 / 超时 / 链路"]
+    L --> G{"已准备匹配UID的身份？"}
+    G -->|否| L
+    G -->|是| N["MX_LWIP_Process: 收包 / 超时 / 链路"]
     N --> B["网络/PTP → 温度/命令 → codec/音频/锚点/估算"]
     B --> F["FlushOneLine → 返回下一轮"]
     F --> L
@@ -79,7 +81,9 @@ flowchart TD
 
 启动文件的实际顺序是**先SystemInit，再准备.data/.bss，再调用C库初始化和main**；SystemInit不等于后面的200MHz系统时钟配置。`main`中MPU在HAL前配置。HAL外设初始化还会调用MSP函数，这些回调负责时钟、复用引脚、DMA链接和IRQ配置。ETH初始化在`MX_LWIP_Init → netif_add → ethernetif_init → low_level_init`内发生，不应凭经验给main虚构一个独立MX_ETH_Init调用。
 
-可编辑简图及SVG见[启动流程图](Diagrams/system_runtime.drawio)、[SVG预览](Diagrams/system_runtime.svg)。详细顺序以上方Mermaid及源码为准。
+新增启动路径：MX_LWIP_Init的IP_ADDRESSES用户区→BSP_BoardIdentity_ConfigureIp→BoardIdentity_Resolve；未知UID在lwip_init前返回。有效身份在ethernetif的MACADDRESS用户区复制MAC再进入HAL_ETH_Init。App_Init读取同一缓存并核对BOOT UID，输出BOARD；失败则不启动业务，App_Process也不调用LwIP。B仍调用原温度服务初始化，但其UID允许名单会禁用本地DHT读取。
+
+可编辑简图及SVG保留M3.2.4时的服务流程，尚未绘入身份门控；当前详细调用以上述说明、Mermaid和源码为准。见[启动流程图](Diagrams/system_runtime.drawio)、[SVG预览](Diagrams/system_runtime.svg)。详细顺序以上方Mermaid及源码为准。
 
 ### App_Init的一次初始化顺序
 
@@ -87,6 +91,7 @@ flowchart TD
 | --- | --- | --- |
 | 1 | UDPTimeExchange_Deinit | 再初始化时先撤外层网络包装；所有权冲突则返回，避免覆盖未知钩子 |
 | 2 | BSP_Console_GetInfo、SendLine | 清状态/日志队列，读取HCLK/UID，发BOOT；生成层已准备UART |
+| 2a | BSP_BoardIdentity_Get、EmitBoardIdentity | 核对已准备身份及真实UID，输出BOARD；未知则返回，不执行下列服务 |
 | 3 | EthernetMonitor_Init | 取得PHY与链路观测基线 |
 | 4 | UDPHeartbeat_Init、UDPProbe_Init | 建立周期UDP与请求/应答服务 |
 | 5 | PtpClock_Init、PtpRx_Init、PtpTx_Init | 本地PTP配置/观察及旧服务硬件戳包装 |
@@ -103,6 +108,7 @@ flowchart TD
 
 | 顺序 | 真实调用/段落 | 执行方式 |
 | --- | --- | --- |
+| 0 | app_identity_configured | 未配置身份立即返回，不触碰尚未初始化的网络和业务 |
 | 1 | MX_LWIP_Process | 每轮先轮询收包、sys_check_timeouts和链路 |
 | 2 | UDPHeartbeat_Process、串口HEARTBEAT段 | 各按毫秒差值节流；延误后跳过旧周期，不突发补发 |
 | 3 | EthernetMonitor_Process | 链路状态/周期报告 |

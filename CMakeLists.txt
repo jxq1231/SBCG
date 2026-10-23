@@ -71,6 +71,9 @@ include(cmake/audio-layout.cmake)
 # snapshots still need the user source entry, but never compile both copies.
 if(TARGET LwIP)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_LWIP=1)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_BOARD_IDENTITY=1)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        App/BSP/board_identity.c App/BSP/bsp_board_identity.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_heartbeat.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_probe.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_time_exchange.c)

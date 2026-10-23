@@ -2,9 +2,23 @@
 
 <!-- doc-status: current-interface; reviewed: 2026-10-23 -->
 
-更新：2026-10-23。当前板端已验收标识为 **SBCG-M3.2-MAP**。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
+更新：2026-10-23。当前A板已验收标识为 **SBCG-M2.3-ROLE**，B板待用户更新。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
 
-M3.2.3当时完成纯算法与离线回放验证；M3.2.4现已将原内核接入板端，当前已烧录/实测版本为SBCG-M3.2-MAP。当前状态见[Project_State](Project_State.md)。
+M3.2.3当时完成纯算法与离线回放验证；M3.2.4已将原内核接入板端并以SBCG-M3.2-MAP实测；其后M2.3.1以SBCG-M2.3-ROLE复验原业务并验收A身份。当前状态见[Project_State](Project_State.md)。
+
+## M2.3.1 UID角色与网络身份（A本版已实测，B待更新）
+
+新构建BOOT的FW为`SBCG-M2.3-ROLE`，HCLK_HZ及UID_W0/W1/W2格式不变。随后新增ASCII/CRLF行；以下为配置格式示例；本轮A行已在授权烧录/123秒联合验收中观察到，B及UNCONFIGURED仅软件覆盖，不能据示例宣称B已实测：
+
+```text
+$BOARD,ROLE=A,IP=192.168.10.1,MAC=02:00:00:00:00:01,PEER_IP=192.168.10.2,SYNC=0
+$BOARD,ROLE=B,IP=192.168.10.2,MAC=02:00:00:00:00:02,PEER_IP=192.168.10.1,SYNC=0
+$BOARD,ROLE=UNCONFIGURED,NET=DISABLED,SYNC=0
+```
+
+每次正常启动仅输出匹配的一行。ROLE为A/B/UNCONFIGURED文本；IP/PEER_IP为点分十进制IPv4，MAC为6个十六进制字节，SYNC为0。UID按BOOT的三个uint32字精确匹配；A/B真实UID见[当前状态](Project_State.md)。身份未知时不启动LwIP或业务，不回退到默认A。字段是软件配置声明，实际网口需用带UID的UDP来源与ARP另验；本行不声明硬件读回或同步已锁定。
+
+原UDP type1～7字节布局/宽度/字节序和端口不变，只改变B的源IP/MAC。`dual_board_monitor.py`可在同一PC5005分别核对两UID及来源，严格窗口不足/重复/乱序/缺包均不能PASS。本次用户先交付A，使用原`udp_monitor.py --uid`验A即可；双板工具留待B更新后使用，详见[验收步骤](Milestones/M2_3_1_Dual_Board_Identity.md)。
 
 ## M3.1 音频串口状态（连续数据流及受控幅度响应已实测）
 

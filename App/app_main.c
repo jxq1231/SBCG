@@ -8,6 +8,9 @@
  */
 #include "app_main.h"
 #include "BSP/bsp_console.h"
+#ifdef SBCG_USE_BOARD_IDENTITY
+#include "BSP/bsp_board_identity.h"
+#endif
 #include "Network/ethernet_monitor.h"
 #include "Temperature/temperature_service.h"
 #include "Console/temperature_console.h"
@@ -41,7 +44,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与16行、单行256字节的日志队列。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_AUDIO_MAP)
+#if defined(SBCG_USE_BOARD_IDENTITY)
+#define APP_FIRMWARE_ID "SBCG-M2.3-ROLE"
+#elif defined(SBCG_USE_AUDIO_MAP)
 #define APP_FIRMWARE_ID "SBCG-M3.2-MAP"
 #elif defined(SBCG_USE_AUDIO_ANCHOR)
 #define APP_FIRMWARE_ID "SBCG-M3.2-ANCHOR"
@@ -67,6 +72,9 @@ static volatile uint32_t app_tx_error_count;
 static char pending_lines[APP_LOG_QUEUE_CAPACITY][APP_LOG_LINE_CAPACITY];
 static uint16_t pending_lengths[APP_LOG_QUEUE_CAPACITY];
 static uint32_t pending_head, pending_count;
+#ifdef SBCG_USE_BOARD_IDENTITY
+static bool app_identity_configured;
+#endif
 
 /**
  * @brief   在DHT起始低电平结束后，尝试发送队首的一行日志。
@@ -121,6 +129,38 @@ static void SendLine(const char *line, int length)
     }
 }
 
+#ifdef SBCG_USE_BOARD_IDENTITY
+/**
+ * @brief   发布本次启动选定的角色与网络身份配置，未知角色明确禁用业务。
+ * @param   profile 来自BSP的只读启动配置；NULL表示未配置，不保存指针。
+ * @return  无返回值（void）。
+ * @note    仅App_Init前台调用。地址为配置声明，真实网卡身份须由实物收包/ARP另验；
+ *          SYNC始终为0，本增量尚未校时。使用有界256字节日志缓冲。
+ */
+static void EmitBoardIdentity(const BoardIdentityProfile *profile)
+{
+    if (profile == NULL)
+    {
+        static const char disabled[] = "$BOARD,ROLE=UNCONFIGURED,NET=DISABLED,SYNC=0\r\n";
+        SendLine(disabled, (int)(sizeof disabled - 1U));
+        return;
+    }
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length = snprintf(line, sizeof line,
+        "$BOARD,ROLE=%s,IP=%u.%u.%u.%u,MAC=%02X:%02X:%02X:%02X:%02X:%02X,"
+        "PEER_IP=%u.%u.%u.%u,SYNC=0\r\n",
+        profile->role == BOARD_ROLE_A ? "A" : "B",
+        (unsigned)profile->local_ip[0], (unsigned)profile->local_ip[1],
+        (unsigned)profile->local_ip[2], (unsigned)profile->local_ip[3],
+        (unsigned)profile->local_mac[0], (unsigned)profile->local_mac[1],
+        (unsigned)profile->local_mac[2], (unsigned)profile->local_mac[3],
+        (unsigned)profile->local_mac[4], (unsigned)profile->local_mac[5],
+        (unsigned)profile->peer_ip[0], (unsigned)profile->peer_ip[1],
+        (unsigned)profile->peer_ip[2], (unsigned)profile->peer_ip[3]);
+    SendLine(line, length);
+}
+#endif
+
 /**
  * ==================== 模块：应用初始化 ====================
  * 作用：发布BOOT并建立网络/PTP、温度、音频观测和串口命令入口。
@@ -157,6 +197,14 @@ void App_Init(void)
         info.core_clock_hz, info.uid_words[0], info.uid_words[1], info.uid_words[2]);
     SendLine(line, length);
     last_heartbeat_ms = BSP_Console_GetTickMs();
+#ifdef SBCG_USE_BOARD_IDENTITY
+    const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+    app_identity_configured = profile != NULL &&
+        (profile->role == BOARD_ROLE_A || profile->role == BOARD_ROLE_B) &&
+        memcmp(profile->uid_words, info.uid_words, sizeof info.uid_words) == 0;
+    EmitBoardIdentity(app_identity_configured ? profile : NULL);
+    if (!app_identity_configured) { return; }
+#endif
     EthernetMonitor_Init(last_heartbeat_ms, SendLine);
 #ifdef SBCG_USE_LWIP
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
@@ -206,6 +254,10 @@ void App_Init(void)
  */
 void App_Process(void)
 {
+#ifdef SBCG_USE_BOARD_IDENTITY
+    /* 未知UID时LwIP尚未初始化；只保留BOOT/角色诊断，不触碰网卡或其它业务。 */
+    if (!app_identity_configured) { return; }
+#endif
 #ifdef SBCG_USE_LWIP
     /* Every loop, before logs: service RX, protocol timers and link changes. */
     MX_LWIP_Process();
