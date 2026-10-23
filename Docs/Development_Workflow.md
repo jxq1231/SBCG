@@ -1,46 +1,47 @@
-# SBCG开发与主机诊断工作流
+# 开发、构建与调试工作流
 
-更新：2026-10-16。当前固件仍处于M0.1，200 MHz生成配置已构建通过，实物启动待验证。本工作流不改变CubeMX配置。
+<!-- doc-status: current-workflow; reviewed: 2026-10-23 -->
 
-## 1. 与参考方案的关系
+> 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。
 
-参考[TaoCosmo-Dev/STM32_AutoDebug_Universal_Kit](https://github.com/TaoCosmo-Dev/STM32_AutoDebug_Universal_Kit/tree/8434f26644ba4c677dc7db489d3a9570db00cf71)的阶段化执行、退出码、结构化诊断及匹配固件的地址定位思路。本项目独立实现标准库Python工具，仍使用现有CMake/GCC、OpenOCD和Cortex-Debug；没有复制Keil构建、工程注入或自动修复模块，不依赖该仓库的安装脚本或Python包。
+更新：2026-10-23。适用于现有SBCG GCC/CMake工程；硬件状态集中记录在[Project_State.md](Project_State.md)。用户已确认VS Code Build正常，本机不再有待复验的`$gcc`引用问题。
 
-参考方案的完整闭环需要固件运行输出和明确的验收判据。当前SBCG没有USART业务输出、通过令牌或已验证的故障现场采集，因此这里仅实现主机诊断阶段，不声称具备自动上板验收。
+## 1. 环境与配置
 
-## 2. 环境和配置
+用SBCG根目录打开VS Code。Python建议3.9及以上；CMake、Ninja、ARM GCC和Python须在VS Code继承的PATH中。烧录/调试还需OpenOCD、ARM GDB及ST-LINK。修改系统PATH后重启VS Code。
 
-以SBCG根目录打开VS Code，按`.vscode/extensions.json`推荐安装CMake Tools、C/C++、clangd、Cortex-Debug。C/C++扩展保留GCC问题匹配器，代码提示由clangd负责，避免两个语言服务同时工作。
+| 配置 | 实际作用 |
+| --- | --- |
+| `CMakePresets.json` | 已有Debug/Release预设；复用原有构建系统 |
+| `.vscode/settings.json` | clangd读取`build/Debug/compile_commands.json`；GCC query-driver与clangd路径需按本机核对 |
+| `.vscode/tasks.json` | 构建、环境检查、地址定位及独立硬件任务 |
+| `.vscode/launch.json` | Cortex-Debug launch；使用`build/Debug/SBCG.elf`，保留本机GDB/OpenOCD路径 |
+| `.vscode/openocd-stm32f746.cfg` | Flash、Run、F5共享；加载目标脚本后设1800 kHz、硬件复位下连接，要求NRST实际连通 |
 
-- CMake使用已有Debug/Release预设，不增加构建系统，不修改生成CMake文件。
-- clangd显式读取`build/Debug/compile_commands.json`，保留本机已知编译器路径。使用Release构建不自动切换clangd数据库。
-- GDB、OpenOCD和clangd保留现有本机路径；CMake/Ninja/GCC及Python须在VS Code继承的PATH中。修改系统PATH后应重启VS Code。
-- 调试和烧录明确使用`SBCG.elf`，与CMake目标一致，不再依赖文件夹名称。
-- 保留原有烧录/运行1800 kHz参数和调试复位策略；未照搬GUI的1000 kHz及复位下连接设置。
-- CubeMX的Trace Asynchronous Sw保留PA13/PA14/PB3；当前launch未开启SWO接收。
+三个编译任务内置完整GCC问题匹配器，不依赖C/C++扩展注册`$gcc`。匹配文件、行、可选列、warning/error及消息；Debug/Release相对路径按对应构建目录解析。代码提示由clangd承担；独立`sbcg-gcc`诊断不会覆盖clangd诊断。无源码位置的链接错误仍需查看终端。
 
-## 3. VS Code入口
+## 2. VS Code任务
 
-通过“终端 → 运行任务”选择：
-
-| 任务 | 行为 | 是否访问硬件 |
+| 入口 | 行为 | 访问设备/写Flash |
 | --- | --- | --- |
-| STM32: Check Environment | 检查项目文件和PATH工具位置，保存报告 | 否 |
-| STM32: Configure | `cmake --preset Debug` | 否 |
-| STM32: Build | 先Configure，再Debug构建；GCC错误可跳转源码 | 否 |
-| STM32: Build Release | 先Configure Release，再Release构建 | 否 |
-| STM32: AI Debug | 保留原入口名，执行配置/构建诊断并保存报告 | 否 |
-| STM32: Resolve Address | 根据输入地址查询当前Debug ELF | 否 |
-| STM32: Test Host Tools | 执行Python工具行为测试 | 否 |
-| STM32: Clean | 先配置，调用现有CMake clean目标 | 否 |
-| STM32: Flash | 先Debug构建，再调用原有OpenOCD烧录/校验/复位流程 | 是 |
-| STM32: Run | 调用原有OpenOCD复位运行流程 | 是 |
+| STM32: Check Environment | 检查项目与工具，保存报告 | 否/否 |
+| STM32: Configure | 配置Debug | 否/否 |
+| STM32: Configure Release | 配置Release | 否/否 |
+| STM32: Build（Ctrl+Shift+B） | 先配置，再Debug构建 | 否/否 |
+| STM32: Build Release | 先配置，再Release构建 | 否/否 |
+| STM32: AI Debug | 保留入口名；运行Python主机构建诊断 | 否/否 |
+| STM32: Resolve Address | 用当前Debug ELF解释输入地址 | 否/否 |
+| STM32: Test Host Tools | 执行Python行为测试 | 否/否 |
+| STM32: Clean | 调用已有CMake clean目标，清除构建产物 | 否/否 |
+| STM32: Flash | 构建后编程、校验、复位 | 是/是 |
+| STM32: Run | 复位并运行已烧录固件 | 是/否 |
+| F5：STM32F7: Debug | 构建、下载Debug ELF，运行至main | 是/是 |
 
-F5选择`STM32F7: Debug`，先构建再启动现有Cortex-Debug/OpenOCD流程，下载Debug固件并运行到main。Flash、Run和F5由用户主动执行；工具验证仅运行前面的主机任务，不隐含执行这些硬件动作。
+F5是launch，不能当作“不写入固件”的连接入口。当前没有已配置的attach任务。构建与主机脚本不会隐式连接或烧录设备；设备操作按用户授权执行。
 
-## 4. 命令行用法
+## 3. 命令行与报告
 
-脚本只依赖Python标准库，推荐Python 3.9及以上。默认根据脚本位置定位SBCG根目录，也可以通过`--project-root`明确指定包含SBCG.ioc及CMake文件的工程目录。
+在工程根目录运行：
 
 ```powershell
 python -B Tools/Monitor/autodebug.py doctor
@@ -51,57 +52,49 @@ python -B Tools/Monitor/autodebug.py symbolize 0x08000100
 python -B -m unittest discover -s Tools/Monitor/tests -v
 ```
 
-上例地址只是输入格式示例，应替换为与当前ELF对应的真实PC或函数地址。符号解析不连接芯片、不采集异常现场；不能将输入地址或当前处理函数PC自动认定为故障指令。函数指针的Thumb最低位在查询前清零，报告同时保留原地址和查询地址。
+ETH已生成时，构建后另运行`python -B Tools/Monitor/check_eth_layout.py`；Release追加`--preset Release`。该检查需要PATH中的ARM nm/readelf，仅检查ELF和.ioc，不连接设备，失败退出1。独立链接扩展、内存边界和RAM跨度说明见[M1.1内存记录](Milestones/M1_1_Ethernet_Setup.md#8-gcc内存布局修复记录)。
 
-脚本默认每阶段超时120秒，可用`--timeout 240`调整。超时或中断时终止本次启动的进程树，不自动重试。`doctor`检查工具是否在PATH中，不能证明ST-LINK连接或板上固件正常；GDB/OpenOCD/addr2line/clangd缺失作为可选工具信息列出，不阻止仅需CMake/Ninja/GCC的构建。symbolize必须有addr2line和非空ELF。
+地址仅为格式示例，必须替换为与所用ELF一致的真实地址。symbolize不会采集设备异常或重建ELF；Thumb函数指针最低位查询前清零，报告保留输入值和查询值。Release当前为`-Os -g0`，可能只能得到函数名，没有源码行。
 
-Release预设当前为`-Os -g0`，可能只能得到函数名，无法定位源码行；地址查询默认使用带调试信息的Debug固件。脚本不重新构建symbolize使用的ELF，必须由使用者保证地址来自该固件；报告中的SHA256可辅助比对。
+脚本默认每阶段超时120秒，可用`--timeout 240`调整；`--project-root`可指定工程。配置失败即停止，构建失败不接受旧ELF；构建成功还须存在非空`SBCG.elf`并记录SHA256。超时或中断只终止本次启动的进程树，不自动重试。
 
-## 5. 结果和日志
-
-每次调用建立独立目录：
-
-```text
-Logs/AutoDebug/<UTC时间>-<随机标识>/
-  report.json
-  configure.log   # build动作
-  build.log       # 配置成功后执行
-  symbolize.log   # symbolize动作
-```
-
-Logs已由Git忽略。报告记录动作、预设、工具路径、各阶段命令/退出码/耗时/日志、GCC诊断及成功构建产物的SHA256。配置失败不再构建，构建失败不接受旧ELF为成功结果，找不到非空SBCG.elf也返回失败。
+每次报告位于`Logs/AutoDebug/<UTC时间>-<随机标识>/`，包含`report.json`及本次实际执行阶段的日志。Logs由Git忽略。构建完成不证明固件已在设备运行。
 
 | 退出码 | 含义 |
 | --- | --- |
-| 0 | 请求的主机动作成功：ENVIRONMENT_OK、BUILD_OK或SYMBOLIZED |
-| 1 | 配置/构建/工具执行失败，或成功构建后未找到非空ELF |
-| 2 | 命令行参数错误 |
+| 0 | 当前主机动作成功：ENVIRONMENT_OK、BUILD_OK或SYMBOLIZED |
+| 1 | 配置/构建/工具失败，或缺少预期ELF |
+| 2 | 参数错误 |
 | 4 | 子进程超时 |
-| 6 | 项目、依赖、进程启动或报告写入错误 |
-| 7 | 地址定位没有匹配ELF，或至少一个地址无法定位到源码行 |
+| 6 | 项目/依赖/启动/报告写入错误 |
+| 7 | 无匹配ELF，或至少一个地址不能定位源码行 |
 | 130 | 用户中断 |
 
-所有报告始终写明`flash=NOT_RUN`、`runtime=NOT_RUN`、`hardware_verified=false`。退出码0只证明当前请求的主机动作完成，与参考工具完整闭环的TEST_PASSED不是同一契约。
+主机报告始终包含`flash=NOT_RUN`、`runtime=NOT_RUN`和`hardware_verified=false`。这不否定独立硬件实验，而是说明该脚本只完成主机阶段。硬件结论单独存入Milestones，不把主机退出0改写成整机通过。
 
-## 6. 当前验收顺序
+## 4. 已确认问题与解决方式
 
-1. 运行环境检查和Debug构建，确认没有新的无法解释的警告。
-2. 用户执行或明确授权烧录/调试后，按`CubeMX_Step1.md`第2.6节检查SystemCoreClock、uwTick和异常状态。
-3. 记录实物结果后提交M0.1生成代码增量；主机工作流提交不代表硬件已验收。
-4. 后续由CubeMX启用所需观测外设、定义验收日志及超时条件后，再单独实现串口或其他实物闭环；不在当前阶段预先注入固件逻辑。
-
-## 7. 本增量验证记录
-
-2026-10-16主机验证结果：
-
-| 检查 | 结果 |
+| 问题 | 当前处理及证据 |
 | --- | --- |
-| Python行为测试 | 10项通过，包括真实子进程非零退出和超时终止；独立审查再次运行通过 |
-| 环境检查 | 所需构建工具及列出的可选工具均在本机PATH找到 |
-| Debug / Release | 通过脚本分别配置并构建成功；Release构建输出无警告 |
-| clangd | 使用build/Debug数据库和现有query-driver检查Core/Src/main.c，退出0 |
-| 地址定位 | 从Debug ELF查询main符号，成功定位Core/Src/main.c:66 |
-| 配置与报告 | JSON及任务依赖有效；报告均保留NOT_RUN/false硬件状态；日志及Python缓存由Git忽略 |
-| 烧录 / 调试 / 实物运行 | 本次未执行，不能据此验收M0.1硬件功能 |
+| OpenOCD CPUID=0x1a、识别失败 | 原连接和单独降速均失败；硬件复位下连接在1800 kHz正常，CPUID=0x410fc271。用户随后提供烧录校验成功日志 |
+| `$gcc`引用无效 | 三个任务改为独立内联定义；格式/路径检查通过，用户确认Build现在正常 |
+| 请求速度与实际档位不同 | 当前日志中2000/8000 kHz分别回退至1800/4000 kHz，未阻止该次编程及校验；不是本次连接故障的修复判据 |
+| M7勘误提示 | OpenOCD报告并声明相应处理；不通过屏蔽提示判断硬件通过 |
 
-本机验证不代表其它电脑的工具安装、VS Code扩展运行或实际ST-LINK连接已验证；相关工具路径和实物操作按前文分别检查。
+详细单板启动证据见[M0_1_Startup.md](Milestones/M0_1_Startup.md)：Flash加载段匹配、SystemCoreClock、主循环、tick和复位复验均有记录，结束时恢复运行。本轮文档整理不重复设备操作。
+
+## 5. 验证边界与工具来源
+
+初期10项主机行为测试、Debug/Release构建、clangd及地址定位已有当时通过记录；工具测试83项、Analysis87项（M3.2.4，含复位边界证据校验），测试范围见当前里程碑；2026-10-18再次Debug构建和单板调试复位启动通过，随后用户确认VS Code Build界面正常。其它电脑的路径、驱动和扩展仍需按实际环境核对。
+
+主机脚本参考[STM32_AutoDebug_Universal_Kit](https://github.com/TaoCosmo-Dev/STM32_AutoDebug_Universal_Kit/tree/8434f26644ba4c677dc7db489d3a9570db00cf71)的阶段化诊断思路，独立实现CMake/GCC适配。当前没有自动采集固件运行日志、异常现场或自动修复闭环；不能把脚本名称理解成这些功能已具备。
+
+新增外设后，先明确当前独立目标和CubeMX变化，再构建、按授权测试、记录实物证据并提交。完整顺序见[Project_Roadmap.md](Project_Roadmap.md)，不要重新按已完成的旧实施计划执行。
+
+## 6. 串口观察：SerialWeb
+
+按用户指定使用[SerialWeb](https://conductance-lab.xyz/SerialWeb/)。本轮已在Edge打开并检查页面，Web Serial API可用；本机ST-LINK Virtual COM Port枚举为COM3。页面设置115200、8N1、无RTS/CTS流控、UTF-8，点击“连接设备”后由用户选择当前ST-LINK串口。
+
+此前页面曾记录`SerialPort.open`失败，原因尚未追溯确定；用户现已回传BOOT及21条心跳，发送路径通过。若以后重现，关闭自动重连及其它占用同一端口的串口窗口，再手动连接。不要把网页能打开或端口已枚举当作收发通过。
+
+USART1的PA9/TX、PB7/RX、PCLK2及生成参数已核对，Debug构建通过。本次启动信息/每秒心跳已接入，5项应用主机行为测试通过；用户实物日志已确认本版本启动信息和21条心跳接收正常；MCU接收/手动设温已在T1.2及后续音频联动验收；操作见SerialWeb页首。需要观察BOOT时先连接再复位；仅检查现有输出时无需重新烧录。具体操作、检查表及ELF边界见[SerialWeb.md](SerialWeb.md)。当前COM编号只代表这台电脑的枚举，不写死为所有人的端口。
