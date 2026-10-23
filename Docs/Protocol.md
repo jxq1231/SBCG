@@ -324,3 +324,24 @@ SBCG-M4.1-TIME-R1新增ASCII/CRLF、每行<256字节，无新UDP：
 - `SOUND_TIME_STATE`：QUEUED/OK/REJECT/DROPPED为uint32饱和累计，PENDING为0..4，LOCAL=1/SYNC=0。队满/非法提交计DROPPED；排队后失败计REJECT，不能将缺失结果补为0纳秒。
 
 固定4锚点/4候选；等待2500ms超时、末锚年龄>1500ms拒绝。校时/调频及采集断流清旧模型。R1本组合日志统一排队，每主循环最多发送一行；接收时间不是模型时间。模型仅为线性传输进度，区间不包含物理声学延迟或同步误差。见[M4.1.3实测](Milestones/M4_1_3_Sound_Event_Time.md)。
+
+
+## U1 SDRAM启动及自检日志（SBCG-U1-SDRAM-R1）
+
+启动控制器/芯片准备完成后输出（仅表示可开始测试）：
+
+```text
+$SDRAM_INIT,RESULT=OK,BASE=C0000000,BYTES=8388608,SDCLK_HZ=66666666,CAS=3,REFRESH=1021
+```
+
+随后最多1Hz输出测试进度、终态一次：
+
+```text
+$SDRAM,STATUS=PASS,PHASE=5,PASSES=4,CHECKED_BYTES=33554432,ELAPSED_MS=50529,CMD=5,ERR_OFFSET=00000000,EXPECTED=00000000,ACTUAL=00000000
+```
+
+以上PASS/耗时为R1实物示例，不是每次启动固定值。所有字段为ASCII文本；BASE/ERR_OFFSET/EXPECTED/ACTUAL为无符号32位十六进制，其他数值为无符号32位十进制。BYTES为物理测试区字节数，CHECKED_BYTES为累计校验字节（8MiB×4=33554432），ELAPSED_MS为本次初始化起算的前台毫秒耗时，SDCLK_HZ单位Hz，REFRESH为SDRAM时钟周期计数。
+
+PHASE：0未发布有效阶段、1数据位测试、2填充、3保持等待、4校验、5通过、6内存失败。PASSES是已完成轮数；CMD为尝试/最近完成步骤：0未开始、1Clock Enable、2PALL、3八次自动刷新、4模式字、5周期刷新配置，不是成功命令总数。
+
+STATUS：TESTING/PASS/CONFIG_ERROR/COMMAND_ERROR/TIMEOUT/REFRESH_ERROR/MEMORY_ERROR。错误不会自动重试或继续访问内存；ERR_OFFSET为相对BASE字节偏移，期望/实际保留首次内存错误。仅STATUS=PASS、PASSES=4及完整累计字节才表示本次内存自检通过，INIT=OK不替代它。该日志不表示LTDC、标准音频识别、测距或双板同步精度通过。

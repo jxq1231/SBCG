@@ -2,7 +2,7 @@
 
 <!-- doc-status: current-reference-with-future-designs; reviewed: 2026-10-24 -->
 
-> **U1实物更新：** 工作区FMC/MPU Region1已生成，PC3及tRCD已修正；初始化访问0xA0000140被Region0拦截，当前等待CubeMX新增Region2 A0000000/4KB共享Device。已恢复TIME-R1，SDRAM与LCD未通过。见[U1记录](Milestones/U1_SDRAM_Bringup.md)。
+> **U1当前实物：** FMC/MPU Region1/2已生成，PC3 SDCKE0、CAS3/HCLK3、刷新1021。R1已通过8MB四轮自检及约79秒静默音频零丢块，首版MPU异常保留。当前板上U1-SDRAM-R1，下一步才做LTDC。见[U1记录](Milestones/U1_SDRAM_Bringup.md)。
 
 > 2026-10-24显示现行步骤见[LTDC RGB565起步](Plans/2026-10-24_LTDC_RGB565_Bringup.md)：先FMC/MPU、后LTDC；旧100MHz/CAS2仅保留为历史BSP对照。
 
@@ -28,7 +28,7 @@
 | --- | --- |
 | 当前实测 | 本板系统/串口/PHY、LwIP与电脑UDP、PTP本地时钟及RX/TX/板端观测、DHT11自动/手动及拔插恢复、M3.1单板PCM连续采集与幅度响应；详细边界分别记录。各版证据见[项目状态](Project_State.md) |
 | 板级参考 | 历史按UM1907 Rev4的MB1191 B-04原理图/I/O表、DS10916及本机CubeF7 V1.17.4 BSP核对的连线；当前PCB修订与改动未现场确认 |
-| 设计目标 | M2.3.2双板PTP/伺服源码及1分钟运行内部观测通过；PPS软件已接入并观察本地排程，未测波形；FMC/LTDC、温度UDP及整机测距仍未实现；SAI/DMA连续数据流及受控幅度响应已实测；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3的WM8994 ID8994在M3.0已实测，SAI/DMA在M3.1已实测；T1.2串口接收/手动设温、恢复自动及原网络联合实测通过 |
+| 设计目标 | M2.3.2双板PTP/伺服源码及1分钟运行内部观测通过；PPS软件已接入并观察本地排程，未测波形；FMC/SDRAM已通过U1实测；LTDC、温度UDP及整机测距仍未实现；SAI/DMA连续数据流及受控幅度响应已实测；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3的WM8994 ID8994在M3.0已实测，SAI/DMA在M3.1已实测；T1.2串口接收/手动设温、恢复自动及原网络联合实测通过 |
 
 任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。当前模块已按3.3V/PG7接线并通过采集及恢复测试；替换模块时仍须重新核对脚序、电压、上拉和版本。两块真实UID及A/B指定已确定，M2.3.1 A联合验收及双板网络共存已通过，M2.3.2新闭环已通过1分钟运行内部观测。
 

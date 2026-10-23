@@ -1,8 +1,8 @@
 # U0/U1 LTDC RGB565状态页与CubeMX起步
 
-<!-- doc-status: current-display-plan-awaiting-mpu-region2; reviewed: 2026-10-24 -->
+<!-- doc-status: current-display-plan-u1-completed-awaiting-ltdc; reviewed: 2026-10-24 -->
 
-> **实物纠错：下一步必须补MPU Region2。** FMC/MPU Region1已生成，但FMC寄存器0xA0000140仍被Region0禁止，实物在MX_FMC_Init进入MemManage、无BOOT。已恢复TIME-R1；SDRAM未通过。保持现有FMC参数，按下方Region2表再生成。见[U1失败/恢复记录](../Milestones/U1_SDRAM_Bringup.md)。
+> **当前U1已验收通过，下一步才做LTDC。** 用户已补Region2，R1保存/恢复区域选择器，8MB四轮校验通过；BOOT后约79秒音频零丢块/零错误。下方FMC/MPU配置已完成，不重复生成；首版MPU故障与修复见[U1记录](../Milestones/U1_SDRAM_Bringup.md)。
 
 ## U1执行清单（2026-10-24）
 
@@ -10,11 +10,11 @@
 
 - [x] 检查38个FMC脚、CAS3、HCLK/3、2/8/5/7/3/2/2、MPU Region1普通非缓存XN；保留音频/RCC/串口/网络/DMA/NVIC。
 - [x] `Tests/Sdram/`先验证缺失实现失败：命令顺序/失败止步、BUSY有界等待、配置拒绝、刷新计数1021、内存边界/故障/保持等待/暂停及完成后停止访问。
-- [x] `App/BSP/bsp_sdram.c/.h`只读取生成配置，HAL发送Clock Enable→1ms等待→PALL→8次Auto Refresh→CAS3模式0x0230→刷新1021。HAL本版本SendCommand的Timeout未实现等待，BSP对SDSR BUSY做毫秒及轮询次数双重限界，不修改HAL；待Region2生成后更新区域选择器读回检查。
+- [x] `App/BSP/bsp_sdram.c/.h`只读取生成配置，HAL发送Clock Enable→1ms等待→PALL→8次Auto Refresh→CAS3模式0x0230→刷新1021。HAL本版本SendCommand的Timeout未实现等待，BSP对SDSR BUSY做毫秒及轮询次数双重限界，不修改HAL；R1已保存/恢复区域选择器并核对Region1/2。
 - [x] `App/BSP/sdram_test.c/.h`独占调用方内存，单轮最多128个32位字；数据位/16位/字节掩码检查后，4轮常量/互补/地址/互补地址填充，分别等待至少100ms再逐字校验。首次错误保存偏移/期望/实际并终止，不将内存FAIL写成READY。
 - [x] `App/app_main.c`用`SBCG_USE_SDRAM`接入：在音频启动前初始化芯片，前台音频处理之后、DHT非低态才推进一个分片；最多1Hz诊断、完成即时报告。`cmake/sdram.cmake`为用户源登记点，由顶层一次生成的CMake引入，不改生成CMake。
-- [ ] 原生测试→Debug/Release现有预设构建→ETH/音频布局→独立复核→按当前硬件授权仅A烧录，静默串口约90秒核对SDRAM全范围PASS及音频DROP/ERROR0，无声音/网线/示波器依赖。
-- [ ] 更新本轮报告、当前状态/文档入口；仅提交本轮代码/测试/文档及经过区分的FMC生成增量，不混入PPS或无关许可删除。若不能安全拆分生成差异，将其明确保留并记录依赖。
+- [x] 原生测试→Debug/Release现有预设构建→ETH/音频布局→独立复核→按当前硬件授权仅A烧录，静默串口约90秒核对SDRAM全范围PASS及音频DROP/ERROR0，无声音/网线/示波器依赖。
+- [x] 更新报告/入口，提交本轮用户源码/测试/文档；原PPS、许可删除与混合生成差异保留在工作区，冻结快照记录完整依赖。
 
 用户选择：先LTDC RGB565，再优化成TouchGFX；不能使用声音继续测试。用户指定参考聊天`codex://threads/01a14061-e262-7d91-9ed3-4a54cbab0ff7`。本次读取该聊天的本地记录，仅提取相关显示经验，并只读核对`D:/electronic_design/GUI_FOR_TEST/GUI_FOR_TEST.ioc`和生成main.c。该工程是参考，不是SBCG硬件真值；未复制其216MHz、TIM2/ADC、单帧重绘、独立I2C轮询或TouchGFX业务。
 
@@ -26,9 +26,9 @@
 
 测试：`python -B Tests/UI/run_tests.py --preview Docs/Assets/status_rgb565_preview.png`。真实C输出RGB565像素，主机导出预览；格式边界、负温/回绕、RGB565通道、裁剪、跨度填充、canary、分16行/整屏像素一致均通过。预览中的A/NO LINK/RUN/EVENTS10为离线快照示例，不能证明屏幕或当前实时数据已接通。
 
-## 下一独立硬件目标U1：先验SDRAM，暂不点亮
+## 已完成硬件目标U1：SDRAM配置参考，不重复操作
 
-**CubeMX change required**。根AGENTS.md第4节要求硬件配置由CubeMX生成。当前FMC/SDRAM Region1已生成，LTDC未启用；Region0仍禁止FMC寄存器0xA0000140；不能在应用里临时初始化引脚/时钟来绕过。
+**CubeMX change required**。根AGENTS.md第4节要求硬件配置由CubeMX生成。当前FMC/Region1/Region2均已由用户生成，SDRAM实物通过；LTDC仍未启用，后续新增资源继续由CubeMX生成。
 
 请在**当前SBCG.ioc**内操作，保留主PLL/HCLK200MHz、ETH/RMII、USART1、DHT11 PG7、SAI2/PLLI2S及TIM2/PPS。不要创建另一工程或加载参考工程的全套配置。
 
@@ -84,15 +84,15 @@ Region1是普通、不可执行、非缓存内存。I/D Cache保持关闭，不�
 | Cacheable | DISABLE |
 | Bufferable | ENABLE |
 
-这与Region1的普通SDRAM数据区域不同：Region2为共享Device，放行FMC控制寄存器，不开放整个外部设备区域。保留Region0/1。再生成后运行`python -B Tools/Monitor/check_sdram_mpu.py`，应全通过。BSP再适配区域选择器并重验；当前仅RNR1的检查不能直接用于新增Region2后的固件。
+这与Region1的普通SDRAM数据区域不同：Region2为共享Device，放行FMC控制寄存器，不开放整个外部设备区域。保留Region0/1。`python -B Tools/Monitor/check_sdram_mpu.py`现已全通过；BSP区域选择器已适配并通过实物验收。
 
 ### 第三步：保存并Generate Code
 
 **本次只生成FMC与SDRAM数据/控制寄存器MPU区域，不启用LTDC、DMA2D、TouchGFX或新DMA/IRQ。** 生成后应有hsdram1、MX_FMC_Init、FMC GPIO AF12、HAL_SDRAM/FMC原厂源及Region1/2；主时钟/SAI/ETH/串口/PPS保持。随后由应用BSP执行SDRAM上电命令序列和内存模式/地址测试，重新构建/按授权烧录验收，再进入下一步LTDC。
 
-`MX_FMC_Init`只配置控制器，芯片仍需Clock Enable→等待→Precharge All→8次Auto Refresh→Mode Register→周期刷新。计划CAS3模式字0x0230。若器件为4096次/64ms刷新，66.667MHz下刷新计数按`floor(SDCLK_Hz*0.064/4096)-20`重算为1021，不能照抄参考72MHz的1105或历史100MHz的0x0603；该计数在后续BSP实现前再次核对实际生成频率/器件规格。上电命令BSP已编写，但实物尚未执行到App中的这段流程；应先修正寄存器MPU窗口。
+`MX_FMC_Init`只配置控制器，芯片仍需Clock Enable→等待→Precharge All→8次Auto Refresh→Mode Register→周期刷新。计划CAS3模式字0x0230。若器件为4096次/64ms刷新，66.667MHz下刷新计数按`floor(SDCLK_Hz*0.064/4096)-20`重算为1021，不能照抄参考72MHz的1105或历史100MHz的0x0603；该计数在后续BSP实现前再次核对实际生成频率/器件规格。上电BSP与刷新计数已在R1实物验证，首版寄存器窗口故障保留在报告中。
 
-## SDRAM验收后才配置LTDC（现在不执行）
+## 下一独立目标U2：CubeMX配置LTDC（本轮尚未执行）
 
 面板和参考工程/ST RK043FN48H驱动一致时，采用以下现行基线。旧文档H1/43/8、V10/12/4作废，不与这组混用。
 

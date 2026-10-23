@@ -1,0 +1,39 @@
+/** @file test_app_sdram.c @brief 真实App入口的SDRAM启动顺序/前台门控/日志节流测试。 */
+#define main unused_app_main
+#include "../App/test_app_main.c"
+#undef main
+#include "BSP/bsp_sdram.h"
+#include "Detector/sound_event_time.h"
+#include "BSP/bsp_board_identity.h"
+#include "Sync/time_sync.h"
+static BoardIdentityProfile identity;
+const BoardIdentityProfile *BSP_BoardIdentity_Get(void){return &identity;}
+bool TimeSync_Deinit(void){return true;}
+bool TimeSync_Init(uint32_t n,const BoardIdentityProfile*p,uint32_t(*tick)(void),void(*log)(const char*,int))
+{assert(n==tick_ms&&p&&tick&&log);return true;}
+void TimeSync_Process(uint32_t n,bool allowed){assert(n==tick_ms&&allowed==!temperature_low);}
+bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation*out){*out=(AudioTimeAnchorObservation){0};return true;}
+void AudioTimeMapMonitor_Observe(uint32_t n,const AudioTimeAnchorObservation*out){assert(n==tick_ms&&out);}
+void SoundEventTime_Init(void(*log)(const char*,int)){assert(log);}
+void SoundEventTime_Observe(uint32_t n,const AudioTimeAnchorObservation*out){assert(n==tick_ms&&out);}
+void BSP_Audio_GetSnapshot(BSP_AudioSnapshot*out){*out=(BSP_AudioSnapshot){0};++tick_ms;}
+void SoundEventTime_Process(uint32_t n,const BSP_AudioSnapshot*out){assert(n==tick_ms&&out);}
+static unsigned sdram_init_calls,sdram_steps,sdram_enabled;
+static BSP_SdramSnapshot sdram;
+bool BSP_SDRAM_Init(void)
+{assert(audio_inits==0U);++sdram_init_calls;sdram.status=BSP_SDRAM_TESTING;sdram.sdclk_hz=66666666;sdram.refresh_count=1021;return true;}
+void BSP_SDRAM_Process(uint32_t now,bool allowed)
+{assert(now==tick_ms&&allowed==!temperature_low);++sdram_steps;if(allowed)++sdram_enabled;}
+void BSP_SDRAM_GetSnapshot(BSP_SdramSnapshot*out){*out=sdram;}
+int main(void)
+{
+ memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);
+ assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));
+ Reset(0,true);assert(sdram_init_calls==1U);assert(write_count==1U);
+ tick_ms=1000;App_Process();assert(sdram_steps==1U&&sdram_enabled==1U&&write_count==2U);
+ start_low_in_process=true;tick_ms=2000;App_Process();assert(sdram_steps==2U&&sdram_enabled==1U&&write_count==2U);
+ start_low_in_process=false;temperature_low=false;tick_ms=3000;App_Process();assert(sdram_enabled==2U&&write_count==3U);
+ sdram.status=BSP_SDRAM_PASS;sdram.pass=4;sdram.verified_bytes=33554432;
+ tick_ms=3100;App_Process();assert(sdram_enabled==3U&&write_count==4U);
+ puts("PASS App SDRAM init before audio, fresh tick, DHT gate, one UART write per loop");return 0;
+}

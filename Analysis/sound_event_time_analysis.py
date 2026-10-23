@@ -10,7 +10,7 @@ FW='SBCG-M4.1-TIME'
 def fields(line):
  parts=line.split(',');return parts[0],dict(p.split('=',1) for p in parts[1:] if '=' in p)
 
-def evaluate(records,run,preparation_boots=1,quiet=False):
+def evaluate(records,run,preparation_boots=1,quiet=False,expected_firmware=None):
  records=[r for r in records if 'line' in r and r.get('elapsed_s') is not None]
  boots=[i for i,r in enumerate(records) if r['line'].startswith('$BOOT,')]
  if len(boots)!=preparation_boots:raise ValueError('BOOT count differs from explicitly recorded preparation')
@@ -63,7 +63,7 @@ def evaluate(records,run,preparation_boots=1,quiet=False):
  states=rows('$SOUND_TIME_STATE')
  checks={
   'complete_bounded_capture':run.get('status')=='CAPTURED_PENDING_ANALYSIS' and run.get('port_closed') is True and duration>=(60 if quiet else 80),
-  'expected_A_boot':boot.get('FW') in (FW,FW+'-R1') and (boot.get('UID_W0'),boot.get('UID_W1'),boot.get('UID_W2'))==('001A002D','30365105','36363631'),
+  'expected_A_boot':boot.get('FW') in ((expected_firmware,) if expected_firmware is not None else (FW,FW+'-R1')) and (boot.get('UID_W0'),boot.get('UID_W1'),boot.get('UID_W2'))==('001A002D','30365105','36363631'),
   'periodic_coverage':all(covers(k) for k in ('$HEARTBEAT','$AUDIO','$AUDIO_POS','$SOUND_TIME_STATE')),
   'heartbeat_contiguous':all(int(b['SEQ'])==int(a['SEQ'])+1 for (_,a),(_,b) in zip(rows('$HEARTBEAT'),rows('$HEARTBEAT')[1:])),
   'console_no_errors':zero('$HEARTBEAT',['TX_ERRORS']),
@@ -77,7 +77,7 @@ def evaluate(records,run,preparation_boots=1,quiet=False):
  }
  return {'status':('PASS_QUIET_PIPELINE_SCOPE' if quiet else 'PASS_LOCAL_EVENT_TRANSFER_MODEL') if all(checks.values()) else 'FAIL_OR_INCOMPLETE','checks':checks,'errors':errors,'firmware':boot,'duration_after_selected_boot_s':duration,'explicit_preparation_boots':preparation_boots,'selected_boot_shift_s':shift,'counts':{k:len(v) for k,v in groups.items()},'quiet_scope':quiet,'exact_models':verified,'rejected_models':rejected,'responses':responses,'last_time_state':states[-1][1] if states else None,'hardware_precision_verified':False,'acoustic_recognition_verified':False,'coordinate':'FIRST zero-based PCM frame -> FIRST+1 completed-transfer progress; not acoustic arrival time'}
 
-def analyze(prefix,preparation_boots,quiet=False):
+def analyze(prefix,preparation_boots,quiet=False,expected_firmware=None):
  run=json.loads(Path(str(prefix)+'-run.json').read_text(encoding='utf-8'))
  records=[json.loads(s) for s in Path(str(prefix)+'-serial.jsonl').read_text(encoding='utf-8').splitlines()]
  raw=Path(str(prefix)+'-serial.bin').read_bytes();original=raw
@@ -91,7 +91,7 @@ def analyze(prefix,preparation_boots,quiet=False):
  boot_indices=[i for i,r in enumerate(records) if r.get('elapsed_s') is not None and r['line'].startswith('$BOOT,')]
  if len(boot_indices)!=preparation_boots:raise ValueError('unexpected BOOT count')
  start=boot_indices[-1];_,proof=validate_boot_capture(b'\n'.join(parts[start:])+b'\n',records[start:],fields(records[start]['line'])[1]['FW'])
- result=evaluate(records,run,preparation_boots,quiet)
+ result=evaluate(records,run,preparation_boots,quiet,expected_firmware)
  result['integrity']={**proof,'original_raw_sha256':hashlib.sha256(original).hexdigest(),'excluded_prefix_rows':start,'excluded_tail_bytes':len(tail),'excluded_tail_hex':tail.hex()}
  return result
 

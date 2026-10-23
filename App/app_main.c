@@ -7,6 +7,9 @@
  *              不承担IRQ处理、GUI绘制或双板校时。
  */
 #include "app_main.h"
+#ifdef SBCG_USE_SDRAM
+#include "BSP/bsp_sdram.h"
+#endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
 #endif
@@ -50,7 +53,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与有界日志队列；常规16行，事件时间版本32行，每行256字节。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_SOUND_TIME)
+#if defined(SBCG_USE_SDRAM)
+#define APP_FIRMWARE_ID "SBCG-U1-SDRAM-R1"
+#elif defined(SBCG_USE_SOUND_TIME)
 #define APP_FIRMWARE_ID "SBCG-M4.1-TIME-R1"
 #elif defined(SBCG_USE_SOUND_DETECTOR)
 #define APP_FIRMWARE_ID "SBCG-M4.1-CAND-R1"
@@ -89,6 +94,10 @@ static volatile uint32_t app_tx_error_count;
 static char pending_lines[APP_LOG_QUEUE_CAPACITY][APP_LOG_LINE_CAPACITY];
 static uint16_t pending_lengths[APP_LOG_QUEUE_CAPACITY];
 static uint32_t pending_head, pending_count;
+#ifdef SBCG_USE_SDRAM
+static BSP_SdramStatus sdram_reported_status;
+static uint32_t sdram_last_report_ms;
+#endif
 #ifdef SBCG_USE_BOARD_IDENTITY
 static bool app_identity_configured;
 #endif
@@ -183,6 +192,41 @@ static void EmitBoardIdentity(const BoardIdentityProfile *profile)
 }
 #endif
 
+#ifdef SBCG_USE_SDRAM
+/**
+ * @brief 发布有界SDRAM诊断，测试中最多1Hz、终态只发一次。
+ * @param now_ms 当前前台毫秒计数，允许回绕。
+ * @return 无返回值；只读取BSP副本并调用日志队列，不访问目标SDRAM。
+ */
+static void ReportSdram(uint32_t now_ms)
+{
+    BSP_SdramSnapshot s;
+    BSP_SDRAM_GetSnapshot(&s);
+    if (s.status == sdram_reported_status &&
+        (s.status != BSP_SDRAM_TESTING || (uint32_t)(now_ms - sdram_last_report_ms) < 1000U)) { return; }
+    const char *name = "ERROR";
+    switch (s.status) {
+        case BSP_SDRAM_TESTING: name = "TESTING"; break;
+        case BSP_SDRAM_PASS: name = "PASS"; break;
+        case BSP_SDRAM_CONFIG_ERROR: name = "CONFIG_ERROR"; break;
+        case BSP_SDRAM_COMMAND_ERROR: name = "COMMAND_ERROR"; break;
+        case BSP_SDRAM_TIMEOUT: name = "TIMEOUT"; break;
+        case BSP_SDRAM_REFRESH_ERROR: name = "REFRESH_ERROR"; break;
+        case BSP_SDRAM_MEMORY_ERROR: name = "MEMORY_ERROR"; break;
+        default: break;
+    }
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length = snprintf(line, sizeof line,
+        "$SDRAM,STATUS=%s,PHASE=%u,PASSES=%" PRIu32 ",CHECKED_BYTES=%" PRIu32
+        ",ELAPSED_MS=%" PRIu32 ",CMD=%" PRIu32 ",ERR_OFFSET=%08" PRIX32
+        ",EXPECTED=%08" PRIX32 ",ACTUAL=%08" PRIX32 "\r\n",
+        name, (unsigned)s.phase, s.pass, s.verified_bytes, s.elapsed_ms, s.command_index,
+        s.error_offset_bytes, s.expected, s.actual);
+    SendLine(line, length);
+    sdram_reported_status = s.status; sdram_last_report_ms = now_ms;
+}
+#endif
+
 /**
  * ==================== 模块：应用初始化 ====================
  * 作用：发布BOOT/身份，建立网络/PTP闭环、温度、音频观测和串口命令入口。
@@ -236,6 +280,21 @@ void App_Init(void)
         memcmp(profile->uid_words, info.uid_words, sizeof info.uid_words) == 0;
     EmitBoardIdentity(app_identity_configured ? profile : NULL);
     if (!app_identity_configured) { return; }
+#endif
+#ifdef SBCG_USE_SDRAM
+    /* FMC/MPU已由main生成初始化。芯片上电等待在音频DMA启动前完成。 */
+    sdram_reported_status = BSP_SDRAM_OFF;
+    const bool sdram_initialized = BSP_SDRAM_Init();
+    BSP_SdramSnapshot sdram_info;
+    BSP_SDRAM_GetSnapshot(&sdram_info);
+    char sdram_line[APP_LOG_LINE_CAPACITY];
+    const int sdram_length = snprintf(sdram_line, sizeof sdram_line,
+        "$SDRAM_INIT,RESULT=%s,BASE=%08" PRIX32 ",BYTES=%" PRIu32
+        ",SDCLK_HZ=%" PRIu32 ",CAS=3,REFRESH=%" PRIu32 "\r\n",
+        sdram_initialized ? "OK" : "ERROR", BSP_SDRAM_BASE, BSP_SDRAM_BYTES,
+        sdram_info.sdclk_hz, sdram_info.refresh_count);
+    SendLine(sdram_line, sdram_length);
+    ReportSdram(BSP_Console_GetTickMs());
 #endif
     EthernetMonitor_Init(last_heartbeat_ms, SendLine);
 #ifdef SBCG_USE_LWIP
@@ -358,6 +417,11 @@ void App_Process(void)
     }
 #elif defined(SBCG_USE_AUDIO_MAP)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#endif
+#ifdef SBCG_USE_SDRAM
+    /* 每轮先归还音频缓冲，再测试最多128字；DHT起始低态完全跳过内存访问。 */
+    BSP_SDRAM_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    if (!TemperatureService_IsStartLowActive()) { ReportSdram(BSP_Console_GetTickMs()); }
 #endif
     FlushOneLine();
 }

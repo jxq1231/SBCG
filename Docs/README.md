@@ -4,7 +4,7 @@
 
 更新：2026-10-24。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
-当前 **M4.1.3本地传输模型关联与R1静默管线范围通过**，原失败保留；见[当前状态](Project_State.md)和[本轮报告](Milestones/M4_1_3_Sound_Event_Time.md)。用户转向LTDC RGB565状态页，TouchGFX后续接入；FMC/MPU Region1已生成；U1实物发现控制寄存器被MPU拦截，当前等待Region2。[U0软件页面](Milestones/U0_RGB565_Status_Page.md)已准备，接下来按[现行步骤](Plans/2026-10-24_LTDC_RGB565_Bringup.md)只补Region2并重验SDRAM；[U1失败/恢复](Milestones/U1_SDRAM_Bringup.md)保留实测记录，板上已恢复TIME-R1。
+当前 **M4.1.3本地传输模型关联与R1静默管线范围通过**，原失败保留；见[当前状态](Project_State.md)和[本轮报告](Milestones/M4_1_3_Sound_Event_Time.md)。用户转向LTDC RGB565状态页，TouchGFX后续接入；FMC/MPU Region1/2已生成，U1-SDRAM-R1的全8MB四轮自检及约79秒静默音频共存实测通过。[U0软件页面](Milestones/U0_RGB565_Status_Page.md)已准备，下一步按[现行步骤](Plans/2026-10-24_LTDC_RGB565_Bringup.md)配置LTDC RGB565；[U1报告](Milestones/U1_SDRAM_Bringup.md)保留首版失败与R1通过记录，板上现为U1-SDRAM-R1，尚未点屏。
 
 M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30请求通过，网络身份/共存通过，尚不证明双板同步精度。[网络证据](Milestones/M2_3_1_Dual_Board_Identity.md)。M3.2.4单板音频时间模型实测和更早计划均保留历史范围，无需重复实施。
 
@@ -19,7 +19,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
-| 本次任务执行到哪里 | [U1失败/恢复](Milestones/U1_SDRAM_Bringup.md)与[显示起步](Plans/2026-10-24_LTDC_RGB565_Bringup.md) | 先补FMC寄存器MPU Region2；U0预览不是点屏证据 |
+| 本次任务执行到哪里 | [U1实测](Milestones/U1_SDRAM_Bringup.md)与[显示起步](Plans/2026-10-24_LTDC_RGB565_Bringup.md) | SDRAM已通过，下一步LTDC；U0预览不是点屏证据 |
 | 课程目标和未实现部分 | [Project_Roadmap](Project_Roadmap.md) | 基础/提高指标和整机路线仍有效，不是一次实现全部功能的授权 |
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
 | 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；显示仍是后续，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |

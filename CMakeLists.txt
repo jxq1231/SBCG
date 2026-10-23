@@ -66,6 +66,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 )
 
 include(cmake/audio-layout.cmake)
+include(cmake/sdram.cmake)
 
 # LwIP generation registers LAN8742 in STM32_Drivers. Older PHY-only
 # snapshots still need the user source entry, but never compile both copies.
