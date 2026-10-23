@@ -1,8 +1,12 @@
 # 硬件资源与后续配置参考
 
-<!-- doc-status: current-reference-with-future-designs; reviewed: 2026-10-23 -->
+<!-- doc-status: current-reference-with-future-designs; reviewed: 2026-10-24 -->
+
+> 2026-10-24显示现行步骤见[LTDC RGB565起步](Plans/2026-10-24_LTDC_RGB565_Bringup.md)：先FMC/MPU、后LTDC；旧100MHz/CAS2仅保留为历史BSP对照。
 
 > 已核对当前代码及分版实测范围。现行状态只见[Project_State](Project_State.md)；本页早期实验按原日期理解，后续设计不等于已配置。
+
+2026-10-23当前PPS：CubeMX已生成PA15/D9/TIM2_CH1及Pull-down，应用接入后保持生成文件哈希；ETH目标比较经ITR1驱动100us PWM。仅A板在场，新检测固件已有EMITTED89/MISSED0/ERRORS0寄存器观测，示波器波形仍未测；参见[M2.3.3交付](Milestones/M2_3_3_PTP_PPS.md)。
 
 2026-10-22 此前增量：[M3.0 WM8994 身份读取](Milestones/M3_0_Codec_ID.md)
 沿用生成的 I2C3（PH7 SCL、PH8 SDA），7 位地址 0x1A、ID 寄存器 0x0000，
@@ -22,7 +26,7 @@
 | --- | --- |
 | 当前实测 | 本板系统/串口/PHY、LwIP与电脑UDP、PTP本地时钟及RX/TX/板端观测、DHT11自动/手动及拔插恢复、M3.1单板PCM连续采集与幅度响应；详细边界分别记录。各版证据见[项目状态](Project_State.md) |
 | 板级参考 | 历史按UM1907 Rev4的MB1191 B-04原理图/I/O表、DS10916及本机CubeF7 V1.17.4 BSP核对的连线；当前PCB修订与改动未现场确认 |
-| 设计目标 | M2.3.2双板PTP/伺服源码及1分钟运行内部观测通过；FMC/LTDC、PPS、温度UDP及整机测距仍未实现；SAI/DMA连续数据流及受控幅度响应已实测；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3的WM8994 ID8994在M3.0已实测，SAI/DMA在M3.1已实测；T1.2串口接收/手动设温、恢复自动及原网络联合实测通过 |
+| 设计目标 | M2.3.2双板PTP/伺服源码及1分钟运行内部观测通过；PPS软件已接入并观察本地排程，未测波形；FMC/LTDC、温度UDP及整机测距仍未实现；SAI/DMA连续数据流及受控幅度响应已实测；单板UDP、PTP本地时钟/RX/TX和温度正常采样已有实测，不能将单板结果当作双板同步；I2C3的WM8994 ID8994在M3.0已实测，SAI/DMA在M3.1已实测；T1.2串口接收/手动设温、恢复自动及原网络联合实测通过 |
 
 任务书没有指定RGB565、PTP协议、DHT11接线或整数公式；这些是本项目沿用的设计选择。当前模块已按3.3V/PG7接线并通过采集及恢复测试；替换模块时仍须重新核对脚序、电压、上拉和版本。两块真实UID及A/B指定已确定，M2.3.1 A联合验收及双板网络共存已通过，M2.3.2新闭环已通过1分钟运行内部观测。
 
@@ -79,7 +83,7 @@ I/D Cache维持关闭，不增加缓存维护。板载WM8994使用既有PH7/PH8 
 
 | 资源 | 本项目唯一选择 | 其它模块的访问方式 |
 | --- | --- | --- |
-| 显示 | **全部RGB565**：LTDC的RGB565引脚模式、图层/帧缓冲、DMA2D输入/输出与业务16位颜色一致；有效引脚按板级原理图，时序按本次用户约定1/43/8、10/12/4，像素时钟9.6 MHz | 第5.2节是唯一目标；不混用另一组RGB888 AF和官方BSP41/13/32时序；时序为待实物验证的目标 |
+| 显示 | **全部RGB565**：LTDC的RGB565引脚模式、图层/帧缓冲、DMA2D输入/输出与业务16位颜色一致；有效引脚按板级原理图，本轮计划时序41/13/32、10/2/2，像素时钟9.6 MHz | 现行显示方案和第5.2节一致；不混用RGB888引脚或旧1/43/8时序；仍待SBCG实物验证 |
 | 同步时间 | **ETH IEEE1588 MAC硬件时钟是唯一时间源**：A主时钟、B从时钟；时间服务输出64位PTP纳秒时间 | 网络与声音到达时间戳都在PTP时间域；不从TIM2拼接测量时间 |
 | TIM2 / PA15 PPS | 同一时间服务唯一管理；TIM2计数1 MHz，仅执行PTP每秒触发的100 μs脉冲 | 其它模块不得初始化、改分频或读CNT作到达时刻；不输出独立于PTP的自由运行整秒 |
 | 环境温度/算法 | 一只DHT11在A板；UDP共享整数毫摄氏度和temperature_version；**math_version=1统一整数公式** | 同次测量两板使用同一温度、t_A_ns/t_B_ns和公式，禁止一侧浮点另一侧整数 |
@@ -215,7 +219,7 @@ I/D Cache维持关闭，不增加缓存维护。板载WM8994使用既有PH7/PH8 
 | PH0（G1） | X2 OSC_25M经R30输入 | RCC_OSC_IN | 保留RCC原名 | 第5.1节 | 已接25 MHz有源时钟；核对实物修订 |
 | PH1（H1） | OSC_OUT；B-04图中未用 | RCC_OSC_OUT/保留 | 不作为外接接口 | 第5.1节 | 不以“无连接”推定能在扩展口接入 |
 
-本项目PPS目标固定为PA15/TIM2_CH1，当前尚未启用；是否来自PTP整秒以及时序精度必须通过后续实测证明，不同时保留另一套默认输出方案。
+本项目PPS目标固定为PA15/TIM2_CH1，现已生成Reset/ITR1/PTP remap与PWM配置，已补PA15 Pull-down并接入PPS应用；是否来自PTP整秒以及时序精度必须通过后续实测证明，不同时保留另一套默认输出方案。
 
 ### 4.6 DHT11温湿度接口：单只接A板PG7 / Arduino D4，B板接收UDP温度
 
@@ -273,7 +277,7 @@ PH15先不给其它GPIO输出、PPS或课程模块使用；PD6同样保留。启
 
 ### 5.1 时钟基线（SYS/RCC已生成，后续外设时钟待配置）
 
-当前SBCG已生成 **SYSCLK/HCLK = 200 MHz、APB1 = 50 MHz、APB2 = 100 MHz**。后续FMC计划采用SDCLK = HCLK/2 = 100 MHz，便于复用官方BSP的100 MHz初始化参考；常规定时器倍频路径为TIM2提供100 MHz输入。FMC、TIM2尚未启用，上述外设时钟仍待配置和实测。两板共用基线仍待落实；参数必须以CubeMX及生成代码为准。
+当前SBCG已生成 **SYSCLK/HCLK = 200 MHz、APB1 = 50 MHz、APB2 = 100 MHz**。本轮FMC起步计划采用SDCLK = HCLK/3 ≈ 66.667 MHz、CAS3，参数见当前显示方案；100MHz/CAS2仅作为历史BSP对照，不与本轮混用。TIM2/PPS已生成且本地排程有观测，FMC仍待CubeMX配置及实测；参数以生成代码为准。
 
 | 设置 | 建议 |
 | --- | --- |
@@ -295,22 +299,24 @@ ST部分示例代码使用 `HSE_ON`；这里依据上传B-04原理图选择有�
 | --- | --- |
 | LTDC引脚模式 | **RGB565**，第4.1节20个有效信号AF推挽、No Pull、高/很高速度；PG12/AF9；G3/PJ10；8个低位GPIO按L0推挽/低电平/低速 |
 | 面板有效区 | 480×272 |
-| 水平参数（实际长度） | **HSYNC=1，HBP=43，HFP=8**，沿用的项目设计目标，尚待本板显示验证 |
-| 垂直参数（实际长度） | **VSYNC=10，VBP=12，VFP=4** |
-| HAL寄存器字段核对 | HorizontalSync=0；VerticalSync=9；AccumulatedHBP=43；AccumulatedVBP=21；AccumulatedActiveW=523；AccumulatedActiveH=293；TotalWidth=531；TotalHeigh=297 |
+| 水平参数（实际长度） | **HSYNC=41，HBP=13，HFP=32**，与参考工程和ST面板参数一致，SBCG待实测 |
+| 垂直参数（实际长度） | **VSYNC=10，VBP=2，VFP=2** |
+| HAL寄存器字段核对 | HorizontalSync=40；VerticalSync=9；AccumulatedHBP=53；AccumulatedVBP=11；AccumulatedActiveW=533；AccumulatedActiveH=283；TotalWidth=565；TotalHeigh=285 |
 | 极性 | HS/VS/DE：Active Low；Pixel Clock：IPC，按BSP选择输入像素时钟极性（通常界面对应正常/上升沿），核对生成的 `LTDC_PCPOLARITY_IPC` |
 | 图层固定约定 | 一层RGB565、480×272，起址0xC0000000，Alpha=255、Alpha0=0、背景黑，Blend1/2均CA；HAL字段LTDC_PIXEL_FORMAT_RGB565 |
 | DMA2D | 输出DMA2D_OUTPUT_RGB565；使用输入图像时InputColorMode为RGB565；图像/业务颜色用uint16_t，无32位帧缓冲 |
 | 缓冲大小 | RGB565每帧480×272×2=261120字节；双缓冲522240字节；可将第二缓冲放0xC0040000，两块按256 KiB间距预留 |
 | GPIO控制 | PI12=LCD_DISP，PK3=LCD_BL_CTRL；推挽、No Pull、低速，初始低；SDRAM和LTDC图层准备好后再拉高 |
 
-CubeMX界面与生成字段可能分别使用实际长度或累计值，按上表核对，避免重复减1。H1/43/8、V10/12/4是沿用的项目目标，不是任务书硬性参数，也未在SBCG实物上验证。后续显示增量须核对实际面板与当前配置，不从另一工程的点亮结果推断SBCG已通过。
+CubeMX界面与生成字段可能分别使用实际长度或累计值，按上表核对，避免重复减1。旧H1/43/8、V10/12/4方案于2026-10-24作废，不能与当前41/13/32、10/2/2混用。新参数已与ST面板源及参考GUI工程核对，但SBCG仍需独立点屏验证。
 
 **业务与配置都统一RGB565。** 默认 `BSP_LCD_Init()/BSP_LCD_MspInit()` 和ARGB8888图层初始化不得覆盖CubeMX的20个AF+8个恒低GPIO方案。绘图/图像内存均为uint16_t；SDK某个控制参数若要求内部其它编码，只在单一BSP包装内转换，不改变业务数据、帧缓冲或DMA2D的565配置。
 
 配置完成后验证黑/白/红/绿/蓝、灰阶和渐变、整屏/边缘/刷新，以及200 MHz系统、音频采样同时运行。不能仅以“背光亮”证明颜色脚、时序、SDRAM和帧缓冲全正确。
 
 ### 5.3 S1：FMC SDRAM
+
+**当前采用显示起步方案的HCLK/3、CAS3配置，先FMC/MPU验内存，再启LTDC。下表是历史100MHz官方BSP对照，不是本次填写步骤。** 现行周期数及刷新重算见[当前方案](Plans/2026-10-24_LTDC_RGB565_Bringup.md)。
 
 | 项目 | 100 MHz SDCLK下的建议/官方BSP基线 |
 | --- | --- |
@@ -370,7 +376,7 @@ USART1仍为PA9/PB7、115200 8N1、无流控、Oversampling16，经CN14 ST-LINK 
 | --- | --- |
 | 输出 | PA15 / CN7-2 / D9，TIM2_CH1，AF1，标签PPS_OUT |
 | TIM2输入/计数 | 目标HCLK200 MHz、APB1定时器100 MHz；PSC=99，计数1 MHz；其它模块禁止改分频 |
-| 触发源 | ETH MAC每PTP秒的内部PPS事件 → TIM2 ITR1，HAL映射常量TIM_TIM2_ETH_PTP；不使用板上PB5作外部跳线 |
+| 触发源 | ETH/PTP目标时间比较事件 → TIM2 ITR1，每秒提前安排目标，HAL映射常量TIM_TIM2_ETH_PTP；不使用板上PB5作外部跳线 |
 | TIM2工作方式 | 内部时钟，Slave Reset Mode由该PTP事件清零计数；CH1 PWM1正脉冲，CCR1=100（100 μs） |
 | ARR | **0xFFFFFFFF**，避免定时器自行每秒溢出产生另一组脉冲；1秒周期来自PTP触发，不来自ARR999999 |
 | 启动/失锁 | 有效同步锁定后才开启验收PPS；初始化时确保输出低、CNT不落在脉冲区；失锁停止有效PPS并显示状态 |

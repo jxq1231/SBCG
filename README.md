@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-M2.3.2%20%7C%20Short%20Run%20Verified-15803d?style=flat-square" alt="M2.3.2短时闭环观测通过">
+  <img src="https://img.shields.io/badge/Stage-U0%20%7C%20RGB565%20Software%20Ready-0e7490?style=flat-square" alt="U0 RGB565软件准备完成，硬件待接入">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -42,7 +42,11 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**当前M2.3.2：双板时差、漂移及B硬件校时闭环，软件及1分钟运行观测通过。** A参考/B跟随，319/320两步PTPv2固定子集，全部使用ETH硬件四时刻；用户已手动烧录`SBCG-M2.3-SYNC`，内部锁定不代表独立精度验收。用户已完成UDP池6的CubeMX再生成，并批准BSP有界校正。[本轮方案](Docs/Plans/2026-10-23_Dual_Board_Clock_Closed_Loop.md)。此前M2.3.1已通过A联合实测和双板60秒网络共存，B30请求全应答。[实测证据](Docs/Milestones/M2_3_1_Dual_Board_Identity.md)。
+**当前：M4.1.3本地模型关联及日志修复静默范围通过，U0 RGB565状态页已完成软件准备。** 板上仍是SBCG-M4.1-TIME-R1；UI尚未接入LTDC。下一步先在CubeMX配置FMC/MPU验SDRAM，再点亮480×272屏；后续再迁移TouchGFX。[页面预览与边界](Docs/Milestones/U0_RGB565_Status_Page.md) · [现行CubeMX步骤](Docs/Plans/2026-10-24_LTDC_RGB565_Bringup.md)。
+
+**M2.3.3：PPS软件已接入，新检测固件已有本地排程观测；电气波形仍待验收。** 用户CubeMX配置已核对，输出为 **PA15 / Arduino D9 / CN7第2针**，目标100us高脉冲。当前仅A板在场，可独立验参考PPS；两板±10us仍须之后经交换机和示波器验证。[软件交付与单机后续计划](Docs/Milestones/M2_3_3_PTP_PPS.md)。
+
+**上一已验收M2.3.2：双板时差、漂移及B硬件校时闭环，软件及1分钟运行观测通过。** A参考/B跟随，319/320两步PTPv2固定子集，全部使用ETH硬件四时刻；用户已手动烧录`SBCG-M2.3-SYNC`，内部锁定不代表独立精度验收。用户已完成UDP池6的CubeMX再生成，并批准BSP有界校正。[本轮方案](Docs/Plans/2026-10-23_Dual_Board_Clock_Closed_Loop.md)。此前M2.3.1已通过A联合实测和双板60秒网络共存，B30请求全应答。[实测证据](Docs/Milestones/M2_3_1_Dual_Board_Identity.md)。
 
 下方保留前一M3.2.4已验收的硬件基线。
 
@@ -56,7 +60,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | 单板网络/PTP | UDP、重连、RX/TX戳、时间交换和板端估算观测已实测 | [协议](Docs/Protocol.md) |
 | 温度 | DHT11 3.3V/PG7正常采集、手动设温及连续拔插恢复已实测 | [手动温度](Docs/Milestones/T1_2_Manual_Temperature.md)、[恢复](Docs/Milestones/T1_1_Temperature_Replug.md) |
 | 音频 | codec ID、PCM连续采集/受控响应、帧编号、本地PTP锚点和时间估算自检已实测 | [M3.1](Docs/Milestones/M3_1_Audio_DMA.md)、[M3.2.2](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md) |
-| 双板同步/PPS、声学时间校准、检测/测距、LCD | 闭环同步软件及1分钟运行观测通过；PPS、声学检测/测距与LCD待后续 | [课程路线](Docs/Project_Roadmap.md) |
+| 双板同步/PPS、声学时间校准、检测/测距、LCD | 闭环同步软件及1分钟运行观测通过；PPS软件待实物验收，声学检测/测距与LCD待后续 | [课程路线](Docs/Project_Roadmap.md) |
 
 历史方案和各版实验按需查[文档状态表](Docs/Document_Status.md)，勿从旧计划重复配置/烧录。
 
@@ -68,7 +72,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | M1 | 以太网链路与双向UDP通信 | 本板与电脑请求/应答、链路恢复及双板网络共存已验证；新板间PTP消息在M2.3.2短时运行通过 |
 | M2 | 时间同步及PPS精度验证 | 本地硬件戳、两板PTP闭环及调频短时观测通过；冷启动/故障恢复与PPS外部精度未测 |
 | M3 | 音频DMA采集 | M3.1连续采集/幅度响应已验收；M3.2.1编号/M3.2.2锚点通过；M3.2.3纯算法通过；M3.2.4板端时间估算正常窗口已实测 |
-| M4 | 声音事件检测 | 未开始 |
+| M4 | 声音事件检测 | M4.1.3本地传输模型与静默管线通过；标准音频识别/精度未验 |
 | M5 | TDOA测量及标定 | 未开始 |
 | M6 / M7 | 课程基础 / 提高要求验收 | 未开始 |
 

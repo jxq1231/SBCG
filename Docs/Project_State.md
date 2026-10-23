@@ -1,10 +1,24 @@
 # 当前项目状态
 
-<!-- doc-status: current-state; reviewed: 2026-10-23 -->
+<!-- doc-status: current-state; reviewed: 2026-10-24 -->
 
-更新：2026-10-23。本文仅描述现在；历史实验按需查[文档状态表](Document_Status.md)及`Milestones/`，不重复执行旧计划。
+更新：2026-10-24。本文仅描述现在；历史实验按需查[文档状态表](Document_Status.md)及`Milestones/`，不重复执行旧计划。
 
 ## 当前工作
+
+**M4.1.3候选帧已关联本地PTP传输模型，串口突发修复通过静默运行验证。** 当前A板`SBCG-M4.1-TIME-R1`，Debug前缀789c0c92ef2f。BOOT后67.933秒，395有效块、66条音频有效/零丢块/零错误、心跳连续；环境自然候选10条，9模型与Fraction一致、1条NO_LEFT明确拒绝，22组原模型自检继续运行。原TIME版5次归还失败记录保留，R1日志改为有界排队每轮一行。没有主动发声，未宣称标准音频识别、物理到达或同步精度通过。[本轮结果](Milestones/M4_1_3_Sound_Event_Time.md)。
+
+**当前U0 RGB565状态页的软件准备完成，尚未点屏。** 用户选择先LTDC RGB565、后TouchGFX；已参考指定聊天及GUI_FOR_TEST，只移植显示思路。新增纯C状态/绘图/行带渲染并通过主机测试，预览和实测边界见[U0报告](Milestones/U0_RGB565_Status_Page.md)。当前板上仍为上述TIME-R1，UI未链接/烧录，不访问外部内存。
+
+下一步U1只通过CubeMX配置FMC SDRAM1及MPU Region1，先内存测试，再启LTDC。请按[现行配置步骤](Plans/2026-10-24_LTDC_RGB565_Bringup.md)，不要执行旧100MHz/CAS2或旧LCD时序。当前无网线、B或示波器，温度未就绪；声音识别及外部精度仍待后续。
+
+## 暂缓验收：M2.3.3 PPS
+
+**M2.3.3 PPS软件已接入；新检测固件中观察到本地排程运行，电气波形仍待验收。** 用户已通过CubeMX生成PA15/PPS_OUT、TIM2_CH1/AF1、Reset/ITR1/ETH PTP remap、PSC99/ARR最大/CCR100及Pull-down。A以本地PTP整秒目标产生参考100us正脉冲；B仅在资格及有界重新资格内输出。新增PPS不新增IRQ/DMA，不改变缓存或现有ETH/SAI内存布局。软件计数不是电气波形证据，详见[本轮交付](Milestones/M2_3_3_PTP_PPS.md)。
+
+2026-10-23当前仅保留A板。此前“暂不烧录”已由本轮“板已连接可以测试”的明确授权更新；已烧录M4.1-CAND-R1，不是原冻结M2.3-PPS文件。PPS末计数EMITTED89/MISSED0/ERRORS0只是寄存器观测。输出为绿板Arduino **D9 / PA15 / CN7第2针**，地为GND；没有示波器，不能宣布脉宽或边沿精度通过。B恢复后仍需交换机冷启动≤30秒及收敛后连续10次±10us。
+
+## 上一已验收基线：M2.3.2（历史证据）
 
 - **M2.3.2已实现，并通过用户指定的1分钟运行窗口验证。** 同一固件`SBCG-M2.3-SYNC`按UID固定A参考/B跟随，319/320固定PTPv2子集、四硬件时刻及B有界fine调相/调频。用户报告已手动烧录两板；助手本次未重复烧录/复位。详见[实现与短时证据](Milestones/M2_3_2_Dual_Board_Clock_Software.md)。
 - A=COM3、B=COM5，交换机仍为A2/B1/PC3口。B60秒236组原始四时刻与真实C/Fraction完全一致，协议估算时差−65～+340ns，漂移估计−61～+35ppb，8次成功调频，控制拒绝/错误0。CTRL35条内部锁、25条TRACKING，变频后重新建立锁证据；不是全程连续锁定。
@@ -12,7 +26,7 @@
 - 本次用户明确将10分钟缩短为1分钟。各串口/网络窗口部分重叠，未捕获BOOT及冷启动相位步进，未读回Flash哈希；未测正向频率/正负大相位、断网恢复或外部同步精度，所有`SYNC=0`保持。内部估计不表示±10us课程独立验收或测距精度通过。
 - 已有软件证据：15组原生运行器、9412断言伺服、12组协调层、Tools113/Analysis98、两种构建/布局及独立复核通过。冻结Debug前缀`8fea8c54cc27`，Release前缀`ca5b89440a5b`；用户手动烧录报告与观测行为相符，实物精确哈希未读回。
 - 本次CubeMX仅用户再生成UDP PCB6，BSP fine扩展已明确批准。无引脚/RCC/DMA/NVIC/Cache改动，HAL原文件未改；旧配对/音频模型按时间代际失效，PCM DMA持续运行。
-- 下一步需单独选择冷启动/故障恢复或PPS独立精度，不自动扩大到UI、温度共享、声音检测/测距。
+- 该版本之后实施了PPS软件及M4.1.2实验检测管线；均不表示UI或测距已完成。
 
 ## 最近一次文档与可读性维护
 
@@ -29,13 +43,13 @@
 | USART1 | PA9 TX/PB7 RX，115200 8N1无流控；RX IRQ5/0，无UART DMA；本机ST-LINK VCP COM3 |
 | 网络 | ETH/RMII、LAN8742地址0/ID0007:C131，100Mbps全双工；NO_SYS LwIP2.1.2轮询，无ETH IRQ；ETH有专用内部DMA |
 | 地址/端口 | 旧实测板192.168.10.1/24；A=.1、B=.2/24身份已实测；PC物理以太网192.168.10.100/24；板5005→PC5005，PC6006↔板5006，PC6007↔板5007 |
-| PTP | 原BSP本地时钟与RX/TX硬件戳、板端四时刻估算观测已实测；M2.3.2 B校时/校频短时观测通过；仍SYNC=0，PPS未实现 |
+| PTP | 原BSP本地时钟与RX/TX硬件戳、板端四时刻估算观测已实测；M2.3.2 B校时/校频短时观测通过；仍SYNC=0，PPS本地排程已观测但电气波形未验收 |
 | 温度 | DHT11模块3.3V，DATA为PG7/D4、开漏释放；5秒采集、预读/超龄机制；AUTO/手动及串口命令已实测，无温度UDP共享 |
 | I2C3 | PH7 SCL/PH8 SDA；WM8994地址0x1A，ID8994已实测；触控业务未实现 |
 | SAI2 | A主接收提供时钟，B内部同步从接收；16位双通道，4时隙中1/3有效；标称48kHz，推导约47991.071Hz，PLLI2S344/Q7/DivQ1 |
 | 音频DMA/IRQ | DMA2 Stream7 Channel0，P→M halfword circular，32768元素/64KiB；DMA2_Stream7和SAI2 IRQ均4/0；半满/满每8192帧 |
 | 内存/Cache | 音频SRAM1 0x20010000..0x20020000、32字节对齐；主栈0x20047000..0x20048000，LwIP堆窗0x20048000..0x2004C000；ETH描述符/RX池在SRAM2；I/D Cache关闭 |
-| 尚未启用 | TIM2/PPS、FMC/外部SDRAM、LTDC/DMA2D显示、双板同步外部精度验收/温度共享；声音检测与测距尚未实现 |
+| 当前未完成 | PPS波形/双板同步外部精度、FMC/外部SDRAM、LTDC/DMA2D、温度共享、标准声音识别/到达校准与测距；实验能量候选已接入 |
 
 生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；本次仅UDP PCB池配置已由用户在CubeMX更新，其余硬件配置不变。
 
@@ -53,4 +67,4 @@ NDTR进度不是SRAM读取授权；WIDTH=0仍有一帧量化；codec/SAI/FIFO/DM
 
 M3.2.4通过10组原生模块（Audio10程序）、Tools83/Analysis87项及两配置构建/布局，并完成上述Debug实物验收。声学延迟校准、事件查询/检测、双板同步/PPS及LCD仍需独立规划；完整课程指标见[路线图](Project_Roadmap.md)，M2.3.2已通过短时运行观测，最终整机要求保留。
 
-本次软件验证、冻结固件与实物验收步骤见[M2.3.2交付记录](Milestones/M2_3_2_Dual_Board_Clock_Software.md)；仅短时运行窗口实测，不代表外部精度。
+最新固件和日志修复见[M4.1.3报告](Milestones/M4_1_3_Sound_Event_Time.md)，当前显示软件及硬件关口见[U0报告](Milestones/U0_RGB565_Status_Page.md)；M2.3.2仅为此前双板短时观测，不代表外部精度。
