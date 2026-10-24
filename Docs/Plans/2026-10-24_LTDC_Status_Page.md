@@ -1,6 +1,8 @@
 # U2：CubeMX LTDC RGB565配置与状态页直接验收计划
 
-<!-- doc-status: current-plan-awaiting-cubemx-ltdc; reviewed: 2026-10-24 -->
+<!-- doc-status: archived-plan; reviewed: 2026-10-24 -->
+
+**已完成：** 单A的SBCG-U2-STATUS-R2及用户目视通过，结果见[U2验收](../Milestones/U2_LTDC_Status_Page.md)。下文保留批准设计及8根低位暂缓约定，不作为重复执行指令。
 
 **目标：** 在当前STM32F746G-DISCO上直接显示480×272真实状态页，并保持原音频采集和前台业务运行。用户要求跳过独立色条实验；不创建色条固件、色条任务或相应验收关口。
 
@@ -8,7 +10,7 @@
 
 **技术栈：** 现有GCC/CMake/Ninja、HAL、NO_SYS前台调度、已完成U0纯C绘图层、U1 SDRAM。当前仅A板在场；不需要网线、示波器或主动发声。TouchGFX、触控、DMA2D、波形页和测距算法后续独立处理。
 
-本页是配置及后续接入计划，尚无LTDC生成/烧录/屏幕通过结论。板上仍为已验收的SBCG-U1-SDRAM-R1。遵循根AGENTS.md第4节：先由用户在当前SBCG.ioc通过CubeMX配置并Generate Code，之后再改应用；不手改.ioc或生成初始化。
+2026-10-24用户已通过CubeMX生成LTDC并将20根AF改为Very High；明确要求8根颜色低位暂不处理，因此本轮不将这8根GPIO作为接入前置条件，不手工补配置。当前仍无显示固件烧录/实屏通过结论。板上仍为已验收的SBCG-U1-SDRAM-R1。遵循根AGENTS.md第4节：先由用户在当前SBCG.ioc通过CubeMX配置并Generate Code，之后再改应用；不手改.ioc或生成初始化。
 
 ## 1. 保留的资源与新增范围
 
@@ -51,7 +53,7 @@ MPU Region0、Region1（C0000000/8MB普通非缓存XN）、Region2（A0000000/4K
 
 ### 2.2 颜色低位固定为0
 
-下列引脚选GPIO_Output，Output Push Pull、No Pull、Low Speed，初始Output Level为Low：
+**当前例外：用户明确暂缓本节，8根引脚保持生成现状；下面是后续完善建议，不是本轮门槛。** 建议选GPIO_Output，Output Push Pull、No Pull、Low Speed，初始Output Level为Low：
 
 | 引脚 | 板上低位信号 |
 | --- | --- |
@@ -150,7 +152,7 @@ NVIC Settings：LTDC global interrupt和LTDC global error interrupt（若单独�
 
 - 新增hltdc、全局非static的MX_LTDC_Init、LTDC MSP及原厂HAL LTDC源。
 - main的自动初始化调用列表中没有MX_LTDC_Init；函数定义本身仍在。
-- 20根AF及10根GPIO与本页一致；PI12/PK3初始低。
+- 20根AF及2根控制GPIO与本页一致；PI12/PK3初始低。8根低位GPIO按用户本轮决定暂缓，不伪称已生成。
 - PLLSAI LCD9.6MHz；原主PLL/PLLI2S、SAI、TIM2、ETH、UART、DHT、FMC/MPU均不变。
 - 只启用一个RGB565图层，窗口/时序/首地址正确，LTDC NVIC未开启。
 - 运行既有MPU预检查；应用适配后再走原Debug/Release预设及布局检查。不把仅生成的旧App直接作为显示固件烧录，因为延后调用和SDRAM所有权交接尚需接入。
@@ -223,14 +225,14 @@ I/D Cache和MPU属性保持原样，无需新增Clean/Invalidate。CPU完成后�
 
 ## 8. 直接状态页验收
 
-- [ ] 用户CubeMX完成上述配置和Generate Code，检查生成配置及保留资源。
-- [ ] 先用主机失败用例验证：未READY不触碰帧缓冲/不调用LTDC；未画好首帧不点亮；扫描/待切换缓冲不能写；超时不归还错误缓冲；自检不能与UI同时拥有内存。
-- [ ] 实现最小BSP/状态服务，验证8行上限、DHT门控、单份快照、未知/过期值、A参考/B未同步和温度手动/自动切换；旧音频/网络/时间单测保持通过。
-- [ ] 原Debug/Release预设构建、ETH/Audio布局及独立复核通过后，在当前硬件授权范围烧录A，采集约90秒串口；不播放声音、不要求网线或示波器。
-- [ ] 首次点亮就是状态页。自动核对显示READY/刷新计数/无换页错误、原音频连续且DROP/ERR/HAL/DMA=0、串口TX_ERRORS=0。无网线显示DOWN，传感器未接显示AUTO/--，A显示REFERENCE/偏差--，距离/方向/质量--。
-- [ ] 通过已有串口命令TEMP SET 25.0、TEMP SET 30.0核对屏幕温度/声速及MANUAL来源随真实服务变化，之后TEMP AUTO恢复；不把手动设温当作传感器实测。
-- [ ] 用户目视确认文字可读、位置/颜色合理、状态持续更新且无明显闪烁/撕裂；串口与寄存器不能单独证明面板正确。依根AGENTS.md第19节，取得该观察后才宣称显示功能完成并提交。
-- [ ] 更新实际报告、按范围提交为jxq，停止本增量；不自动加入TouchGFX、波形、触控或测距。
+- [x] 用户CubeMX生成LTDC，20根AF Very High、两根控制初始低，时序/图层/9.6MHz/延后初始化及保留资源已核对；8根低位GPIO按用户决定暂缓。
+- [x] 先用主机失败用例验证：未READY不触碰帧缓冲/不调用LTDC；未画好首帧不点亮；扫描/待切换缓冲不能写；超时不归还错误缓冲；自检不能与UI同时拥有内存。
+- [x] 实现最小BSP/状态服务，验证8行上限、DHT门控、单份快照、未知/过期值、A参考/B未同步和温度手动/自动切换；旧音频/网络/时间单测保持通过。
+- [x] 原Debug/Release预设构建、ETH/Audio布局及独立复核通过后，在当前硬件授权范围烧录A，采集约90秒串口；不播放声音、不要求网线或示波器。
+- [x] 首次点亮就是状态页。自动核对显示READY/刷新计数/无换页错误、原音频连续且DROP/ERR/HAL/DMA=0、串口TX_ERRORS=0。无网线显示DOWN，传感器未接显示AUTO/--，A显示REFERENCE/偏差--，距离/方向/质量--。
+- [x] 通过已有串口命令TEMP SET 25.0、TEMP SET 30.0核对屏幕温度/声速及MANUAL来源随真实服务变化，之后TEMP AUTO恢复；不把手动设温当作传感器实测。
+- [x] 用户目视确认文字可读、位置/颜色合理、状态持续更新且无明显闪烁/撕裂；串口与寄存器不能单独证明面板正确。依根AGENTS.md第19节，取得该观察后才宣称显示功能完成并提交。
+- [x] 更新实际报告、按范围提交为jxq，停止本增量；不自动加入TouchGFX、波形、触控或测距。
 
 若首次显示异常，按状态页数据、帧缓冲、LTDC寄存器、时钟/引脚顺序定位，不预先恢复独立色条流程；用户后续要求时再调整实验范围。
 

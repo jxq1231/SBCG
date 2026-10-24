@@ -4,9 +4,12 @@
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
- *              不承担IRQ处理、GUI绘制或双板校时。
+ *              不承担IRQ处理；页面绘制与双板校时交由独立服务。
  */
 #include "app_main.h"
+#ifdef SBCG_USE_LCD
+#include "UI/status_service.h"
+#endif
 #ifdef SBCG_USE_SDRAM
 #include "BSP/bsp_sdram.h"
 #endif
@@ -53,7 +56,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与有界日志队列；常规16行，事件时间版本32行，每行256字节。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_SDRAM)
+#if defined(SBCG_USE_LCD)
+#define APP_FIRMWARE_ID "SBCG-U2-STATUS-R2"
+#elif defined(SBCG_USE_SDRAM)
 #define APP_FIRMWARE_ID "SBCG-U1-SDRAM-R1"
 #elif defined(SBCG_USE_SOUND_TIME)
 #define APP_FIRMWARE_ID "SBCG-M4.1-TIME-R1"
@@ -213,6 +218,7 @@ static void ReportSdram(uint32_t now_ms)
         case BSP_SDRAM_TIMEOUT: name = "TIMEOUT"; break;
         case BSP_SDRAM_REFRESH_ERROR: name = "REFRESH_ERROR"; break;
         case BSP_SDRAM_MEMORY_ERROR: name = "MEMORY_ERROR"; break;
+        case BSP_SDRAM_READY: name = "READY"; break;
         default: break;
     }
     char line[APP_LOG_LINE_CAPACITY];
@@ -284,7 +290,11 @@ void App_Init(void)
 #ifdef SBCG_USE_SDRAM
     /* FMC/MPU已由main生成初始化。芯片上电等待在音频DMA启动前完成。 */
     sdram_reported_status = BSP_SDRAM_OFF;
+#ifdef SBCG_USE_LCD
+    const bool sdram_initialized = BSP_SDRAM_InitDisplay();
+#else
     const bool sdram_initialized = BSP_SDRAM_Init();
+#endif
     BSP_SdramSnapshot sdram_info;
     BSP_SDRAM_GetSnapshot(&sdram_info);
     char sdram_line[APP_LOG_LINE_CAPACITY];
@@ -338,6 +348,10 @@ void App_Init(void)
         static const char error[] = "$CONSOLE,INIT=ERROR\r\n";
         SendLine(error, (int)sizeof error - 1);
     }
+#ifdef SBCG_USE_LCD
+    /* 所有业务就绪后只建立显示服务；首帧由后续主循环分片完成。 */
+    UI_StatusService_Init(BSP_Console_GetTickMs(), SendLine);
+#endif
     FlushOneLine();
 }
 
@@ -419,9 +433,20 @@ void App_Process(void)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
 #ifdef SBCG_USE_SDRAM
-    /* 每轮先归还音频缓冲，再测试最多128字；DHT起始低态完全跳过内存访问。 */
+#ifndef SBCG_USE_LCD
+    /* 专用U1诊断模式：归还音频后测试最多128字；不得与显示模式共用内存。 */
     BSP_SDRAM_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#endif
     if (!TemperatureService_IsStartLowActive()) { ReportSdram(BSP_Console_GetTickMs()); }
+#endif
+#ifdef SBCG_USE_LCD
+    /**
+     * ==================== 模块：状态页前台绘制 ====================
+     * 作用：使用业务只读副本绘制最多八行，完成后台帧后交给LTDC换页。
+     * 调度顺序：音频唯一PCM消费者已归还；DHT起始低态整次延后。
+     * 调用关系：主循环进入本段；不在DMA/SAI/UART回调绘图。
+     */
+    UI_StatusService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
     FlushOneLine();
 }

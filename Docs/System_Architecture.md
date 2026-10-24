@@ -1,6 +1,10 @@
 # SBCG 当前系统架构与真实运行流程
 
-<!-- doc-status: current-architecture; reviewed: 2026-10-23 -->
+<!-- doc-status: historical-architecture-with-current-addendum; reviewed: 2026-10-23 -->
+
+> **2026-10-24状态更新：** 当前A板为SBCG-U2-STATUS-R2，LTDC RGB565状态页、温度手动联动和音频共存已实测，用户确认显示正常；无TouchGFX/RTOS。调用链新增App初始化SDRAM显示READY，前台在音频归还后八行分片绘制，首帧完成才调用生成LTDC初始化；同步/测距的独立精度仍未验收。见[现行状态](Project_State.md)和[U2交付](Milestones/U2_LTDC_Status_Page.md)。
+>
+> **以下正文是2026-10-23架构/答辩快照**，其中“当前”“尚未显示”等只描述当日版本，不用于覆盖上述新结论；按需追溯，不照其旧下一步重复实施。
 
 本文依据当前源码、CMake登记、Debug编译数据库和M3.2.4实物记录整理。它是当前系统的阅读地图，历史计划不再按顺序重复执行。当前源码为M2.3.2/SBCG-M2.3-SYNC，软件及1分钟运行内部观测通过，用户手动烧录；此前网络基线M2.3.1/SBCG-M2.3-ROLE的A联合验收及双板网络共存证据按历史范围保留，当前两板已手动更新SYNC并完成短时运行观测。原M3.2.4采集/时间模型链路保留。当前进度统一见[Project_State](Project_State.md)。
 

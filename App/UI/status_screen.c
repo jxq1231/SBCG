@@ -2,7 +2,7 @@
  * @file status_screen.c
  * @brief 480x272 RGB565基础状态页，支持行带绘制且不触碰硬件。
  * @details 先格式化同一快照，再画距离/同步/网络/环境/音频；真实测距无效时使用占位。
- * @note 不刷新LTDC、不切帧缓冲；后续板级集成必须先完成CubeMX与SDRAM验收。
+ * @note 不刷新LTDC、不切帧缓冲；只写调用方已取得独占绘制权的行带。
  */
 #include "status_screen.h"
 #include <string.h>
@@ -26,13 +26,15 @@ bool UI_StatusRenderRows(UI_Canvas *canvas,const UI_StatusSnapshot *s,uint32_t n
  UI_FillRect(&c,12,35,456,1,UI_RGB565(44,60,80));
  Panel(&c,12,48,216,116);Panel(&c,240,48,228,116);
  UI_DrawText(&c,25,60,"DISTANCE",1,MUTED);UI_DrawText(&c,25,89,text.distance,strlen(text.distance)>10U?2U:3U,TEXT);
- UI_DrawText(&c,25,144,strcmp(text.distance,"-- MM")==0?"WAITING FOR MEASUREMENT":"VALUE IN MILLIMETRES",1,MUTED);
+ UI_DrawText(&c,25,125,text.direction,1,MUTED);UI_DrawText(&c,119,125,text.quality,1,MUTED);
+ UI_DrawText(&c,25,144,strcmp(text.distance,"-- M")==0?"WAITING FOR MEASUREMENT":"VALUE IN METRES",1,MUTED);
  UI_DrawText(&c,254,60,"CLOCK / SYNC",1,MUTED);UI_DrawText(&c,254,83,text.sync,2,TEXT);
  UI_DrawText(&c,254,114,text.offset,1,MUTED);UI_DrawText(&c,254,144,text.precision,1,WARNING);
  Panel(&c,12,176,140,72);Panel(&c,164,176,140,72);Panel(&c,316,176,152,72);
  UI_DrawText(&c,24,186,"NETWORK",1,MUTED);UI_DrawText(&c,24,205,text.network,1,TEXT);UI_DrawText(&c,24,230,"ETHERNET",1,MUTED);
- UI_DrawText(&c,176,186,"ENVIRONMENT",1,MUTED);UI_DrawText(&c,176,205,text.temperature,strlen(text.temperature)>10U?1U:2U,TEXT);UI_DrawText(&c,176,230,text.speed,1,MUTED);
- UI_DrawText(&c,328,186,"AUDIO",1,MUTED);UI_DrawText(&c,328,204,text.audio,2,strcmp(text.audio,"RUN")==0?ACCENT:MUTED);UI_DrawText(&c,328,230,text.counts,1,MUTED);
+ UI_DrawText(&c,176,186,text.temperature_source,1,MUTED);UI_DrawText(&c,176,205,text.temperature,strlen(text.temperature)>10U?1U:2U,TEXT);UI_DrawText(&c,176,230,text.speed,1,MUTED);
+ UI_DrawText(&c,328,186,"AUDIO",1,MUTED);UI_DrawText(&c,328,204,text.audio,2,strcmp(text.audio,"RUN")==0?ACCENT:MUTED);
+ UI_DrawText(&c,328,223,text.audio_detail,1,MUTED);UI_DrawText(&c,328,236,text.counts,1,MUTED);
  UI_DrawText(&c,14,259,"LOCAL MODEL ONLY / EXTERNAL PRECISION UNVERIFIED",1,MUTED);
  return true;
 }

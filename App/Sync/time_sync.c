@@ -37,6 +37,27 @@ static uint32_t (*read_tick)(void);
 static void (*emit_line)(const char *,int);
 /* 与App日志队列相同的固定上限，前台单一调用者，不保留外部字符串。 */
 static char line[CONTROL_LINE_CAPACITY];
+/**
+ * @brief 复制当前同步状态，保持伺服与硬件完全不变。
+ * @param now_ms 当前HAL毫秒；B有效样本年龄须小于2000ms。
+ * @param out 可空输出，不保留指针；非NULL总是先清零。
+ * @return 无返回值；A不提供B-A偏差，失效/FAULT不沿用旧偏差或内部锁。
+ */
+void TimeSync_GetSnapshot(uint32_t now_ms, TimeSyncSnapshot *out)
+{
+    if (out == NULL) { return; }
+    *out = (TimeSyncSnapshot){0};
+    out->configured = configured;
+    out->role = board_role;
+    out->faulted = faulted || (configured && board_role == BOARD_ROLE_B && servo.state == CLOCK_SERVO_FAULT);
+    if (!configured || board_role != BOARD_ROLE_B) { return; }
+    out->state = servo.state;
+    out->sample_age_ms = now_ms - servo.last_sample_ms;
+    out->offset_valid = !out->faulted && servo.have_sample && out->sample_age_ms < 2000U &&
+        (servo.state == CLOCK_SERVO_TRACKING || servo.state == CLOCK_SERVO_LOCKED_INTERNAL);
+    out->internal_locked = out->offset_valid && servo.internal_locked;
+    if (out->offset_valid) { out->offset_x2_ns = servo.offset_x2_ns; }
+}
 _Static_assert(sizeof("$SYNC_CTRL,ROLE=B,STATE=LOCKED_INTERNAL,INTERNAL_LOCK=1,SYNC=0,"
     "OFFSET_X2_NS=-8589934591999999998,DELAY_X2_NS=4000000,DRIFT_PPB=-2147483648,"
     "FREQ_PPB=-100000,EPOCH=4294967295,RATE_REV=4294967295,VALID=4294967295,"

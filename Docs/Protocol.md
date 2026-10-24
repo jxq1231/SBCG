@@ -345,3 +345,18 @@ $SDRAM,STATUS=PASS,PHASE=5,PASSES=4,CHECKED_BYTES=33554432,ELAPSED_MS=50529,CMD=
 PHASE：0未发布有效阶段、1数据位测试、2填充、3保持等待、4校验、5通过、6内存失败。PASSES是已完成轮数；CMD为尝试/最近完成步骤：0未开始、1Clock Enable、2PALL、3八次自动刷新、4模式字、5周期刷新配置，不是成功命令总数。
 
 STATUS：TESTING/PASS/CONFIG_ERROR/COMMAND_ERROR/TIMEOUT/REFRESH_ERROR/MEMORY_ERROR。错误不会自动重试或继续访问内存；ERR_OFFSET为相对BASE字节偏移，期望/实际保留首次内存错误。仅STATUS=PASS、PASSES=4及完整累计字节才表示本次内存自检通过，INIT=OK不替代它。该日志不表示LTDC、标准音频识别、测距或双板同步精度通过。
+
+
+## U2：RGB565状态页只读观测（SBCG-U2-STATUS-R2）
+
+显示构建新增SDRAM STATUS=READY：仅芯片上电及显示区域可用，PHASE=0/PASSES=0/CHECKED_BYTES=0；不是完整内存测试PASS。专用U1诊断仍保留，二者互斥。
+
+```text
+$UI,STATE=RUNNING,FRAMES=77,ERRORS=0,DISCARDS=0,CAPTURE_MS=77831,ROLE=A,NET=DOWN,TEMP_SOURCE=AUTO,TEMP_VALID=0,TEMP_MC=0,C_MM_S=0
+```
+
+本行由前台最多每1000ms进入日志队列，实际串口到达可延迟；不是IRQ输出。STATE为OFF/READY/RUNNING/ERROR，READY尚未开始扫描；RUNNING不单独证明面板可读或外部同步精度。FRAMES是BSP确认发布帧数，DISCARDS是超龄后台帧数，均uint32饱和计数；ERRORS是0/1异常标志（不是累计错误次数）。CAPTURE_MS是已确认页面所用业务快照的HAL uint32毫秒时间，不是物理屏幕扫描时间。
+
+ROLE=A/B/UNKNOWN，NET=UP/DOWN/UNKNOWN，TEMP_SOURCE=AUTO/MANUAL；TEMP_VALID为0/1。有效时TEMP_MC是int32毫摄氏度、C_MM_S是uint32毫米/秒，无效时两数值0仅作协议占位，屏幕显示--而不是0°C。全部为ASCII字段，无二进制结构体或端序依赖。温度设置沿用TEMP SET 25.0、TEMP SET 30.0、TEMP AUTO，命令以LF/CRLF结束；AUTO缺传感器时无有效值。
+
+页面A参考偏差--；B只显示新鲜同步估计，内部锁不等于±10us已验收。距离m、方向SIDE --、QUALITY --目前均无测距结果，不填模拟数值。自动分析不能证明面板，U2实屏结论另由用户目视确认。

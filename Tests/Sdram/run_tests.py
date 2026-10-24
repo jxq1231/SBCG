@@ -22,10 +22,19 @@ bool BSP_SDRAM_Init(void){return false;}
 void BSP_SDRAM_Process(uint32_t n,bool a){(void)n;(void)a;}
 void BSP_SDRAM_GetSnapshot(BSP_SdramSnapshot*s){if(s)*s=(BSP_SdramSnapshot){0};}
 ''',encoding='utf-8')
+display_fallback=[]
+if 'bool BSP_SDRAM_InitDisplay(void)' not in bsp.read_text(encoding='utf-8'):
+    missing_display=out/'missing_display.c'
+    missing_display.write_text('''#include "BSP/bsp_sdram.h"
+bool BSP_SDRAM_InitDisplay(void){return false;}
+bool BSP_SDRAM_IsDisplayReady(void){return false;}
+''',encoding='utf-8')
+    display_fallback=[str(missing_display)]
 command=[shutil.which('gcc'),'-std=c11','-O2','-Wall','-Wextra','-Werror','-pedantic',
     '-I',str(root/'Tests/Sdram/stubs'),'-I',str(root/'App'),str(root/'Tests/Sdram/test_bsp_sdram.c'),str(bsp),'-o',str(out/'bsp.exe')]
+command[1:1]=display_fallback
 subprocess.run(command,check=True,timeout=30)
-for case in ['ok','pass','memory','selector0','selector1','selector2','selector7',
+for case in ['display','diagnostic_then_display','ok','pass','memory','selector0','selector1','selector2','selector7',
              'mpu2_missing','mpu2_base','mpu2_cache','mpu_disabled','clock','pin','timing','controller','mpu','cache','handle','fmc_clock',
              'busy_before','busy_after','command1','command2','command3','command4','refresh','readback']:
     subprocess.run([str(out/'bsp.exe'),case],check=True,timeout=30)

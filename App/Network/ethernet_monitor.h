@@ -9,6 +9,17 @@
 #define SBCG_ETHERNET_MONITOR_H
 
 #include <stdint.h>
+#include <stdbool.h>
+
+/** @brief 已有PHY轮询的只读副本；age_ms为距最近轮询的毫秒差，valid为使用许可。 */
+typedef struct { bool valid, link_up; uint32_t age_ms; } EthernetMonitorSnapshot;
+/**
+ * @brief 复制已有缓存，不新增MDIO事务或改变轮询状态。
+ * @param now_ms 当前HAL毫秒，使用无符号差处理回绕。
+ * @param out 可空输出；非NULL先清零，未初始化/读取失败/超过999ms时valid=false。
+ * @return 无返回值；只在前台串行调用，不保留指针。
+ */
+void EthernetMonitor_GetSnapshot(uint32_t now_ms, EthernetMonitorSnapshot *out);
 
 /**
  * @brief   向应用提交一行观测日志的回调类型。

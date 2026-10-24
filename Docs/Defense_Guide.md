@@ -1,6 +1,10 @@
 # SBCG 答辩口头稿与追问准备
 
-<!-- doc-status: current-defense-guide; reviewed: 2026-10-23 -->
+<!-- doc-status: historical-defense-draft; reviewed: 2026-10-23 -->
+
+> **2026-10-24状态更新：** 当前A板为SBCG-U2-STATUS-R2，LTDC RGB565状态页、温度手动联动和音频共存已实测，用户确认显示正常；无TouchGFX/RTOS。调用链新增App初始化SDRAM显示READY，前台在音频归还后八行分片绘制，首帧完成才调用生成LTDC初始化；同步/测距的独立精度仍未验收。见[现行状态](Project_State.md)和[U2交付](Milestones/U2_LTDC_Status_Page.md)。
+>
+> **以下正文是2026-10-23架构/答辩快照**，其中“当前”“尚未显示”等只描述当日版本，不用于覆盖上述新结论；按需追溯，不照其旧下一步重复实施。
 
 依据[真实架构与调用链](System_Architecture.md)，当前A实物版本为SBCG-M2.3-ROLE，UID角色/IP/MAC及原业务已通过123秒联合验收；B待用户更新，双板校时尚未实现。以下回答区分目标、已实现逻辑、已有实物证据和未完成内容。准备日期2026-10-23；可按需要用于次日答辩，不把附件中的相对日期当作新的验收记录。
 

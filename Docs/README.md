@@ -4,7 +4,7 @@
 
 更新：2026-10-24。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
-当前 **M4.1.3本地传输模型关联与R1静默管线范围通过**，原失败保留；见[当前状态](Project_State.md)和[本轮报告](Milestones/M4_1_3_Sound_Event_Time.md)。用户转向LTDC RGB565状态页，TouchGFX后续接入；FMC/MPU Region1/2已生成，U1-SDRAM-R1的全8MB四轮自检及约79秒静默音频共存实测通过。[U0软件页面](Milestones/U0_RGB565_Status_Page.md)已准备，下一步按[U2现行计划](Plans/2026-10-24_LTDC_Status_Page.md)配置LTDC RGB565并直接测试状态页，跳过独立色条；[U1报告](Milestones/U1_SDRAM_Bringup.md)保留首版失败与R1通过记录，板上现为U1-SDRAM-R1，尚未点屏。
+当前 **U2真实RGB565状态页已通过单A实机验收**：SBCG-U2-STATUS-R2，页面约1秒刷新、显示/音频错误0；手动温度联动后已恢复AUTO，用户确认显示正常。[U2结果、失败修复与复验入口](Milestones/U2_LTDC_Status_Page.md) · [当前状态](Project_State.md)。8根颜色低位按用户要求暂缓；TouchGFX未实现，距离/方向/质量仍占位。U0软件页面和U1 SDRAM属于已完成前置，不重做色条、FMC/MPU或破坏性内存测试。
 
 M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30请求通过，网络身份/共存通过，尚不证明双板同步精度。[网络证据](Milestones/M2_3_1_Dual_Board_Identity.md)。M3.2.4单板音频时间模型实测和更早计划均保留历史范围，无需重复实施。
 
@@ -19,10 +19,10 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
-| 本次任务执行到哪里 | [U1实测](Milestones/U1_SDRAM_Bringup.md)与[U2状态页计划](Plans/2026-10-24_LTDC_Status_Page.md) | SDRAM已通过，下一步按U2配引脚/时钟/延后初始化，直接状态页；U0预览不是点屏证据 |
+| 本次任务执行到哪里 | [U2实屏交付](Milestones/U2_LTDC_Status_Page.md) | 已验收RGB565状态页；初版失败和R1/R2修复保留，不重复旧配置 |
 | 课程目标和未实现部分 | [Project_Roadmap](Project_Roadmap.md) | 基础/提高指标和整机路线仍有效，不是一次实现全部功能的授权 |
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
-| 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；显示仍是后续，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
+| 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；RGB565已实测、TouchGFX后续，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
 | 串口和UDP字段 | [Protocol](Protocol.md) | 协议为现行接口，历史固件标识仅说明首次引入版本 |
 | 网页串口怎么使用 | [SerialWeb](SerialWeb.md) | 115200/8N1；当前已支持手动温度命令；后半为早期发送实验 |
 | 仅核对SYS/RCC | [CubeMX_Step1](CubeMX_Step1.md) | 已完成的系统基线，不重复启用外设 |

@@ -7,8 +7,25 @@
 #ifndef SBCG_TIME_SYNC_H
 #define SBCG_TIME_SYNC_H
 #include "BSP/board_identity.h"
+#include "Sync/clock_servo.h"
 #include <stdbool.h>
 #include <stdint.h>
+
+/** @brief 前台只读状态；偏差为B-A的两倍纳秒，内部锁不代表外部精度通过。 */
+typedef struct {
+    bool configured, faulted, offset_valid, internal_locked;
+    BoardRole role;
+    ClockServoState state;
+    uint32_t sample_age_ms;
+    int64_t offset_x2_ns;
+} TimeSyncSnapshot;
+/**
+ * @brief 复制同步状态，不推进伺服、消费报文或读写硬件。
+ * @param now_ms 当前HAL毫秒，无符号差支持回绕；B样本满2000ms失效。
+ * @param out 可空输出；非NULL先清零。A无B-A估计，不输出有效偏差。
+ * @return 无返回值；仅串行前台调用，内部锁也要求新鲜有效样本。
+ */
+void TimeSync_GetSnapshot(uint32_t now_ms, TimeSyncSnapshot *out);
 
 /**
  * @brief   核对并卸载最外层板间同步协议，停用协调器。

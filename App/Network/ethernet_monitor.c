@@ -25,6 +25,21 @@ static bool ready;
 static bool have_link;
 
 /**
+ * @brief 复制已有链路缓存，失效时不泄露旧UP状态。
+ * @param now_ms 当前HAL毫秒，允许回绕。
+ * @param out 可空输出，仅本次调用写入，不保留地址。
+ * @return 无返回值；不访问PHY，不改变轮询或日志节流。
+ */
+void EthernetMonitor_GetSnapshot(uint32_t now_ms, EthernetMonitorSnapshot *out)
+{
+    if (out == NULL) { return; }
+    *out = (EthernetMonitorSnapshot){0};
+    out->age_ms = now_ms - last_poll_ms;
+    out->valid = ready && have_link && out->age_ms < 1000U;
+    out->link_up = out->valid && last_link.state == BSP_ETH_LINK_UP;
+}
+
+/**
  * @brief   将PHY访问状态转换为日志用字符串。
  * @param   status BSP以太网访问结果；未列出的值输出IO_ERROR。
  * @return  指向静态只读字符串的指针，调用方不得释放。

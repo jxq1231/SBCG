@@ -1,7 +1,7 @@
 /**
  * @file rgb565_canvas.c
  * @brief 在已验证布局的RGB565内存中裁剪绘制矩形和简易ASCII字形。
- * @details 所有矩形先以64位坐标裁剪；保护行跨度填充及外侧内存，最多处理80字符。
+ * @details 所有矩形先以64位坐标裁剪；整段文字不与当前行带相交时直接跳过，最多处理80字符。
  * @note 无动态分配/固定地址/外设调用；内部小字库仅用于首版状态文本。
  */
 #include "rgb565_canvas.h"
@@ -56,10 +56,11 @@ static uint8_t Glyph(char ch,unsigned row)
  if(ch=='/')return (uint8_t)(row<5U?1U<<row:16U);
  static const uint8_t unknown[7]={14,17,1,2,4,0,4};return unknown[row];
 }
-/** @brief 在c中用color画text的最多80字符；x/y为起点，scale为1..4整数倍，NULL或非法scale不写，无返回值。 */
+/** @brief 在c中用color画text的最多80字符；x/y为起点，scale为1..4整数倍，NULL或非法scale不写，无返回值。@note 整段文字在当前行带外时不遍历字形，避免八行分片反复计算全页文字；64位纵坐标避免溢出。 */
 void UI_DrawText(UI_Canvas *c,int32_t x,int32_t y,const char *text,uint8_t scale,uint16_t color)
 {
  if(c==NULL || text==NULL || scale<1U || scale>4U)return;
+ if((int64_t)y+7*(int64_t)scale<=c->clip_first || (int64_t)y>=c->clip_end || y>=c->height)return;
  for(unsigned i=0;i<80U && text[i]!=0;++i){
   for(unsigned row=0;row<7U;++row){const uint8_t mask=Glyph(text[i],row);
    for(unsigned col=0;col<5U;++col)if((mask&(1U<<(4U-col)))!=0U){

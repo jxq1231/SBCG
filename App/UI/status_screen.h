@@ -2,7 +2,7 @@
  * @file status_screen.h
  * @brief 480x272状态页的RGB565渲染接口。
  * @details 角色、待测距离、同步、网络、温度和音频；支持有界行带，为以后分片刷新预留。
- * @note 只接受已经可访问的调用方画布，不启动LTDC/SDRAM、无IRQ，不接入当前固件。
+ * @note 只接受已取得独占绘制权的调用方画布，不启动LTDC/SDRAM，无IRQ。
  */
 #ifndef SBCG_STATUS_SCREEN_H
 #define SBCG_STATUS_SCREEN_H

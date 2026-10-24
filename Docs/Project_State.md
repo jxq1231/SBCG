@@ -6,11 +6,11 @@
 
 ## 当前工作
 
+**U2真实RGB565状态页已通过单A实机验收。** 当前板上`SBCG-U2-STATUS-R2`（Debug14fdabe9bec9…），CubeMX生成480×272/9.6MHz及延后初始化；8根颜色低位按用户决定暂缓。BOOT后约79.34秒，UI末77帧/错误0/丢弃0，音频461有效块、丢块/错误0；手动25/30°C分别显示346.450/349.480m/s并恢复AUTO；用户确认“状态页显示正常”。初版HAL查询误拒绝和R1刷新偏慢记录均保留，R2优化后页面启动间隔约1.023秒。见[U2验收](Milestones/U2_LTDC_Status_Page.md)，不再重复LTDC配置、色条或U1整片自检。当前仍无网线/B/示波器，不播放声音；温度模块未连接，AUTO显示无有效值。距离/方向/质量未实现，保持占位；TouchGFX后续另立目标。
+
 **前一M4.1.3候选帧关联本地PTP传输模型及日志修复已通过静默验证。** 当时A板`SBCG-M4.1-TIME-R1`，Debug前缀789c0c92ef2f。BOOT后67.933秒，395有效块、66条音频有效/零丢块/零错误、心跳连续；环境自然候选10条，9模型与Fraction一致、1条NO_LEFT明确拒绝，22组原模型自检继续运行。原TIME版5次归还失败记录保留，R1日志改为有界排队每轮一行。没有主动发声，未宣称标准音频识别、物理到达或同步精度通过。[本轮结果](Milestones/M4_1_3_Sound_Event_Time.md)。
 
-**当前U0 RGB565状态页的软件准备完成，尚未点屏。** 用户选择先LTDC RGB565、后TouchGFX；已参考指定聊天及GUI_FOR_TEST，只移植显示思路。新增纯C状态/绘图/行带渲染并通过主机测试，预览和实测边界见[U0报告](Milestones/U0_RGB565_Status_Page.md)。当前板上为U1-SDRAM-R1，UI仍未链接/烧录；外部内存只用于U1测试，尚未用于显示。
-
-**当前U1 SDRAM实物验收通过。** 用户已补MPU Region2，BSP保存/恢复选择器并核对Region1/2。A板运行`SBCG-U1-SDRAM-R1`（Debug de9fd2ffaa64…），8MB四轮全范围校验在50529ms完成；BOOT后约79秒77条音频有效/连续，末461有效块，DROP/ERR/HAL/DMA及串口TX_ERRORS均零。原失败/恢复保留，见[U1报告](Milestones/U1_SDRAM_Bringup.md)。下一独立目标按[U2现行计划](Plans/2026-10-24_LTDC_Status_Page.md)配置LTDC RGB565，用户要求跳过独立色条，直接测试真实状态页；采用延后初始化及独占帧缓冲交接。FMC/MPU不重复操作。当前未点屏、无网线/B/示波器、温度未连接；未播放声音。
+**U0/U1为已完成的历史前置。** U0纯C绘图准备见[软件报告](Milestones/U0_RGB565_Status_Page.md)；U1-SDRAM-R1已完成8MB四轮自检（50529ms）和静默共存，首版MPU失败、恢复及Region2修复见[内存报告](Milestones/U1_SDRAM_Bringup.md)。当前U2改用SDRAM显示READY，未重做破坏性测试，不将READY写成自检PASS。
 
 ## 暂缓验收：M2.3.3 PPS
 
@@ -49,10 +49,11 @@
 | SAI2 | A主接收提供时钟，B内部同步从接收；16位双通道，4时隙中1/3有效；标称48kHz，推导约47991.071Hz，PLLI2S344/Q7/DivQ1 |
 | 音频DMA/IRQ | DMA2 Stream7 Channel0，P→M halfword circular，32768元素/64KiB；DMA2_Stream7和SAI2 IRQ均4/0；半满/满每8192帧 |
 | 内存/Cache | 音频SRAM1 0x20010000..0x20020000、32字节对齐；主栈0x20047000..0x20048000，LwIP堆窗0x20048000..0x2004C000；ETH描述符/RX池在SRAM2；I/D Cache关闭 |
-| FMC/SDRAM | 用户生成38脚/PC3 SDCKE0、CAS3/HCLK3，Region1=C0000000/8MB普通非缓存XN，Region2=A0000000/4KB共享Device；8MB四轮实测通过，板上U1-SDRAM-R1 |
-| 当前未完成 | PPS波形/双板同步外部精度、LTDC/DMA2D、温度共享、标准声音识别/到达校准与测距；实验能量候选已接入 |
+| FMC/SDRAM | 用户生成38脚/PC3 SDCKE0、CAS3/HCLK3，Region1=C0000000/8MB普通非缓存XN，Region2=A0000000/4KB共享Device；U1历史8MB四轮实测通过；当前U2为显示READY，不重做破坏性自检 |
+| LTDC显示 | RGB565/480×272/9.6MHz，C0000000/C0040000双缓冲；延后生成初始化、前台八行分片/VBR轮询，用户确认实屏正常 |
+| 当前未完成 | PPS波形/双板同步外部精度、TouchGFX/DMA2D、温度共享、标准声音识别/到达校准与测距；实验能量候选已接入 |
 
-生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；此前M2.3.2仅调整UDP PCB池。本次U1用户生成FMC/MPU Region1/2，应用自检实测通过；助手未手改生成初始化。
+生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；此前M2.3.2仅调整UDP PCB池。U1用户生成FMC/MPU Region1/2并通过自检；U2用户生成LTDC并已点亮，助手未手改生成初始化。
 
 ## 前一M3.2.4实物证据与已知限制
 

@@ -28,7 +28,7 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
  (void)snprintf(out->role,sizeof out->role,"%s",s->role==UI_ROLE_A?"BOARD A":s->role==UI_ROLE_B?"BOARD B":"UNKNOWN BOARD");
  const char *network=!fresh?"STALE":s->network==UI_NET_UP?"LINK UP":s->network==UI_NET_DOWN?"NO LINK":"UNKNOWN";
  (void)snprintf(out->network,sizeof out->network,"%s",network);
- const char *sync=!fresh?"STALE":s->sync==UI_SYNC_LOCAL?"LOCAL REFERENCE":s->sync==UI_SYNC_TRACKING?"TRACKING":s->sync==UI_SYNC_INTERNAL?"INTERNAL LOCK":"UNKNOWN";
+ const char *sync=!fresh?"STALE":s->sync==UI_SYNC_LOCAL?"LOCAL REFERENCE":s->sync==UI_SYNC_TRACKING?"TRACKING":s->sync==UI_SYNC_INTERNAL?"INTERNAL LOCK":s->sync==UI_SYNC_ACQUIRING?"ACQUIRING":s->sync==UI_SYNC_HOLDOVER?"HOLDOVER":s->sync==UI_SYNC_UNSYNCED?"NOT SYNCED":s->sync==UI_SYNC_FAULT?"FAULT":"UNKNOWN";
  (void)snprintf(out->sync,sizeof out->sync,"%s",sync);
  (void)snprintf(out->precision,sizeof out->precision,"EXT: NOT VERIFIED");
  (void)snprintf(out->offset,sizeof out->offset,"-- US");
@@ -38,6 +38,7 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
    (void)snprintf(out->offset,sizeof out->offset,"%s%" PRIu32 ".%03" PRIu32 " US",s->offset_x2_ns<0?"-":"",magnitude/2000U,(magnitude%2000U)/2U);}
  }
  (void)snprintf(out->temperature,sizeof out->temperature,"-- C");
+ (void)snprintf(out->temperature_source,sizeof out->temperature_source,"%s",s->temperature_manual?"MANUAL":"AUTO");
  (void)snprintf(out->speed,sizeof out->speed,"-- M/S");
  if(fresh && s->temperature_valid){
   const uint32_t magnitude=s->temperature_milli_c<0?(uint32_t)(-(s->temperature_milli_c+1))+1U:(uint32_t)s->temperature_milli_c;
@@ -45,12 +46,18 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
   if(s->sound_speed_mm_s!=0U)(void)snprintf(out->speed,sizeof out->speed,"%" PRIu32 ".%" PRIu32 " M/S",s->sound_speed_mm_s/1000U,(s->sound_speed_mm_s%1000U)/100U);
  }
  (void)snprintf(out->audio,sizeof out->audio,"%s",!fresh?"STALE":!s->audio_valid?"NOT VALID":s->audio_running?"RUN":"STOPPED");
+ (void)snprintf(out->audio_detail,sizeof out->audio_detail,"DROP -- ERR --");
+ if(fresh)(void)snprintf(out->audio_detail,sizeof out->audio_detail,"DROP %" PRIu32 "%s ERR %" PRIu32 "%s",
+  s->audio_dropped>9999U?9999U:s->audio_dropped,s->audio_dropped>9999U?"+":"",
+  s->audio_errors>9999U?9999U:s->audio_errors,s->audio_errors>9999U?"+":"");
  (void)snprintf(out->counts,sizeof out->counts,"EVENTS --");
  if(fresh && s->audio_valid){
   if(s->candidates>UINT64_C(999999999999))(void)snprintf(out->counts,sizeof out->counts,"EVENTS 999999999999+");
   else {char number[21];Decimal(s->candidates,number);(void)snprintf(out->counts,sizeof out->counts,"EVENTS %s",number);}
  }
- (void)snprintf(out->distance,sizeof out->distance,"-- MM");
- if(fresh && s->measurement_valid && s->distance_mm>=0)(void)snprintf(out->distance,sizeof out->distance,"%" PRId32 " MM",s->distance_mm);
+ (void)snprintf(out->distance,sizeof out->distance,"-- M");
+ if(fresh && s->measurement_valid && s->distance_mm>=0)(void)snprintf(out->distance,sizeof out->distance,"%" PRId32 ".%03" PRId32 " M",s->distance_mm/1000,s->distance_mm%1000);
+ (void)snprintf(out->direction,sizeof out->direction,"SIDE --");
+ (void)snprintf(out->quality,sizeof out->quality,"QUALITY --");
  return true;
 }

@@ -95,6 +95,23 @@ int main(int argc,char**argv)
  if(!strcmp(which,"refresh"))refresh_fail=true;
  if(!strcmp(which,"readback"))bad_refresh=true;
  const uint32_t original_selector=fake_mpu.RNR;
+ if(!strcmp(which,"display")||!strcmp(which,"diagnostic_then_display")){
+  if(!strcmp(which,"diagnostic_then_display")){
+   assert(BSP_SDRAM_Init());assert(!BSP_SDRAM_IsDisplayReady());
+   assert(!BSP_SDRAM_InitDisplay());assert(calls==4U&&init_test_calls==1U);
+   force_pass=true;BSP_SDRAM_Process(20U,true);
+   assert(!BSP_SDRAM_InitDisplay()&&!BSP_SDRAM_IsDisplayReady());
+  } else {
+   assert(BSP_SDRAM_InitDisplay()&&BSP_SDRAM_IsDisplayReady());
+   assert(calls==4U&&refresh_calls==1U&&init_test_calls==0U);
+   assert(BSP_SDRAM_InitDisplay()&&!BSP_SDRAM_Init());
+   BSP_SDRAM_Process(20U,true);BSP_SDRAM_Process(30U,true);
+   BSP_SDRAM_GetSnapshot(&s);
+   assert(s.status==BSP_SDRAM_READY&&step_calls==0U&&init_test_calls==0U);
+   assert(calls==4U&&refresh_calls==1U&&s.verified_bytes==0U&&s.pass==0U);
+  }
+  printf("PASS BSP SDRAM %s\n",which);return 0;
+ }
  bool ok=BSP_SDRAM_Init();BSP_SDRAM_GetSnapshot(&s);
  assert(fake_mpu.RNR==original_selector);
  (void)FakeMpuAccess(); /* Restored bank must still have its original attributes. */

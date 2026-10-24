@@ -1,7 +1,7 @@
 /**
  * @file        bsp_sdram.c
- * @brief       校验生成配置，发送外部SDRAM上电命令并推进破坏性自检。
- * @details     固定当前200MHz/3、CAS3、8MB板级配置；拒绝不符配置，不重写硬件初始化。
+ * @brief       校验生成配置，发送外部SDRAM上电命令并管理显示/诊断独占模式。
+ * @details     固定当前200MHz/3、CAS3、8MB板级配置；显示只上电，诊断推进破坏性自检。
  * @note        启动/前台串行调用；不新增IRQ/DMA，保持缓存关闭和Region1非缓存XN。
  *              本版本HAL发命令未等待BUSY，本模块在前后以2ms/20000次双限界等待。
  */
@@ -113,12 +113,13 @@ static bool Command(uint32_t mode, uint32_t count, uint32_t mode_word)
     return WaitReady();
 }
 
-/** @brief 依赖生成配置初始化芯片并建立内存测试状态。@return 上电成功为true，不代表内存验收通过。@note 重复调用不重启测试；仅启动前台，允许1ms上电等待。 */
-bool BSP_SDRAM_Init(void)
+/**
+ * @brief 依赖生成配置执行一次芯片上电和刷新编程，不触碰外部内存。
+ * @return 配置及上电成功为true，失败在state中保留错误。
+ * @note 仅两个模式首次取得所有权时调用，允许既有1ms上电等待；不建立自检。
+ */
+static bool InitChip(void)
 {
-    if (state.status != BSP_SDRAM_OFF) {
-        return state.status == BSP_SDRAM_TESTING || state.status == BSP_SDRAM_PASS;
-    }
     state.status = BSP_SDRAM_CONFIG_ERROR;
     start_ms = HAL_GetTick();
     if (!ConfigMatches()) { return false; }
@@ -138,6 +139,16 @@ bool BSP_SDRAM_Init(void)
         return false;
     }
     __DSB();
+    return true;
+}
+
+/** @brief 依赖生成配置初始化芯片并建立内存测试状态。@return 上电成功为true，不代表内存验收通过。@note 重复调用不重启测试；显示模式不可进入诊断，仅启动前台调用。 */
+bool BSP_SDRAM_Init(void)
+{
+    if (state.status != BSP_SDRAM_OFF) {
+        return state.status == BSP_SDRAM_TESTING || state.status == BSP_SDRAM_PASS;
+    }
+    if (!InitChip()) { return false; }
     if (!SDRAM_TestInit(&test, (volatile void *)(uintptr_t)BSP_SDRAM_BASE, BSP_SDRAM_BYTES)) {
         state.status = BSP_SDRAM_MEMORY_ERROR;
         return false;
@@ -145,6 +156,23 @@ bool BSP_SDRAM_Init(void)
     state.status = BSP_SDRAM_TESTING;
     return true;
 }
+
+/**
+ * @brief 执行芯片上电后把外部内存交给显示，不创建破坏性自检。
+ * @return 显示持有READY为true；诊断占用或上电失败为false。
+ * @note 仅启动前台调用，重复调用不重发命令/不访问内存，失败后需复位。
+ */
+bool BSP_SDRAM_InitDisplay(void)
+{
+    if (state.status != BSP_SDRAM_OFF) { return state.status == BSP_SDRAM_READY; }
+    if (!InitChip()) { return false; }
+    state.status = BSP_SDRAM_READY;
+    return true;
+}
+
+/** @brief 只读检查显示是否独占已上电内存。@return 仅显示READY为true。@note 不查询/访问外部内存，不把诊断PASS转成显示模式。 */
+bool BSP_SDRAM_IsDisplayReady(void)
+{ return state.status == BSP_SDRAM_READY; }
 
 /** @brief 前台推进一个自检分片。@param now_ms HAL毫秒。@param allow_work false完全跳过目标内存访问。@return 无返回值。 */
 void BSP_SDRAM_Process(uint32_t now_ms, bool allow_work)
