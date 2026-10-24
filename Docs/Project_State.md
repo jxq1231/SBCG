@@ -10,7 +10,7 @@
 
 **当前U0 RGB565状态页的软件准备完成，尚未点屏。** 用户选择先LTDC RGB565、后TouchGFX；已参考指定聊天及GUI_FOR_TEST，只移植显示思路。新增纯C状态/绘图/行带渲染并通过主机测试，预览和实测边界见[U0报告](Milestones/U0_RGB565_Status_Page.md)。当前板上为U1-SDRAM-R1，UI仍未链接/烧录；外部内存只用于U1测试，尚未用于显示。
 
-**当前U1 SDRAM实物验收通过。** 用户已补MPU Region2，BSP保存/恢复选择器并核对Region1/2。A板运行`SBCG-U1-SDRAM-R1`（Debug de9fd2ffaa64…），8MB四轮全范围校验在50529ms完成；BOOT后约79秒77条音频有效/连续，末461有效块，DROP/ERR/HAL/DMA及串口TX_ERRORS均零。原失败/恢复保留，见[U1报告](Milestones/U1_SDRAM_Bringup.md)。下一独立目标为按[现行步骤](Plans/2026-10-24_LTDC_RGB565_Bringup.md)配置LTDC RGB565；FMC/MPU不重复操作。当前未点屏、无网线/B/示波器、温度未连接；未播放声音。
+**当前U1 SDRAM实物验收通过。** 用户已补MPU Region2，BSP保存/恢复选择器并核对Region1/2。A板运行`SBCG-U1-SDRAM-R1`（Debug de9fd2ffaa64…），8MB四轮全范围校验在50529ms完成；BOOT后约79秒77条音频有效/连续，末461有效块，DROP/ERR/HAL/DMA及串口TX_ERRORS均零。原失败/恢复保留，见[U1报告](Milestones/U1_SDRAM_Bringup.md)。下一独立目标按[U2现行计划](Plans/2026-10-24_LTDC_Status_Page.md)配置LTDC RGB565，用户要求跳过独立色条，直接测试真实状态页；采用延后初始化及独占帧缓冲交接。FMC/MPU不重复操作。当前未点屏、无网线/B/示波器、温度未连接；未播放声音。
 
 ## 暂缓验收：M2.3.3 PPS
 

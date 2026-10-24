@@ -1,8 +1,8 @@
 # U0/U1 LTDC RGB565状态页与CubeMX起步
 
-<!-- doc-status: current-display-plan-u1-completed-awaiting-ltdc; reviewed: 2026-10-24 -->
+<!-- doc-status: completed-u1-reference-see-status-page-plan; reviewed: 2026-10-24 -->
 
-> **当前U1已验收通过，下一步才做LTDC。** 用户已补Region2，R1保存/恢复区域选择器，8MB四轮校验通过；BOOT后约79秒音频零丢块/零错误。下方FMC/MPU配置已完成，不重复生成；首版MPU故障与修复见[U1记录](../Milestones/U1_SDRAM_Bringup.md)。
+> **U1已完成；U2现行计划见[LTDC状态页直接验收](2026-10-24_LTDC_Status_Page.md)。用户要求跳过独立色条实验。** 用户已补Region2，R1保存/恢复区域选择器，8MB四轮校验通过；BOOT后约79秒音频零丢块/零错误。下方FMC/MPU配置已完成，不重复生成；首版MPU故障与修复见[U1记录](../Milestones/U1_SDRAM_Bringup.md)。
 
 ## U1执行清单（2026-10-24）
 
@@ -51,7 +51,7 @@
 | RPDelay / tRP | 2 cycles |
 | RCDDelay / tRCD | 2 cycles |
 
-这是参考GUI_FOR_TEST参数配合较低SDCLK的起步设计，不声称已实测SBCG或覆盖任意换装SDRAM型号。再生成后核对芯片/时序，再运行内存验收。旧Hardware_Resources中100MHz/CAS2/0x0603属于历史BSP参考，**本轮不使用**。
+这是参考GUI_FOR_TEST配合较低SDCLK的设计，现已由U1-R1完成本板有限时长实物验收；不覆盖任意换装SDRAM型号。更换器件或时钟需重新核对规格/时序并验收。旧Hardware_Resources中100MHz/CAS2/0x0603属于历史BSP参考，**本轮不使用**。
 
 38个FMC脚必须使用板上连线：A0..A5=PF0..PF5、A6..A9=PF12..PF15、A10=PG0、A11=PG1；BA0/1=PG4/PG5；D0/1=PD14/PD15、D2/3=PD0/PD1、D4..D12=PE7..PE15、D13..D15=PD8..PD10；NBL0/1=PE0/PE1；SDCKE0=PC3、SDNE0=PH3、SDNWE=PH5、SDNRAS=PF11、SDNCAS=PG15、SDCLK=PG8。AF12、推挽、No Pull、High/Very High；PH7/PH8继续I2C3，不选作FMC。
 
@@ -92,25 +92,11 @@ Region1是普通、不可执行、非缓存内存。I/D Cache保持关闭，不�
 
 `MX_FMC_Init`只配置控制器，芯片仍需Clock Enable→等待→Precharge All→8次Auto Refresh→Mode Register→周期刷新。计划CAS3模式字0x0230。若器件为4096次/64ms刷新，66.667MHz下刷新计数按`floor(SDCLK_Hz*0.064/4096)-20`重算为1021，不能照抄参考72MHz的1105或历史100MHz的0x0603；该计数在后续BSP实现前再次核对实际生成频率/器件规格。上电BSP与刷新计数已在R1实物验证，首版寄存器窗口故障保留在报告中。
 
-## 下一独立目标U2：CubeMX配置LTDC（本轮尚未执行）
+## U2现行配置入口
 
-面板和参考工程/ST RK043FN48H驱动一致时，采用以下现行基线。旧文档H1/43/8、V10/12/4作废，不与这组混用。
+本页U1配置和实物证据保留作参考，不重复实施。后续LTDC按[U2状态页直接验收计划](2026-10-24_LTDC_Status_Page.md)执行：固定20根AF/10根GPIO、9.6MHz、RGB565 Layer0、CubeMX取消自动调用并取消static、SDRAM显示模式与自检分离、首帧绘好后启动。独立色条实验已由用户明确跳过。
 
-| 项目 | 配置值 |
-| --- | --- |
-| 有效尺寸 / 引脚模式 / 图层格式 | 480x272 / RGB565 / RGB565 |
-| HSYNC / HBP / HFP | 41 / 13 / 32 |
-| VSYNC / VBP / VFP | 10 / 2 / 2 |
-| HAL核对值 | HorizontalSync40, VerticalSync9, AccumulatedHBP53, AccumulatedVBP11, ActiveW533, ActiveH283, TotalWidth565, TotalHeigh285 |
-| 极性 | HS/VS/DE Active Low，Pixel Clock IPC |
-| PLLSAI | N192/R5/DivR4，PLLM25，LCD9.6MHz；保持音频PLLI2S不变 |
-| 图层 | Layer0、窗口0..480/0..272、Alpha255/Alpha0=0、CA/CA、黑背景 |
-| 帧缓冲 | 外部SDRAM 0xC0000000，RGB565 261120字节；预留第二块0xC0040000供后续防撕裂 |
-| 显示/背光 | PI12/LCD_DISP、PK3/LCD_BL_CTRL，输出初始低，SDRAM和图层准备好后才打开 |
-
-LTDC有效脚为PJ2..PJ6/R3..R7、PJ9/PJ10/PJ11/PK0/PK1/PK2/G2..G7、PJ15/PG12/PK4/PK5/PK6/B3..B7，加PI10/HS、PI9/VS、PI14/CLK、PK7/DE。PG12是AF9，其余所列LTDC脚AF14。低位颜色脚PI15、PJ0、PJ1、PJ7、PJ8、PE4、PJ13、PJ14作为普通推挽输出初始低。原PH7/PH8共享I2C、SAI2、PG7温度、PA15 PPS均不改。
-
-初期先CPU绘制/静态色条，不启用DMA2D或新DMA/NVIC；后续实测需要加速、双缓冲/垂直消隐换页时再独立配置。全帧首次初始化不得发生在SDRAM上电前；长期运行采用有界分片/脏区刷新，不在IRQ整屏绘制。首版按颜色/边缘/时序/无闪烁和原音频零丢块验收，不以背光亮或主机预览作为点屏成功。
+上述U2仍待用户CubeMX生成和应用接入，本页不作为当前已点屏或默认自动初始化LTDC的依据。
 
 ## 参考与移植边界
 
