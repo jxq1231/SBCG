@@ -35,6 +35,9 @@ int main(void)
  char expected[160];snprintf(expected,sizeof expected,
      "TX_ERRORS=2,LOG_FULL=2,LOG_WRITE=0,LOG_BAD=0,LOG_Q=0,LOG_HWM=%u",capacity);
  assert(strstr(last_line,expected)!=NULL);
+ /* A2同循环归因字段只在CHIRP心跳追加，原字段仍可核对。 */
+ assert(strstr(last_line,",LOOP_MS=")!=NULL && strstr(last_line,",AUDIO_MS=")!=NULL);
+ assert(strstr(last_line,",UI_MS=")!=NULL && strstr(last_line,",OTHER_MS=")!=NULL);
  Reset(0U,true);temperature_low=true;time_log("$TEST\r\n",7);
  temperature_low=false;write_ok=false;App_Process();
  write_ok=true;tick_ms=1000U;App_Process();

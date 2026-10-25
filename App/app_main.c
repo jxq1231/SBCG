@@ -108,6 +108,10 @@
 
 static uint32_t last_heartbeat_ms;
 static uint32_t heartbeat_seq;
+/* CHIRP构建：迄今最大前台循环总时长及同一轮AudioCapture/UI/其余耗时，仅诊断。 */
+#ifdef SBCG_USE_CHIRP
+static uint32_t max_loop_ms,max_loop_audio_ms,max_loop_ui_ms,max_loop_other_ms;
+#endif
 /* Also observable in a debugger if the UART cannot send any text. */
 static volatile uint32_t app_tx_error_count;
 /* 与原TX_ERRORS相同的uint32自然回绕累计；队列深度和峰值单位为行。 */
@@ -423,12 +427,19 @@ void App_Init(void)
  * @return  无返回值（void）。
  * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
  *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
+ *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
+ *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
  */
 void App_Process(void)
 {
 #ifdef SBCG_USE_BOARD_IDENTITY
     /* 未知UID时LwIP尚未初始化；只保留BOOT/角色诊断，不触碰网卡或其它业务。 */
     if (!app_identity_configured) { return; }
+#endif
+#ifdef SBCG_USE_CHIRP
+    /* 同循环归因：记录本轮入口及AudioCapture/UI耗时，结束时只在最大循环更新分解。 */
+    const uint32_t loop_begin_ms = BSP_Console_GetTickMs();
+    uint32_t loop_audio_ms = 0U, loop_ui_ms = 0U;
 #endif
 #ifdef SBCG_USE_LWIP
     /* Every loop, before logs: service RX, protocol timers and link changes. */
@@ -448,9 +459,12 @@ void App_Process(void)
 #ifdef SBCG_USE_CHIRP
             "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32
             ",LOG_FULL=%" PRIu32 ",LOG_WRITE=%" PRIu32 ",LOG_BAD=%" PRIu32
-            ",LOG_Q=%" PRIu32 ",LOG_HWM=%" PRIu32 "\r\n",
+            ",LOG_Q=%" PRIu32 ",LOG_HWM=%" PRIu32
+            ",LOOP_MS=%" PRIu32 ",AUDIO_MS=%" PRIu32 ",UI_MS=%" PRIu32
+            ",OTHER_MS=%" PRIu32 "\r\n",
             heartbeat_seq,now_ms,(uint32_t)app_tx_error_count,log_full_count,
-            log_write_count,log_bad_count,pending_count,log_high_water);
+            log_write_count,log_bad_count,pending_count,log_high_water,
+            max_loop_ms,max_loop_audio_ms,max_loop_ui_ms,max_loop_other_ms);
 #else
             "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32 "\r\n",
             heartbeat_seq, now_ms, (uint32_t)app_tx_error_count);
@@ -474,7 +488,13 @@ void App_Process(void)
 #endif
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #ifdef SBCG_USE_AUDIO
+#ifdef SBCG_USE_CHIRP
+    const uint32_t audio_begin_ms = BSP_Console_GetTickMs();
+#endif
     AudioCapture_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#ifdef SBCG_USE_CHIRP
+    loop_audio_ms = BSP_Console_GetTickMs() - audio_begin_ms;
+#endif
 #endif
 #ifdef SBCG_USE_AUDIO_ANCHOR
     AudioTimeAnchor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
@@ -511,7 +531,13 @@ void App_Process(void)
      * 调度顺序：PCM唯一消费者已归还缓冲；DHT起始低态跳过整次UI工作。
      * 调用关系：主循环进入，不在LTDC/音频DMA/UART回调绘图。
      */
+#ifdef SBCG_USE_CHIRP
+    const uint32_t ui_begin_ms = BSP_Console_GetTickMs();
+#endif
     UI_TouchGFX_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#ifdef SBCG_USE_CHIRP
+    loop_ui_ms = BSP_Console_GetTickMs() - ui_begin_ms;
+#endif
 #elif defined(SBCG_USE_LCD)
     /**
      * ==================== 模块：状态页前台绘制 ====================
@@ -519,7 +545,24 @@ void App_Process(void)
      * 调度顺序：音频唯一PCM消费者已归还；DHT起始低态整次延后。
      * 调用关系：主循环进入本段；不在DMA/SAI/UART回调绘图。
      */
+#ifdef SBCG_USE_CHIRP
+    const uint32_t ui_begin_ms = BSP_Console_GetTickMs();
+#endif
     UI_StatusService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#ifdef SBCG_USE_CHIRP
+    loop_ui_ms = BSP_Console_GetTickMs() - ui_begin_ms;
+#endif
 #endif
     FlushOneLine();
+#ifdef SBCG_USE_CHIRP
+    /* 只保留迄今最大一轮的分解；LOOP_MS与Chirp GAP_MS采样点不同，不能相减推断。 */
+    const uint32_t loop_ms = BSP_Console_GetTickMs() - loop_begin_ms;
+    if (loop_ms > max_loop_ms) {
+        max_loop_ms = loop_ms;
+        max_loop_audio_ms = loop_audio_ms;
+        max_loop_ui_ms = loop_ui_ms;
+        const uint32_t known = loop_audio_ms + loop_ui_ms;
+        max_loop_other_ms = loop_ms > known ? loop_ms - known : 0U;
+    }
+#endif
 }
