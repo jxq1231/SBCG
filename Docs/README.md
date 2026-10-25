@@ -26,6 +26,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
 | 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；TouchGFX已实屏验收，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
 | 串口和UDP字段 | [Protocol](Protocol.md) | 协议为现行接口，历史固件标识仅说明首次引入版本 |
+| 自选标准音频和下载素材 | [Audio_Selection](Audio_Selection.md) | 老师允许自行选择；短扫频候选文件已准备，模板检测与实机识别率未验收 |
 | 网页串口怎么使用 | [SerialWeb](SerialWeb.md) | 115200/8N1；当前已支持手动温度命令；后半为早期发送实验 |
 | 仅核对SYS/RCC | [CubeMX_Step1](CubeMX_Step1.md) | 已完成的系统基线，不重复启用外设 |
 | 最近一次板端实验详情 | [M4.1.3静默验收](Milestones/M4_1_3_Sound_Event_Time.md) | 原失败保留，R1后67.933秒静默窗口与9条模型结果 |
