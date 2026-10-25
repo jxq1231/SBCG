@@ -2,6 +2,8 @@
 
 <!-- doc-status: current-reference-with-future-designs; reviewed: 2026-10-24 -->
 
+> **2026-10-25 U3.1更新：** 已由用户CubeMX生成TouchGFX4.26.1/NoOS、CRC、LTDC IRQ9/0；复用下述RGB565/SDRAM双缓冲，I/D Cache关闭、无DMA2D/触控、其余资源不变。当前已烧录、用户确认状态页正常且82.55秒静默通过；首次额外启动仍未知，详见[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md)。下方“无TouchGFX/新IRQ”仅描述历史U2后端。
+
 > **当前U2实物：** LTDC RGB565/480×272/9.6MHz、20根AF Very High、PI12 LCD_DISP/PK3 LCD_BL_CTRL，SDRAM显示READY、C0000000/C0040000双缓冲，用户确认状态页正常。8根颜色低位按用户明确要求暂缓；不宣称已输出0。无TouchGFX/DMA2D/新IRQ。见[U2记录](Milestones/U2_LTDC_Status_Page.md)。
 >
 > U1已完成8MB四轮自检及静默共存，当前显示模式不重做破坏性测试；FMC/MPU维持CAS3/HCLK3/刷新1021、Region1/2。旧配置计划只作追溯。

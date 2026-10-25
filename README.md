@@ -9,7 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/MCU-STM32F746-0e7490?style=flat-square" alt="STM32F746">
   <img src="https://img.shields.io/badge/Toolchain-GCC%20%2B%20CMake-334155?style=flat-square" alt="GCC and CMake">
-  <img src="https://img.shields.io/badge/Stage-U2%20%7C%20LCD%20Verified-0e7490?style=flat-square" alt="U2 RGB565状态页已实屏验收">
+  <img src="https://img.shields.io/badge/Stage-U3.1%20%7C%20TouchGFX-0e7490?style=flat-square" alt="U3.1 TouchGFX状态页已实屏验收">
   <a href="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml"><img src="https://github.com/jxq1231/SBCG/actions/workflows/host-checks.yml/badge.svg" alt="Host checks"></a>
 </p>
 
@@ -42,7 +42,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 
 ## 项目进度
 
-**当前：U2真实RGB565状态页已通过单A实机验收。** A板运行SBCG-U2-STATUS-R2，480×272状态页约每秒更新，显示/音频错误0；25°C和30°C手动温度联动通过，已恢复AUTO，用户确认画面正常。[U2完整报告](Docs/Milestones/U2_LTDC_Status_Page.md)。距离、方向与质量保留待测占位，TouchGFX后续接入；8根颜色低位按用户要求暂缓。U1整片SDRAM自检已归档，显示时不重复破坏性测试。
+**当前：U3.1 TouchGFX显示范围已通过单A实机验收。** A板运行SBCG-U3.1-TOUCHGFX，NoOS/软件绘图，用户确认状态页正常；独立复位后82.55秒，UI/音频/串口零错误，温度25/30°C命令联动通过并恢复AUTO。[本轮完整报告](Docs/Milestones/U3_1_TouchGFX_Status_Page.md)。首次烧录窗口多出一次启动且用户无操作，原因仍未知，该窗口不通过，不宣称已排除重启风险。距离、方向、质量仍占位；8根颜色低位继续暂缓。U2 RGB565与U1 SDRAM保留历史证据，不重复色条/全片自检。
 
 **M2.3.3：PPS软件已接入，新检测固件已有本地排程观测；电气波形仍待验收。** 用户CubeMX配置已核对，输出为 **PA15 / Arduino D9 / CN7第2针**，目标100us高脉冲。当前仅A板在场，可独立验参考PPS；两板±10us仍须之后经交换机和示波器验证。[软件交付与单机后续计划](Docs/Milestones/M2_3_3_PTP_PPS.md)。
 
@@ -60,7 +60,7 @@ SBCG是基于两块 **STM32F746G-DISCO** 的分布式声波测距课程项目。
 | 单板网络/PTP | UDP、重连、RX/TX戳、时间交换和板端估算观测已实测 | [协议](Docs/Protocol.md) |
 | 温度 | DHT11 3.3V/PG7正常采集、手动设温及连续拔插恢复已实测 | [手动温度](Docs/Milestones/T1_2_Manual_Temperature.md)、[恢复](Docs/Milestones/T1_1_Temperature_Replug.md) |
 | 音频 | codec ID、PCM连续采集/受控响应、帧编号、本地PTP锚点和时间估算自检已实测 | [M3.1](Docs/Milestones/M3_1_Audio_DMA.md)、[M3.2.2](Docs/Milestones/M3_2_2_Audio_PTP_Anchor.md) |
-| 双板同步/PPS、声学时间校准、检测/测距、LCD | 闭环同步软件及1分钟运行观测通过；PPS软件待实物验收，声学检测/测距与LCD待后续 | [课程路线](Docs/Project_Roadmap.md) |
+| 双板同步/PPS、声学时间校准、检测/测距、LCD | 闭环同步软件及1分钟运行观测通过；PPS软件待实物验收，声学检测/测距待后续，TouchGFX状态页已实屏验收 | [课程路线](Docs/Project_Roadmap.md) |
 
 历史方案和各版实验按需查[文档状态表](Docs/Document_Status.md)，勿从旧计划重复配置/烧录。
 

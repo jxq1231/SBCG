@@ -5,7 +5,8 @@ root=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('lcd',root/'Tools/Monitor/check_ltdc_config.py')
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 inputs=[(root/path).read_text(encoding='utf-8') for path in ('Core/Src/main.c','Core/Src/stm32f7xx_hal_msp.c','Core/Inc/main.h','Core/Src/stm32f7xx_it.c')]
-assert not module.check(*inputs)
+mode='touchgfx' if 'X-CUBE-TOUCHGFX.4.26.1.tgfx_display_interface=' in (root/'SBCG.ioc').read_text(encoding='utf-8') else 'legacy'
+assert not module.check(*inputs,mode=mode)
 mutations=[(0,'pLayerCfg.ImageWidth = 480','pLayerCfg.ImageWidth = 960'),
  (0,'pLayerCfg.Alpha = 255','pLayerCfg.Alpha = 0'),
  (0,'pLayerCfg.FBStartAdress = 0xC0000000','pLayerCfg.FBStartAdress = 0x20000000'),
@@ -21,5 +22,5 @@ mutations=[(0,'pLayerCfg.ImageWidth = 480','pLayerCfg.ImageWidth = 960'),
 for slot,before,after in mutations:
     assert before in inputs[slot],before
     altered=list(inputs);altered[slot]=altered[slot].replace(before,after)
-    assert module.check(*altered),(slot,before)
-print(f'PASS LTDC preflight baseline and {len(mutations)} unsafe regeneration mutations')
+    assert module.check(*altered,mode=mode),(slot,before)
+print(f'PASS LTDC {mode} preflight baseline and {len(mutations)} unsafe regeneration mutations')

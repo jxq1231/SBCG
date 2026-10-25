@@ -7,7 +7,10 @@
  *              不承担IRQ处理；页面绘制与双板校时交由独立服务。
  */
 #include "app_main.h"
-#ifdef SBCG_USE_LCD
+#ifdef SBCG_USE_TOUCHGFX
+#include "UI/touchgfx_service.h"
+#include "BSP/bsp_touchgfx_display.h"
+#elif defined(SBCG_USE_LCD)
 #include "UI/status_service.h"
 #endif
 #ifdef SBCG_USE_SDRAM
@@ -56,7 +59,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与有界日志队列；常规16行，事件时间版本32行，每行256字节。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_LCD)
+#if defined(SBCG_USE_TOUCHGFX)
+#define APP_FIRMWARE_ID "SBCG-U3.1-TOUCHGFX"
+#elif defined(SBCG_USE_LCD)
 #define APP_FIRMWARE_ID "SBCG-U2-STATUS-R2"
 #elif defined(SBCG_USE_SDRAM)
 #define APP_FIRMWARE_ID "SBCG-U1-SDRAM-R1"
@@ -306,6 +311,10 @@ void App_Init(void)
     SendLine(sdram_line, sdram_length);
     ReportSdram(BSP_Console_GetTickMs());
 #endif
+#ifdef SBCG_USE_TOUCHGFX
+    /* 音频DMA启动前关闭显示并清空双缓冲，稍后框架初始化复用READY结果。 */
+    (void)BSP_TouchGFXDisplay_Init();
+#endif
     EthernetMonitor_Init(last_heartbeat_ms, SendLine);
 #ifdef SBCG_USE_LWIP
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
@@ -348,7 +357,10 @@ void App_Init(void)
         static const char error[] = "$CONSOLE,INIT=ERROR\r\n";
         SendLine(error, (int)sizeof error - 1);
     }
-#ifdef SBCG_USE_LCD
+#ifdef SBCG_USE_TOUCHGFX
+    /* 双缓冲已预备；此处仅初始化框架，首帧可见后由前台开背光。 */
+    UI_TouchGFX_Init(BSP_Console_GetTickMs(), SendLine);
+#elif defined(SBCG_USE_LCD)
     /* 所有业务就绪后只建立显示服务；首帧由后续主循环分片完成。 */
     UI_StatusService_Init(BSP_Console_GetTickMs(), SendLine);
 #endif
@@ -439,7 +451,15 @@ void App_Process(void)
 #endif
     if (!TemperatureService_IsStartLowActive()) { ReportSdram(BSP_Console_GetTickMs()); }
 #endif
-#ifdef SBCG_USE_LCD
+#ifdef SBCG_USE_TOUCHGFX
+    /**
+     * ==================== 模块：TouchGFX状态页前台调度 ====================
+     * 作用：更新约1Hz只读文本，并消费LTDC发布的VSYNC执行一次框架入口。
+     * 调度顺序：PCM唯一消费者已归还缓冲；DHT起始低态跳过整次UI工作。
+     * 调用关系：主循环进入，不在LTDC/音频DMA/UART回调绘图。
+     */
+    UI_TouchGFX_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#elif defined(SBCG_USE_LCD)
     /**
      * ==================== 模块：状态页前台绘制 ====================
      * 作用：使用业务只读副本绘制最多八行，完成后台帧后交给LTDC换页。

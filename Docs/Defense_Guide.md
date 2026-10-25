@@ -2,7 +2,7 @@
 
 <!-- doc-status: historical-defense-draft; reviewed: 2026-10-23 -->
 
-> **2026-10-24状态更新：** 当前A板为SBCG-U2-STATUS-R2，LTDC RGB565状态页、温度手动联动和音频共存已实测，用户确认显示正常；无TouchGFX/RTOS。调用链新增App初始化SDRAM显示READY，前台在音频归还后八行分片绘制，首帧完成才调用生成LTDC初始化；同步/测距的独立精度仍未验收。见[现行状态](Project_State.md)和[U2交付](Milestones/U2_LTDC_Status_Page.md)。
+> **2026-10-25状态更新：** A板为SBCG-U3.1-TOUCHGFX，NoOS/软件绘图，角色、网络、同步、温度/声速与音频状态页已由用户目视确认，82.55秒独立静默及手动温度命令通过。App先建立SDRAM/清双帧/延后LTDC，再启动业务与框架；前台音频归还后更新共享文本并调真实TouchGFX入口。LTDC IRQ9/0负责VSYNC，View只读副本，模型/Presenter没有新增测距业务。首次窗口额外启动原因未知，本窗保留不通过；外部精度/测距仍未验收。见[现行状态](Project_State.md)和[U3.1交付](Milestones/U3_1_TouchGFX_Status_Page.md)。
 >
 > **以下正文是2026-10-23架构/答辩快照**，其中“当前”“尚未显示”等只描述当日版本，不用于覆盖上述新结论；按需追溯，不照其旧下一步重复实施。
 

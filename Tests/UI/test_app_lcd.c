@@ -33,6 +33,7 @@ void UI_StatusService_Init(uint32_t now,void(*log)(const char*,int))
 {assert(audio_inits>0U&&display_calls==1U&&now==tick_ms&&log);++ui_inits;}
 void UI_StatusService_Process(uint32_t now,bool allowed)
 {assert(audio_calls==lwip_calls&&now==tick_ms&&allowed==!temperature_low);++ui_calls;}
+#ifndef SBCG_TEST_SKIP_LEGACY_UI_MAIN
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);
@@ -42,3 +43,4 @@ int main(void)
  start_low_in_process=true;tick_ms=2000;App_Process();assert(ui_calls==2U&&sdram_steps==0U&&write_count==2U);
  puts("PASS App display init before audio, UI after audio, no destructive test, DHT gate and one UART per loop");return 0;
 }
+#endif

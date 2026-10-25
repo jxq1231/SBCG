@@ -38,3 +38,16 @@ CMakeUserPresets.json
 # Python host-tool caches
 __pycache__/
 *.py[cod]
+
+# Installed/generated TouchGFX SDK and Designer simulator build output.
+# Recreated by TouchGFX Designer 4.26.1; application/gui sources remain tracked.
+/Middlewares/ST/touchgfx/
+/TouchGFX/build/
+/TouchGFX/.touchgfx/
+/TouchGFX/generated/*/cache/
+/TouchGFX/generated/fonts/UnicodeList*.txt
+/TouchGFX/generated/simulator/
+# Designer-created simulator scaffolding is regenerated; only the asset Makefile is used here.
+/TouchGFX/simulator/main.cpp
+/TouchGFX/simulator/msvs/
+*.touchgfx.bak

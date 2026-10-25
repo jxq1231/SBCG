@@ -1,12 +1,14 @@
 # 当前项目状态
 
-<!-- doc-status: current-state; reviewed: 2026-10-24 -->
+<!-- doc-status: current-state; reviewed: 2026-10-25 -->
 
-更新：2026-10-24。本文仅描述现在；历史实验按需查[文档状态表](Document_Status.md)及`Milestones/`，不重复执行旧计划。
+更新：2026-10-25。本文仅描述现在；历史实验按需查[文档状态表](Document_Status.md)及`Milestones/`，不重复执行旧计划。
 
 ## 当前工作
 
-**U2真实RGB565状态页已通过单A实机验收。** 当前板上`SBCG-U2-STATUS-R2`（Debug14fdabe9bec9…），CubeMX生成480×272/9.6MHz及延后初始化；8根颜色低位按用户决定暂缓。BOOT后约79.34秒，UI末77帧/错误0/丢弃0，音频461有效块、丢块/错误0；手动25/30°C分别显示346.450/349.480m/s并恢复AUTO；用户确认“状态页显示正常”。初版HAL查询误拒绝和R1刷新偏慢记录均保留，R2优化后页面启动间隔约1.023秒。见[U2验收](Milestones/U2_LTDC_Status_Page.md)，不再重复LTDC配置、色条或U1整片自检。当前仍无网线/B/示波器，不播放声音；温度模块未连接，AUTO显示无有效值。距离/方向/质量未实现，保持占位；TouchGFX后续另立目标。
+**U3.1 TouchGFX显示范围已通过单A实机验收；首窗未知重启单独待查。** 当前A为`SBCG-U3.1-TOUCHGFX`，Debug前缀7d9d1e22fe09；NoOS/软件绘图、LTDC VSYNC IRQ9/0、CRC及原RGB565双缓冲，业务文本约1Hz。两种构建/布局及主机回归通过，首帧通知竞态已修复。quiet-02明确复位后82.55秒、81条UI/80条音频、8候选精确计算通过；34秒25/30°C命令联动通过并恢复AUTO。quiet-01两次BOOT间隔6.42秒且用户无操作，本窗不通过、原因未知，未排除重启风险；原始数据保留。无网线/B/示波器、不主动发声、DHT未接。见[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md)。不重复U2色条或SDRAM全片自检，8根颜色低位继续暂缓；没有新测距/方向/外部同步精度结论。
+
+**U2是此前已验收的历史RGB565后端。** 当时板上`SBCG-U2-STATUS-R2`（Debug14fdabe9bec9…），BOOT后约79.34秒，UI末77帧/错误0/丢弃0，音频461有效块、丢块/错误0；手动25/30°C分别显示346.450/349.480m/s并恢复AUTO，用户确认实屏正常。初版失败及R1/R2修复保留在[U2验收](Milestones/U2_LTDC_Status_Page.md)。当前TouchGFX不运行旧八行绘制/VBR轮询栈，两后端独占显示资源。
 
 **前一M4.1.3候选帧关联本地PTP传输模型及日志修复已通过静默验证。** 当时A板`SBCG-M4.1-TIME-R1`，Debug前缀789c0c92ef2f。BOOT后67.933秒，395有效块、66条音频有效/零丢块/零错误、心跳连续；环境自然候选10条，9模型与Fraction一致、1条NO_LEFT明确拒绝，22组原模型自检继续运行。原TIME版5次归还失败记录保留，R1日志改为有界排队每轮一行。没有主动发声，未宣称标准音频识别、物理到达或同步精度通过。[本轮结果](Milestones/M4_1_3_Sound_Event_Time.md)。
 
@@ -50,8 +52,8 @@
 | 音频DMA/IRQ | DMA2 Stream7 Channel0，P→M halfword circular，32768元素/64KiB；DMA2_Stream7和SAI2 IRQ均4/0；半满/满每8192帧 |
 | 内存/Cache | 音频SRAM1 0x20010000..0x20020000、32字节对齐；主栈0x20047000..0x20048000，LwIP堆窗0x20048000..0x2004C000；ETH描述符/RX池在SRAM2；I/D Cache关闭 |
 | FMC/SDRAM | 用户生成38脚/PC3 SDCKE0、CAS3/HCLK3，Region1=C0000000/8MB普通非缓存XN，Region2=A0000000/4KB共享Device；U1历史8MB四轮实测通过；当前U2为显示READY，不重做破坏性自检 |
-| LTDC显示 | RGB565/480×272/9.6MHz，C0000000/C0040000双缓冲；延后生成初始化、前台八行分片/VBR轮询，用户确认实屏正常 |
-| 当前未完成 | PPS波形/双板同步外部精度、TouchGFX/DMA2D、温度共享、标准声音识别/到达校准与测距；实验能量候选已接入 |
+| LTDC显示 | TouchGFX4.26.1/NoOS、软件绘图，RGB565/480×272/9.6MHz及C0000000/C0040000双缓冲；CRC、LTDC IRQ9/0；前台更新，用户确认实屏正常 |
+| 当前未完成 | 首窗额外启动原因、PPS波形/双板同步外部精度、DMA2D/触控、温度共享、标准声音识别/到达校准与测距；TouchGFX状态页已接入 |
 
 生成与实测的完整资源边界见[Hardware_Resources](Hardware_Resources.md)。任何引脚、时钟、DMA、IRQ变更仍由CubeMX负责；此前M2.3.2仅调整UDP PCB池。U1用户生成FMC/MPU Region1/2并通过自检；U2用户生成LTDC并已点亮，助手未手改生成初始化。
 

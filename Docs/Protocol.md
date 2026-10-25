@@ -360,3 +360,19 @@ $UI,STATE=RUNNING,FRAMES=77,ERRORS=0,DISCARDS=0,CAPTURE_MS=77831,ROLE=A,NET=DOWN
 ROLE=A/B/UNKNOWN，NET=UP/DOWN/UNKNOWN，TEMP_SOURCE=AUTO/MANUAL；TEMP_VALID为0/1。有效时TEMP_MC是int32毫摄氏度、C_MM_S是uint32毫米/秒，无效时两数值0仅作协议占位，屏幕显示--而不是0°C。全部为ASCII字段，无二进制结构体或端序依赖。温度设置沿用TEMP SET 25.0、TEMP SET 30.0、TEMP AUTO，命令以LF/CRLF结束；AUTO缺传感器时无有效值。
 
 页面A参考偏差--；B只显示新鲜同步估计，内部锁不等于±10us已验收。距离m、方向SIDE --、QUALITY --目前均无测距结果，不填模拟数值。自动分析不能证明面板，U2实屏结论另由用户目视确认。
+
+## U3.1：TouchGFX状态页只读观测
+
+当前固件`SBCG-U3.1-TOUCHGFX`复用U2业务字段，追加：
+
+```text
+$UI,STATE=RUNNING,FRAMES=3966,ERRORS=0,DISCARDS=0,CAPTURE_MS=81893,ROLE=A,NET=DOWN,TEMP_SOURCE=AUTO,TEMP_VALID=0,TEMP_MC=0,C_MM_S=0,BACKEND=TOUCHGFX,UPDATES=81
+```
+
+- `FRAMES`：uint32饱和计数，单位为框架前台`endFrame`完成次数，**包括未绘图帧**；不能当实际绘图次数或业务数据版本。
+- `UPDATES`：uint32业务文本副本版本，约每1000ms更新，回绕跳过0；主循环调度不是精密1Hz。
+- `BACKEND=TOUCHGFX`：与历史U2区分，旧RGB565轮询/绘图栈不同时运行。
+- `ERRORS`：0/1显示故障标志，合并BSP配置/传输/FIFO/HAL错误；不是各类错误总和。错误锁存后停止框架调度并关闭显示。
+- `CAPTURE_MS`：HAL毫秒计数；`TEMP_MC`有符号毫摄氏度、`C_MM_S`无符号毫米/秒，仅`TEMP_VALID=1`时可用。`TEMP_VALID=0`行内0不代表0°C，屏上显示占位。
+
+当前A参考显示LOCAL REFERENCE且偏差--，不伪造0偏差。即使B以后显示INTERNAL LOCK，仍不代表外部±10us验收。完整单板证据及首次窗口未知重启见[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md)。

@@ -1,6 +1,6 @@
 /**
  * @file status_view.h
- * @brief RGB565与未来TouchGFX共享的只读状态快照和文本接口。
+ * @brief RGB565与TouchGFX共享的只读状态快照和文本接口。
  * @details 无HAL/外设依赖，未知或超龄字段不伪装为零；模型状态不等同外部同步精度。
  * @note 前台使用，字符串由调用方持有，不读取当前业务全局变量。
  */

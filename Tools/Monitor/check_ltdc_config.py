@@ -35,7 +35,7 @@ def assignments(source):
     return dict(re.findall(r'([A-Za-z_]\w*(?:\.\w+)*)\s*=(?!=)\s*([^;]+);',source))
 
 
-def check(main, msp, header, interrupts):
+def check(main, msp, header, interrupts, mode='legacy'):
     """Return precise violations without modifying any source."""
     errors=[]
     try:
@@ -87,21 +87,38 @@ def check(main, msp, header, interrupts):
         for key,value in {'Mode':'GPIO_MODE_OUTPUT_PP','Pull':'GPIO_NOPULL','Speed':'GPIO_SPEED_FREQ_LOW'}.items():
             if settings.get('GPIO_InitStruct.'+key,'').strip()!=value:
                 errors.append(f'{label} GPIO {key} must be {value} with an explicit initialization call')
-    if re.search(r'HAL_NVIC_EnableIRQ\(\s*LTDC',msp) or re.search(r'void\s+LTDC\w*_IRQHandler',interrupts):
-        errors.append('LTDC NVIC must remain disabled for polling mode')
+    if mode == 'legacy':
+        if re.search(r'HAL_NVIC_EnableIRQ\(\s*LTDC',msp) or re.search(r'void\s+LTDC\w*_IRQHandler',interrupts):
+            errors.append('LTDC NVIC must remain disabled for polling mode')
+    elif mode == 'touchgfx':
+        for pattern, message in [
+            (r'HAL_NVIC_SetPriority\(\s*LTDC_IRQn,\s*9,\s*0\)', 'LTDC priority must be 9/0'),
+            (r'HAL_NVIC_EnableIRQ\(\s*LTDC_IRQn\)', 'LTDC interrupt must be enabled')]:
+            if not re.search(pattern, ltdc_msp):
+                errors.append(message)
+        try:
+            handler = function(interrupts, 'LTDC_IRQHandler')
+            if not re.search(r'HAL_LTDC_IRQHandler\(\s*&hltdc\s*\)', handler):
+                errors.append('LTDC_IRQHandler must dispatch HAL_LTDC_IRQHandler(&hltdc)')
+        except ValueError as error:
+            errors.append(str(error))
+    else:
+        errors.append(f'unsupported LTDC preflight mode: {mode}')
     return errors
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[2]); args=parser.parse_args()
+    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--mode', choices=('legacy', 'touchgfx'), default='legacy')
+    args=parser.parse_args()
     root=args.root
     paths=['Core/Src/main.c','Core/Src/stm32f7xx_hal_msp.c','Core/Inc/main.h','Core/Src/stm32f7xx_it.c']
-    errors=check(*( (root/path).read_text(encoding='utf-8') for path in paths))
+    errors=check(*( (root/path).read_text(encoding='utf-8') for path in paths), mode=args.mode)
     for error in errors:
         print('FAIL:',error)
     if not errors:
-        print('PASS LTDC: 480x272 RGB565, 9.6MHz, fixed 20 pins, controls LOW, deferred global init, no NVIC')
+        print(f'PASS LTDC: 480x272 RGB565, 9.6MHz, fixed 20 pins, controls LOW, deferred global init, {args.mode}')
         print('NOTE: 8 low color GPIO intentionally deferred; physical panel acceptance still required')
     return bool(errors)
 

@@ -1,10 +1,10 @@
 # 项目文档入口
 
-<!-- doc-status: current-entry; reviewed: 2026-10-24 -->
+<!-- doc-status: current-entry; reviewed: 2026-10-25 -->
 
-更新：2026-10-24。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
+更新：2026-10-25。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
-当前 **U2真实RGB565状态页已通过单A实机验收**：SBCG-U2-STATUS-R2，页面约1秒刷新、显示/音频错误0；手动温度联动后已恢复AUTO，用户确认显示正常。[U2结果、失败修复与复验入口](Milestones/U2_LTDC_Status_Page.md) · [当前状态](Project_State.md)。8根颜色低位按用户要求暂缓；TouchGFX未实现，距离/方向/质量仍占位。U0软件页面和U1 SDRAM属于已完成前置，不重做色条、FMC/MPU或破坏性内存测试。
+当前 **U3.1 TouchGFX显示范围已实机通过；首窗未知重启待查**：[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md) · [当前状态](Project_State.md)。NoOS、软件绘图、约1Hz真实状态，距离/方向/质量仍占位；8根颜色低位暂缓。U2真实RGB565、U0软件页面和U1 SDRAM为历史前置，不重做色条、FMC/MPU或破坏性内存测试。
 
 M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30请求通过，网络身份/共存通过，尚不证明双板同步精度。[网络证据](Milestones/M2_3_1_Dual_Board_Identity.md)。M3.2.4单板音频时间模型实测和更早计划均保留历史范围，无需重复实施。
 
@@ -15,14 +15,14 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
 | 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
-| 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 30秒、两分钟和追问，当前无TouchGFX/RTOS |
+| 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 正文为历史口头稿，先看页首U3.1更新；当前TouchGFX无RTOS |
 | 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
-| 本次任务执行到哪里 | [U2实屏交付](Milestones/U2_LTDC_Status_Page.md) | 已验收RGB565状态页；初版失败和R1/R2修复保留，不重复旧配置 |
+| 本次任务执行到哪里 | [U3.1状态页](Milestones/U3_1_TouchGFX_Status_Page.md) | TouchGFX等价迁移、首帧竞态修复及分层验收；U2历史证据按需读 |
 | 课程目标和未实现部分 | [Project_Roadmap](Project_Roadmap.md) | 基础/提高指标和整机路线仍有效，不是一次实现全部功能的授权 |
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
-| 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；RGB565已实测、TouchGFX后续，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
+| 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；TouchGFX已实屏验收，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
 | 串口和UDP字段 | [Protocol](Protocol.md) | 协议为现行接口，历史固件标识仅说明首次引入版本 |
 | 网页串口怎么使用 | [SerialWeb](SerialWeb.md) | 115200/8N1；当前已支持手动温度命令；后半为早期发送实验 |
 | 仅核对SYS/RCC | [CubeMX_Step1](CubeMX_Step1.md) | 已完成的系统基线，不重复启用外设 |
@@ -37,7 +37,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 - 旧固件哈希、地址、日志计数与主机测试数量不是当前新版本的自动证明。主机回放通过不等于烧录、实物同步或测距通过。
 - 第三方`Drivers/`、`Middlewares/`的许可和说明按原样保留；它们不是项目工作进度文档。本次全量审计范围是仓库自有57份Markdown，新增文档同时登记状态。
 
-当前仍 **LOCAL/SYNC=0**。两板内部闭环已通过短时观测，外部同步精度/PPS波形、声学延迟校准、标准音频识别、测距与LCD尚未完成；历史M2.3.2软件及1分钟运行观测通过；交换机原分配A=2、B=1、PC=3口，当前仅A在场。
+当前仍 **LOCAL/SYNC=0**。两板内部闭环已通过短时观测，外部同步精度/PPS波形、声学延迟校准、标准音频识别和测距尚未完成，LCD状态页已实测；历史M2.3.2软件及1分钟运行观测通过；交换机原分配A=2、B=1、PC=3口，当前仅A在场。
 
 最新固件与静默运行见[M4.1.3记录](Milestones/M4_1_3_Sound_Event_Time.md)，当前软件页面和下一步见[U0报告](Milestones/U0_RGB565_Status_Page.md)。M2.3.2短时双板观测按历史范围保留，外部精度未测。
 
