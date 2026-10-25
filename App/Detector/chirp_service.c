@@ -1,7 +1,7 @@
 /**
  * @file        chirp_service.c
  * @brief       在已复制并通过End校验的音频上分批搜索固定扫频。
- * @details     沿用原有限搜索和缓存，增加分类计数及分段HAL耗时；状态与诊断交替，不增加周期日志行数。
+ * @details     沿用原有限搜索和缓存，扫描按完整64点批量推进，增加分类计数、分段HAL耗时及任务终结时延；状态与诊断交替，不增加周期日志行数。
  * @note        单前台所有权；复制缓冲不被DMA访问，Stage不相关/打印；不输出PTP时间或距离。
  */
 #include "chirp_service.h"
@@ -73,6 +73,20 @@ static void RecordDrop(DropReason reason,uint32_t amount)
     }
     if(counter!=NULL){Add(&state.dropped,amount);Add(counter,amount);}
 }
+/**
+ * @brief 记录一个任务从关联音频块completed_ms到当前前台时刻的饱和最大时延。
+ * @param now_ms 当前HAL毫秒，使用无符号差处理正常回绕。
+ * @param completed_ms 任务关联音频块的完成tick，来自原BSP描述符。
+ * @param complete true记入完成时延；false记入丢弃时延。
+ * @return 无返回值。
+ * @note 仅前台；完成与丢弃分别保留最大值，未完成/丢弃任务同样计入，不只统计成功样本。
+ */
+static void RecordLatency(uint32_t now_ms,uint32_t completed_ms,bool complete)
+{
+    const uint32_t latency=now_ms-completed_ms;
+    uint32_t *maximum=complete ? &state.max_complete_ms:&state.max_drop_ms;
+    if(latency>*maximum)*maximum=latency;
+}
 /** @brief 将value转为output至少21字节十进制缓冲，无返回值，避免nano的64位printf。 */
 static void Decimal(uint64_t value,char output[21])
 {
@@ -90,6 +104,12 @@ static void Emit(const char *line,int length)
 /** @brief 清采集/门控/队列历史，保留软件配置和诊断计数；无参数，无返回值，不读取PCM。 */
 static void ClearHistory(void)
 {
+    /* 重置丢弃的排队任务仍记录其已等待时延，避免失败样本从统计中消失。 */
+    if(count!=0U){
+        const uint32_t now=BSP_Console_GetTickMs();
+        for(uint8_t i=0U;i<count;++i)
+            RecordLatency(now,jobs[(head+i)%JOB_CAPACITY].completed_ms,false);
+    }
     RecordDrop(DROP_RESET,count);head=count=0U;have_copy=false;prefix_count=scan_offset=0U;
     job_cached=false;
     (void)SoundDetector_Reset(&gate);
@@ -169,7 +189,12 @@ bool ChirpService_Complete(bool accepted)
     prefix_count=stage_contiguous ? CHIRP_SERVICE_HISTORY_FRAMES:0U;
     copied_first=staged_first;copied_end=copied_first+BSP_AUDIO_HALF_FRAMES;
     copied_session=staged_session;copied_ms=staged_ms;scan_offset=0U;have_copy=true;stage_valid=false;
-    while(count!=0U && !job_cached && jobs[head].next<FirstAvailable())Pop(DROP_HISTORY);
+    if(count!=0U && !job_cached){
+        const uint32_t now=BSP_Console_GetTickMs();
+        while(count!=0U && !job_cached && jobs[head].next<FirstAvailable()){
+            RecordLatency(now,jobs[head].completed_ms,false);Pop(DROP_HISTORY);
+        }
+    }
     Add(&state.valid_blocks,1U);return true;
 }
 /**
@@ -193,23 +218,30 @@ static void Queue(const SoundCandidate *event)
         .completed_ms=copied_ms};++count;
 }
 /**
- * @brief 对当前8192帧块最多扫描一次，建立已验证输入的能量候选。
+ * @brief 对当前8192帧块分批扫描，按实际消费帧数推进绝对帧与扫描预算。
  * @return 无返回值；仅作用于当前CPU副本与门控状态。
- * @note 无硬件/日志访问，不读取上一个已被覆盖块的扫描位置。
+ * @note 完整64点窗口走批量快速路径，其他情况接口只消费1点；正常扫描路径不访问硬件/日志，
+ *       异常清历史时仅在前台读取HAL tick记录丢弃时延；异常时清历史退出。
  */
 static void Scan(void)
 {
     while(scan_offset<BSP_AUDIO_HALF_FRAMES && state.last_scanned<CHIRP_SERVICE_SCAN_BUDGET){
-        SoundCandidate event;
-        const SoundDetectorResult result=SoundDetector_Push(&gate,copied_session,
-            copied_first+scan_offset,copied[CHIRP_SERVICE_HISTORY_FRAMES+scan_offset],&event);
-        ++scan_offset;++state.last_scanned;
+        const uint32_t remaining=BSP_AUDIO_HALF_FRAMES-scan_offset;
+        const uint16_t available=(uint16_t)(remaining<SOUND_DETECTOR_BATCH_MAX_FRAMES ?
+            remaining:SOUND_DETECTOR_BATCH_MAX_FRAMES);
+        SoundCandidate event;uint16_t consumed=0U;
+        const SoundDetectorResult result=SoundDetector_PushBatch(&gate,copied_session,
+            copied_first+scan_offset,copied+CHIRP_SERVICE_HISTORY_FRAMES+scan_offset,available,
+            &consumed,&event);
+        if(consumed==0U || consumed>available){Add(&state.errors,1U);ClearHistory();return;}
+        scan_offset=(uint16_t)(scan_offset+consumed);
+        state.last_scanned=(uint16_t)(state.last_scanned+consumed);
         if(result==SOUND_DETECTOR_EVENT)Queue(&event);
         else if(result!=SOUND_DETECTOR_NONE){Add(&state.errors,1U);ClearHistory();return;}
     }
 }
 /**
- * @brief 评分至多8个窗口，完成一个任务后复制结果给调用方。
+ * @brief 评分至多8个窗口，完成或丢弃任务时记录终结时延，完成一个任务后复制结果给调用方。
  * @param now_ms 最新HAL毫秒，任务1500ms过期。
  * @param publish 非NULL独占输出；返回true时含最高评分完整搜索结果。
  * @return true为一个任务完整匹配成功；false为未完成/未匹配。
@@ -219,15 +251,22 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
 {
     while(count!=0U && state.last_scores<CHIRP_SERVICE_SCORE_BUDGET){
         SearchJob *job=&jobs[head];
-        if((uint32_t)(now_ms-job->completed_ms)>=JOB_AGE_MS){Pop(DROP_EXPIRED);continue;}
-        if(!job_cached && job->next<FirstAvailable()){Pop(DROP_HISTORY);continue;}
+        if((uint32_t)(now_ms-job->completed_ms)>=JOB_AGE_MS){
+            RecordLatency(BSP_Console_GetTickMs(),job->completed_ms,false);Pop(DROP_EXPIRED);continue;
+        }
+        if(!job_cached && job->next<FirstAvailable()){
+            RecordLatency(BSP_Console_GetTickMs(),job->completed_ms,false);Pop(DROP_HISTORY);continue;
+        }
         if(!job_cached){
             if(job->last>copied_end-CHIRP_TEMPLATE_FRAMES)return false;
             const uint64_t offset=job->next>=copied_first ?
                 CHIRP_SERVICE_HISTORY_FRAMES+(job->next-copied_first):
                 CHIRP_SERVICE_HISTORY_FRAMES-(copied_first-job->next);
             const uint32_t length=(uint32_t)(job->last-job->next)+CHIRP_TEMPLATE_FRAMES;
-            if(length>CHIRP_SERVICE_JOB_SAMPLES){Add(&state.errors,1U);Pop(DROP_RANGE);continue;}
+            if(length>CHIRP_SERVICE_JOB_SAMPLES){
+                Add(&state.errors,1U);RecordLatency(BSP_Console_GetTickMs(),job->completed_ms,false);
+                Pop(DROP_RANGE);continue;
+            }
             memcpy(job_samples,copied+(uint32_t)offset,length*sizeof job_samples[0]);
             job_first=job->next;job_cached=true;
         }
@@ -242,6 +281,8 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
             const bool matched=job->matched;
             /* 本服务没有观察搜索完成瞬间的采样游标，不填造confirmed_frame。 */
             if(matched){*publish=job->best;Add(&state.matches,1U);}
+            /* 在本次完成分支实时读取tick，时延包含本调用内已执行的扫描/评分，而非Process入口时刻。 */
+            RecordLatency(BSP_Console_GetTickMs(),job->completed_ms,true);
             Add(&state.completed_jobs,1U);Pop(DROP_NONE);return matched;
         }
         ++job->next;
@@ -300,9 +341,11 @@ void ChirpService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
         Emit(line,snprintf(line,sizeof line,
             "$CHIRP_DIAG,SCAN_MS=%" PRIu32 ",SCORE_MS=%" PRIu32 ",GAP_MS=%" PRIu32
             ",TIMEOUT=%" PRIu32 ",HISTORY=%" PRIu32 ",FULL=%" PRIu32 ",RANGE=%" PRIu32
-            ",RESET=%" PRIu32 ",DONE=%" PRIu32 "\r\n",state.max_scan_ms,state.max_score_ms,
+            ",RESET=%" PRIu32 ",DONE=%" PRIu32 ",DONE_MAX_MS=%" PRIu32
+            ",DROP_MAX_MS=%" PRIu32 "\r\n",state.max_scan_ms,state.max_score_ms,
             state.max_process_gap_ms,state.drop_expired,state.drop_history,state.drop_full,
-            state.drop_range,state.drop_reset,state.completed_jobs));return;
+            state.drop_range,state.drop_reset,state.completed_jobs,state.max_complete_ms,
+            state.max_drop_ms));return;
     }
     diagnostic_next=true;
     Emit(line,snprintf(line,sizeof line,

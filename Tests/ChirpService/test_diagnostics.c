@@ -14,21 +14,33 @@ int main(void)
  tick_ms=1000U;Work(1U);CHECK(strncmp(last_any,"$CHIRP_STATE,",13)==0);
  const unsigned before=lines;tick_ms=1999U;Work(1U);CHECK(lines==before);
  tick_ms=2000U;Work(1U);CHECK(strncmp(last_any,"$CHIRP_DIAG,",12)==0);
- CHECK(strstr(last_any,",TIMEOUT=0,HISTORY=0,FULL=0,RANGE=0,RESET=0,DONE=0")!=NULL);
+ CHECK(strstr(last_any,",TIMEOUT=0,HISTORY=0,FULL=0,RANGE=0,RESET=0,DONE=0,DONE_MAX_MS=0,DROP_MAX_MS=0")!=NULL);
  ChirpServiceSnapshot s;
  CHECK(ChirpService_Init(tick_ms,0U,Log));Block(0U,2000U,true);Work(80U);
  ChirpService_GetSnapshot(&s);CHECK(s.completed_jobs==1U && s.matches==1U && s.dropped==0U);
+ /* 完成时延从关联块completed_ms起算：257窗/8窗每轮，第33次调用完成，前32个tick为等待。 */
+ CHECK(s.max_complete_ms==32U && s.max_drop_ms==0U);
  CHECK(ChirpService_Init(tick_ms,0U,Log));const uint32_t start=tick_ms;
  Block(0U,2000U,true);Work(1U);
  tick_ms=start+1000U;Block(8192U,UINT64_MAX,true);
  tick_ms=start+1500U;Work(1U);ChirpService_GetSnapshot(&s);
  CHECK(s.drop_expired==1U && s.dropped==1U && s.drop_reset==0U);
- CHECK(ChirpService_Init(tick_ms,0U,Log));Block(0U,8100U,true);Work(1U);
+ /* 丢弃也记录时延，不能只统计成功完成的样本。 */
+ CHECK(s.max_drop_ms==1500U && s.max_complete_ms==0U);
+ CHECK(ChirpService_Init(tick_ms,0U,Log));const uint32_t history_start=tick_ms;
+ Block(0U,8100U,true);Work(1U);
+ tick_ms=history_start+10U;
  Block(8192U,8100U,true);Block(16384U,UINT64_MAX,true);ChirpService_GetSnapshot(&s);
  CHECK(s.drop_history==1U && s.dropped==1U && s.drop_reset==0U);
- CHECK(ChirpService_Init(tick_ms,0U,Log));Block(0U,2000U,true);Work(1U);
+ /* Complete内历史丢弃同样记录时延。 */
+ CHECK(s.max_drop_ms==10U);
+ CHECK(ChirpService_Init(tick_ms,0U,Log));const uint32_t reset_start=tick_ms;
+ Block(0U,2000U,true);Work(1U);
+ tick_ms=reset_start+7U;
  Block(8192U,UINT64_MAX,false);ChirpService_GetSnapshot(&s);
  CHECK(s.drop_reset==1U && s.dropped==1U && s.drop_expired==0U);
+ /* Reset清队列也记录排队任务时延，不丢弃失败样本统计。 */
+ CHECK(s.max_drop_ms==7U);
  CHECK(ChirpService_Init(tick_ms,0U,Log));
  Block(UINT64_MAX-8192U,UINT64_MAX-2000U,true);Work(1U);ChirpService_GetSnapshot(&s);
  CHECK(s.drop_range==1U && s.dropped==1U && s.pending==0U);

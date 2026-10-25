@@ -8,7 +8,7 @@ import sys
 ROOT=Path(__file__).resolve().parents[2]
 
 def main():
-    parent=ROOT/'Logs/Detector/M4_2_2';parent.mkdir(parents=True,exist_ok=True)
+    parent=ROOT/'Logs/Detector/M4_2_3_B';parent.mkdir(parents=True,exist_ok=True)
     out=Path(tempfile.mkdtemp(prefix='diagnostics-',dir=parent));print('TEST_OUTPUT',out,flush=True)
     service=['Tests/ChirpService/test_diagnostics.c','App/Detector/chirp_service.c',
              'App/Detector/chirp_window.c','App/Detector/chirp_matcher.c',

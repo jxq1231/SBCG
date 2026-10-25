@@ -54,7 +54,7 @@ static void Work(unsigned calls)
 {
  for(unsigned i=0U;i<calls;++i){
   BSP_AudioSnapshot snap={.running=true,.session=1U,.callback_count=1U,.last_callback_ms=tick_ms};
-  ChirpService_Process(tick_ms++,&snap);
+  ChirpService_Process(tick_ms,&snap);++tick_ms;
   ChirpServiceSnapshot s;ChirpService_GetSnapshot(&s);
   CHECK(s.last_scanned<=CHIRP_SERVICE_SCAN_BUDGET && s.last_scores<=CHIRP_SERVICE_SCORE_BUDGET);
  }

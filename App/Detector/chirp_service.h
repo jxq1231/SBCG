@@ -1,13 +1,13 @@
 /**
  * @file        chirp_service.h
  * @brief       声明音频归还验证后的有界扫频候选搜索与诊断接口。
- * @details     唯一认领内复制声道，End后分批评分；诊断区分丢弃原因、扫描/评分耗时与调度间隔。
+ * @details     唯一认领内复制声道，End后分批评分；扫描按完整64点批量推进，诊断区分丢弃原因、扫描/评分耗时、任务终结时延与调度间隔。
  * @note        串行前台，无新IRQ/DMA，不调用Begin/End，不保存DMA指针。
  */
 #ifndef SBCG_CHIRP_SERVICE_H
 #define SBCG_CHIRP_SERVICE_H
 #include "BSP/bsp_audio.h"
-/** @brief 每次前台调用的硬操作次数上限，不代表已经测得的执行毫秒数。 */
+/** @brief 每次前台调用最多推进的扫描帧数；按64点批量推进，不代表已经测得的执行毫秒数。 */
 #define CHIRP_SERVICE_SCAN_BUDGET BSP_AUDIO_HALF_FRAMES
 #define CHIRP_SERVICE_SCORE_BUDGET 8U
 #define CHIRP_SERVICE_HISTORY_FRAMES 3072U
@@ -15,12 +15,13 @@
 #define CHIRP_SERVICE_SEARCH_AFTER 64U
 /** @brief 活动搜索的样本缓存点数：2400点模板加256点搜索跨度，仅CPU访问。 */
 #define CHIRP_SERVICE_JOB_SAMPLES 2656U
-/** @brief 饱和累计计数；last/max_scan和scores为每次Process帧/窗口数量，耗时单位HAL毫秒。 */
+/** @brief 饱和累计计数；last/max_scan和scores为每次Process帧/窗口数量，耗时单位HAL毫秒。max_complete_ms/max_drop_ms为任务从关联块completed_ms到完成/丢弃时刻（实时读取HAL tick）的饱和最大毫秒差，分开报告。 */
 typedef struct {
     uint32_t valid_blocks,rejected_blocks,candidates,matches,dropped,skipped_blocks,errors,evaluations;
     uint32_t max_copy_ms,max_work_ms;
     uint32_t max_scan_ms,max_score_ms,max_process_gap_ms;
     uint32_t drop_expired,drop_history,drop_full,drop_range,drop_reset,completed_jobs;
+    uint32_t max_complete_ms,max_drop_ms;
     uint16_t last_scanned,last_scores,max_scanned,max_scores;
     uint8_t pending;
     bool configured,staging;

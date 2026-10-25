@@ -7,7 +7,7 @@ import wave
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[2]
-OUTPUT=ROOT/'Logs/Detector/M4_2_2'
+OUTPUT=ROOT/'Logs/Detector/M4_2_3_B'
 
 
 def main():
@@ -44,6 +44,19 @@ void ChirpService_GetSnapshot(ChirpServiceSnapshot*s){if(s)*s=(ChirpServiceSnaps
         print(text,flush=True)
         if code:return code
         if phase=='GREEN':
+            batch=output/f'scan_batch_{option[1:]}.exe'
+            cmd=[shutil.which('gcc'),'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
+                 '-finstrument-functions','-I',str(ROOT/'App'),
+                 str(ROOT/'Tests/ChirpService/test_scan_batch.c'),str(source),
+                 *[str(ROOT/p) for p in extra],'-o',str(batch),'-lm']
+            built=subprocess.run(cmd,text=True,capture_output=True,timeout=30)
+            text='BUILD\n'+built.stdout+built.stderr;code=built.returncode
+            if code==0:
+                run=subprocess.run([str(batch)],text=True,capture_output=True,timeout=30)
+                text+='RUN\n'+run.stdout+run.stderr;code=run.returncode
+            (output/f'scan-batch-{option[1:]}.txt').write_text(text,encoding='utf-8')
+            print(text,flush=True)
+            if code:return code
             capture=output/f'capture_{option[1:]}.exe'
             sources=['Tests/ChirpService/test_capture.c','App/Audio/audio_capture.c',
                      'App/Audio/audio_statistics.c','App/Detector/sound_detector_service.c']
