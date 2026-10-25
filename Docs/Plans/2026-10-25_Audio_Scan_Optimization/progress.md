@@ -29,3 +29,15 @@
 - 构建ELF SHA256与阶段内既有build-after记录一致；`PushBatch`段在链接map的“Discarded input sections”中，未进入ELF。相对DIAG的Flash +32/+64字节已定位为`CompleteWindow`不再内联进`Push`，原逐帧源码未改。
 - 独立只读复核PASS_WITH_RESERVATIONS（代码/测试/合同PASS，无blocker/major；仅文档收尾minor与run_tests.py探测方式info）。复核自建差分模糊测试1677163条断言、UBSan通过并独立复现RED；报告`Logs/Detector/M4_2_3_A/review.json`。
 - 功能提交`8862ffd`（5个文件，作者/提交者jxq，未推送）；范围外用户改动未动。按复核意见更新任务计划、状态/入口文档及本记录后随文档提交收尾；M4.2.3-B仍未开始，不烧录。
+
+## M4.2.3-B实施、烧录与静默验收
+
+2026-10-26：用户授权完成B并入烧录。功能提交`743e027`（8文件）。
+
+- 实现：Scan改用SoundDetector_PushBatch，按consumed推进；异常计数/清历史/退出；新增完成与丢弃时延DONE_MAX_MS/DROP_MAX_MS；固件标识SBCG-M4.2-BATCH。
+- 主机：ChirpService O0/O2全PASS；新增test_scan_batch证明每8192帧块128次批量、0次逐帧；真实20秒WAV 10/10（64与5 calls/171ms）；时延用例完成32ms/过期1500ms/Complete历史10ms/Reset 7ms；6组回归、两配置构建（Debug 275400/Release 184924字节）及四项布局检查通过。
+- 独立复核PASS_WITH_RESERVATIONS（code PASS，无blocker/major）。唯一minor（完成时延用Process入口而非事件时刻）已在提交前修正：完成/丢弃分支实时读tick，并补两条时延回归；复核自建差分显示HEAD逐帧与批量实现282行轨迹、真实WAV 7761/791行完全一致。报告`Logs/Detector/M4_2_3_B/review.json`。
+- 烧录：最终Debug ELF SHA256 `26a6496eb5ed183b646e289cbfe4a1e96bcc4185273819198ef75225fbd1e63f`，OpenOCD Verify OK、复位成功；A板现运行SBCG-M4.2-BATCH。
+- 静默采集：85.0秒，BOOT后69.567秒；SCAN最大3ms、SCORE最大4ms、GAP最大106ms、DONE_MAX_MS=831ms、DROP_MAX_MS=0；CAND32/DONE32/PENDING0，TIMEOUT/HISTORY/FULL/RANGE/RESET=0；HEARTBEAT TX/LOG错误0、HWM24；AUDIO OK407零丢块/错误；UI错误0；单BOOT、A UID。判定PASS_SILENT_SCAN。
+- 主动标准音频未验收：用户说明当前环境不能发声；一次无BOOT同步的PC扬声器试探回放未产生MATCH且未确认可闻，不纳入结论。证据`Logs/Chirp/quiet-batch-02-*`、`active-batch-01-*`（后者仅试探）。
+- 范围外用户改动保持未动；烧录镜像基于含既有PPS/CubeMX改动的工作树，功能提交不含这些改动。文档收尾随docs提交。

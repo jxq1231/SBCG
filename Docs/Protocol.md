@@ -410,9 +410,9 @@ $CHIRP_STATE,OK=100,BAD=0,CAND=10,MATCH=10,DROP=0,SKIP=0,ERR=0,EVAL=2570,COPY_MS
 
 能量门控和有限搜索在持续噪声、弱信号、处理积压或反射环境下可能漏检或选中较强反射；门限及范围尚未经过手机/音箱实机标定。格式及主机测试通过不等于现场识别率、±100μs或测距精度通过。
 
-## M4.2-DIAG观测扩展（定位功能已实机验证）
+## M4.2-DIAG观测扩展（历史定位版本，定位功能已实机验证）
 
-当前A为SBCG-M4.2-DIAG，定位增量已实测；保留原CHIRP字段与搜索行为，CHIRP_INIT末尾增加DIAG=1。以下为格式示例；真实观测为SCAN_MS59/SCORE_MS5、TIMEOUT21/HISTORY13、LOG_FULL208，详见本轮报告，不表示性能已修复。
+M4.2-DIAG为当时A板实测定位版本（Debug前缀d3e084b1d83e），保留原CHIRP字段与搜索行为，CHIRP_INIT末尾增加DIAG=1。以下为格式示例；真实观测为SCAN_MS59/SCORE_MS5、TIMEOUT21/HISTORY13、LOG_FULL208，详见对应报告，不表示性能已修复。
 
 ```text
 $CHIRP_DIAG,SCAN_MS=10,SCORE_MS=50,GAP_MS=80,TIMEOUT=12,HISTORY=3,FULL=0,RANGE=0,RESET=0,DONE=4
@@ -424,3 +424,20 @@ CHIRP_STATE和CHIRP_DIAG共享原1000ms节流并交替输出，合计约1Hz；�
 TIMEOUT为单任务期限拒绝、HISTORY为所需副本被覆盖、FULL为搜索队列满、RANGE为范围/缓存长度拒绝、RESET为失败End/会话/流等整体清理。五类是分支优先级选定的互斥主原因，uint32饱和；未饱和时合计等于DROP。副本整体过期清理属RESET。DONE为完整搜索完成数，包含不匹配；仍需用MATCH区分匹配结果。
 
 LOG_FULL/WRITE/BAD与原TX_ERRORS同路分别记录日志队满、BSP写失败和非法长度，uint32自然回绕，与原聚合语义一致。LOG_Q为格式化心跳时的待发行数，不包含该心跳；LOG_HWM为成功初始化以来的最大待发行数，单位均为行。日志行变长会增加少量串口开销，定位版不代表拥堵已解决。新字段仅CHIRP构建启用，旧构建心跳格式不变。
+
+## M4.2.3-B批量扫描（SBCG-M4.2-BATCH）
+
+M4.2.3-B只把Chirp扫描从逐帧`SoundDetector_Push`迁移到`SoundDetector_PushBatch`：完整64点窗走批量统计，其他输入沿用原逐帧回退；原候选门控、有限搜索、两套阈值、Begin/End事务、8窗/轮及日志策略保持不变。`$CHIRP_INIT`/`$CHIRP`/`$CHIRP_STATE`格式不变，`$CHIRP_DIAG`追加两个任务终结时延字段。以下为格式示例，不是实物结果：
+
+```text
+$BOOT,FW=SBCG-M4.2-BATCH,HCLK_HZ=200000000,...
+$CHIRP_DIAG,SCAN_MS=3,SCORE_MS=5,GAP_MS=80,TIMEOUT=0,HISTORY=0,FULL=0,RANGE=0,RESET=0,DONE=4,DONE_MAX_MS=420,DROP_MAX_MS=1500
+```
+
+- `SCAN_MS`仍为一次Scan段最大HAL毫秒差，包含64点批量推进调用；每轮最多推进8192帧，预算和候选坐标语义未变。
+- `DONE_MAX_MS`为已接纳搜索任务从关联音频块`completed_ms`到完整完成的饱和最大HAL毫秒差，包含缺尾等待、缓存、调度及处理；不是纯计算耗时，也不是声音到达精度。
+- `DROP_MAX_MS`为已接纳任务被丢弃时同一均起点的饱和最大时延，与`DONE_MAX_MS`分开统计；丢弃本身仍计入`DROP`及五类原因。未进入搜索队列的候选（如FULL）没有任务起点，不计入两者。
+- 两字段使用uint32无符号差，tick回绕时差值语义仍正确，但不表示绝对时刻；0表示尚未发生对应事件或未跨HAL tick，不代表零耗时。
+- `JOB_MS=1500`仍为任务/副本期限，超期任务记TIMEOUT并按`DROP_MAX_MS`报告。完成时延≤1000ms是受控负载下的工程目标，不是本协议保证，也不把丢弃样本从统计中剔除。
+
+2026-10-26 A板Debug（`SBCG-M4.2-BATCH`）静默实测：SCAN_MS最大3、DONE_MAX_MS=831、丢弃原因/日志/音频错误全0；主动标准音频与MATCH未验收。详见[M4.2.3-B记录](Milestones/M4_2_3_B_Batch_Scan.md)。
