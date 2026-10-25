@@ -1,6 +1,8 @@
 # M4.2.2 有界扫频搜索与板端接入
 
-<!-- doc-status: active-plan-diagnostic-evidence-complete; reviewed: 2026-10-25 -->
+<!-- doc-status: active-plan-diagnostic-evidence-complete; reviewed: 2026-10-26 -->
+
+后续性能优化以[M4.2.3方案](2026-10-25_Audio_Scan_Optimization/task_plan.md)为阅读入口；本页保留已完成的接入/定位步骤和失败边界，不重复烧录旧版本。
 
 用户已授权实施上一轮提出的计算预算与板端接入。目标只有一个：把候选窗口相关放在音频归还验证之后，并限定每次主循环工作量；不实现测距或新增PTP关联。初版已授权烧录，但静默出现识别积压，判定FAIL_CHIRP_BACKLOG；R1软件修复后实物仍因负载丢块失败；R2软件准备通过并已授权烧录，但静默搜索丢弃及串口拥堵仍失败。DIAG已授权烧录并完成定位：扫描59ms、评分5ms、21次任务超时/13次覆盖，日志错误208次均队满；下一增量优先优化能量扫描，当前无新修复镜像。
 

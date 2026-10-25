@@ -1,6 +1,6 @@
 # 文档状态与阅读索引
 
-<!-- doc-status: current-document-index; reviewed: 2026-10-25 -->
+<!-- doc-status: current-document-index; reviewed: 2026-10-26 -->
 
 审计日期：2026-10-23。已检查原有 **57份仓库自有Markdown**：顶层历史方案20份、历史验收23份，其余入口/资源/规则/模板14份。第三方Drivers/Middlewares许可与说明、构建输出、Logs内实验快照不作为项目进度文档，不改写。新文档随本轮登记。
 
@@ -20,6 +20,7 @@
 
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
+| [M4.2.3性能方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | 新方案·尚未实施 | 批量门控、语义对照、资源预算及分层验收；依据/规划进度在同目录按需读取 |
 | [M4.2.2有界接入](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 初版/R1/R2静默均失败 | 失败证据、缓存/调度修复、冻结镜像及验收边界 |
 | [M4.2.2实施计划](Plans/2026-10-25_Bounded_Chirp_Integration.md) | 当前计划·DIAG观测已完成 | 下一步优化能量扫描，保留各自阈值，三次失败保留 |
 | [M4.2.1匹配核心](Milestones/M4_2_1_Chirp_Matcher_Core.md) | 软件范围通过·基线归档 | 模板及配置已用于M4.2.2，逐采样流式算法仍只作基线，不当作实物识别率 |

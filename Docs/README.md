@@ -1,8 +1,8 @@
 # 项目文档入口
 
-<!-- doc-status: current-entry; reviewed: 2026-10-25 -->
+<!-- doc-status: current-entry; reviewed: 2026-10-26 -->
 
-更新：2026-10-25。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
+更新：2026-10-26。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
 当前A为`SBCG-M4.2-DIAG`（Debug d3e084b1d83e），61.36秒完整行定位通过：扫描59ms、评分5ms，搜索21次超时/13次覆盖，日志错误208次均为队列满。音频累计零丢块；性能仍未修复，下一步优先优化能量扫描，原文件截止尾片明确保留。[最新验收](Milestones/M4_2_2_Bounded_Chirp_Integration.md)。历史额外启动原因仍未知，下方显示验收按原U3.1范围理解。
 
@@ -16,6 +16,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
+| 性能问题下一步怎样优化 | [M4.2.3优化方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | 待实施：先批量核心等价性，再只接入扫频扫描，按复测决定日志优化 |
 | 扫频识别现在做到哪一步 | [M4.2.2有界接入](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 初版/R1/R2静默均失败；DIAG定位已实测；扫描为主要瓶颈，性能修复及手机识别仍待验收 |
 | 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
 | 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 正文为历史口头稿，先看页首U3.1更新；当前TouchGFX无RTOS |
