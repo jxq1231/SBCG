@@ -17,6 +17,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
 | 性能问题下一步怎样优化 | [M4.2.3优化方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | B批量扫描已静默实测SCAN≤3ms（原59ms）；仅剩主动标准音频与主机压力待验 |
+| 下一批软件优化做什么 | [M4.2.4项目书](Plans/2026-10-26_M4_2_4_Foreground_Optimization.md) | 仅规划未实施：先前台耗时分解，再迁移原声音候选链；不依赖发声、新镜像烧录另授权 |
 | 扫频识别现在做到哪一步 | [M4.2.2有界接入](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 初版/R1/R2静默失败保留；DIAG定位；扫描瓶颈已由M4.2.3-B静默改善，手机/标准音频识别仍待验收 |
 | 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
 | 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 正文为历史口头稿，先看页首U3.1更新；当前TouchGFX无RTOS |
