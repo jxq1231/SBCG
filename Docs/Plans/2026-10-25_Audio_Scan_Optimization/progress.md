@@ -41,3 +41,13 @@
 - 静默采集：85.0秒，BOOT后69.567秒；SCAN最大3ms、SCORE最大4ms、GAP最大106ms、DONE_MAX_MS=831ms、DROP_MAX_MS=0；CAND32/DONE32/PENDING0，TIMEOUT/HISTORY/FULL/RANGE/RESET=0；HEARTBEAT TX/LOG错误0、HWM24；AUDIO OK407零丢块/错误；UI错误0；单BOOT、A UID。判定PASS_SILENT_SCAN。
 - 主动标准音频未验收：用户说明当前环境不能发声；一次无BOOT同步的PC扬声器试探回放未产生MATCH且未确认可闻，不纳入结论。证据`Logs/Chirp/quiet-batch-02-*`、`active-batch-01-*`（后者仅试探）。
 - 范围外用户改动保持未动；烧录镜像基于含既有PPS/CubeMX改动的工作树，功能提交不含这些改动。文档收尾随docs提交。
+
+## 主机合成候选频率压力
+
+2026-10-26：新增`Tests/ChirpService/test_stress.c`（提交`c6af223`），用真实服务/模板和可控时钟模拟音频块、日志排空（9ms/行）、1Hz突发、偶发172ms间隔；候选间隔24128帧（约2/s）。O0/O2结果一致：
+
+- fast_2hz：39候选全完成、丢弃0、max 203ms → 可持续约2候选/s。
+- slow_2hz（34ms循环≈29次Process/s）：39候选仅19完成、19丢弃、1待定、max 1064ms → 超载，需更高前台调用率。
+- fast_gap_2hz（每7秒172ms间隔）：39/39完成、max 203ms → 偶发间隔仍通过。
+- heavy_log_2hz（32行/s突发）：搜索39/39完成、max 295ms，但模拟32行日志队列溢出7行 → 更强日志压力下“按需优化日志”条件可能出现。
+- 证据：`Logs/Detector/M4_2_3_B/stress-report.txt`。合成模型非板端时序，不能直接据此改日志策略。
