@@ -57,6 +57,18 @@ void ChirpService_GetSnapshot(ChirpServiceSnapshot*s){if(s)*s=(ChirpServiceSnaps
             (output/f'scan-batch-{option[1:]}.txt').write_text(text,encoding='utf-8')
             print(text,flush=True)
             if code:return code
+            stress=output/f'stress_{option[1:]}.exe'
+            cmd=[shutil.which('gcc'),'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
+                 '-I',str(ROOT/'App'),str(ROOT/'Tests/ChirpService/test_stress.c'),str(source),
+                 *[str(ROOT/p) for p in extra],'-o',str(stress),'-lm']
+            built=subprocess.run(cmd,text=True,capture_output=True,timeout=30)
+            text='BUILD\n'+built.stdout+built.stderr;code=built.returncode
+            if code==0:
+                run=subprocess.run([str(stress)],text=True,capture_output=True,timeout=120)
+                text+='RUN\n'+run.stdout+run.stderr;code=run.returncode
+            (output/f'stress-{option[1:]}.txt').write_text(text,encoding='utf-8')
+            print(text,flush=True)
+            if code:return code
             capture=output/f'capture_{option[1:]}.exe'
             sources=['Tests/ChirpService/test_capture.c','App/Audio/audio_capture.c',
                      'App/Audio/audio_statistics.c','App/Detector/sound_detector_service.c']
