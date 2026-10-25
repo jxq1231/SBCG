@@ -409,3 +409,18 @@ $CHIRP_STATE,OK=100,BAD=0,CAND=10,MATCH=10,DROP=0,SKIP=0,ERR=0,EVAL=2570,COPY_MS
 - `S_MAX/E_MAX`为单次Process实际最大扫描帧数/评分窗口数uint16，分别不得超过8192/8；`PENDING`为当前搜索队列数量uint8，0..4。状态约1Hz，匹配行优先，每次服务调用最多发送一行。
 
 能量门控和有限搜索在持续噪声、弱信号、处理积压或反射环境下可能漏检或选中较强反射；门限及范围尚未经过手机/音箱实机标定。格式及主机测试通过不等于现场识别率、±100μs或测距精度通过。
+
+## M4.2-DIAG观测扩展（定位功能已实机验证）
+
+当前A为SBCG-M4.2-DIAG，定位增量已实测；保留原CHIRP字段与搜索行为，CHIRP_INIT末尾增加DIAG=1。以下为格式示例；真实观测为SCAN_MS59/SCORE_MS5、TIMEOUT21/HISTORY13、LOG_FULL208，详见本轮报告，不表示性能已修复。
+
+```text
+$CHIRP_DIAG,SCAN_MS=10,SCORE_MS=50,GAP_MS=80,TIMEOUT=12,HISTORY=3,FULL=0,RANGE=0,RESET=0,DONE=4
+$HEARTBEAT,SEQ=10,TICK_MS=10000,TX_ERRORS=5,LOG_FULL=5,LOG_WRITE=0,LOG_BAD=0,LOG_Q=20,LOG_HWM=32
+```
+
+CHIRP_STATE和CHIRP_DIAG共享原1000ms节流并交替输出，合计约1Hz；事件仍优先、每次服务最多一行。SCAN_MS/SCORE_MS/GAP_MS为uint32最大HAL毫秒差：分别为Scan段、Search段（含缓存/清理）、相邻Process调用间隔；不包含串口格式化/发送或其他模块，不是最坏时限证明。
+
+TIMEOUT为单任务期限拒绝、HISTORY为所需副本被覆盖、FULL为搜索队列满、RANGE为范围/缓存长度拒绝、RESET为失败End/会话/流等整体清理。五类是分支优先级选定的互斥主原因，uint32饱和；未饱和时合计等于DROP。副本整体过期清理属RESET。DONE为完整搜索完成数，包含不匹配；仍需用MATCH区分匹配结果。
+
+LOG_FULL/WRITE/BAD与原TX_ERRORS同路分别记录日志队满、BSP写失败和非法长度，uint32自然回绕，与原聚合语义一致。LOG_Q为格式化心跳时的待发行数，不包含该心跳；LOG_HWM为成功初始化以来的最大待发行数，单位均为行。日志行变长会增加少量串口开销，定位版不代表拥堵已解决。新字段仅CHIRP构建启用，旧构建心跳格式不变。

@@ -1,10 +1,72 @@
 # M4.2.2 有界扫频接入：初版、R1和R2静默验收记录
 
-<!-- doc-status: hardware-failed-next-software-revision-required; reviewed: 2026-10-25 -->
+<!-- doc-status: diagnostic-observation-verified-performance-open; reviewed: 2026-10-25 -->
 
 ## 当前结论
 
-**初版、R1、R2均已烧录，三次静默验收未通过；当前A板为R2。** 固件 `SBCG-M4.2-CHIRP-R2`，Debug前缀 `d089855a3ea9`。R2已收到的音频累计丢块/错误为0，但搜索丢弃56、串口发送/队列错误503、状态行缺失，不能判为识别服务正常。软件回放通过不等于实物实时性通过。当前没有准备新的待烧录镜像；先降低相关计算负担并完善日志调度，再另行构建/复验。标准音频识别、手机识别率和到达精度均未验收，功能完成提交尚未创建。
+**M4.2-DIAG观测功能已实测，性能问题仍开放。** 当前A板为`SBCG-M4.2-DIAG`，Debug前缀d3e084b1d83e。初版/R1/R2三次静默性能验收失败保留；本次定位采集证明扫描段最大59ms、评分段最大5ms、34次搜索丢弃由21次单任务超时及13次历史覆盖组成，208次串口聚合错误全部为日志队列满。音频累计零丢块/硬件错误，无额外BOOT或CHIRP误报。下一步优先优化逐样本能量扫描及其对日志排空的影响，没有新的待烧录修复镜像。诊断完成不表示搜索负载、标准音频识别或到达精度已通过。
+
+## 当前增量：M4.2-DIAG观测功能已实机验证
+
+用户在R2失败后要求继续，当前只有一个可测目标：区分搜索/日志积压的实际来源。此前三次失败证明原电脑快调度假设不能替代实物预算，本增量不再盲目改变优化选项、搜索算法、门限、队列容量或1500ms期限。
+
+- `App/Detector/chirp_service.c/.h`：五类互斥DROP、完整完成DONE、扫描/评分最大HAL毫秒差及Process最大调用间隔。原8窗/257窗搜索、独立输入缓存、End所有权不变。
+- `App/app_main.c`：固件标识SBCG-M4.2-DIAG，心跳增加LOG_FULL/WRITE/BAD/Q/HWM。队列和每轮排空一行策略不变；保留既有PPS改动，不混入当前提交。
+- `Tests/ChirpService/test_service.c`：测试专用日志副本和可控测量时钟。
+- `Tests/ChirpService/test_diagnostics.c`、`test_app_diagnostics.c`、`run_diagnostics_tests.py`：诊断原因、计时回绕、节流及真实App日志出口测试。
+- `Tests/ChirpService/run_tests.py`：完整服务回放后执行诊断测试，不访问硬件。
+- 对应实施计划、项目状态、入口、音频边界与协议文档同步更新。
+
+调用链仍为App_Process→AudioCapture_Process→ChirpService_Process→Scan/Search，诊断只读取前台状态；日志仍SendLine→原队列→FlushOneLine→BSP_Console_Write。无新IRQ、DMA、缓存或CubeMX变更。当前I/D Cache仍关闭，原SAI2接收/循环DMA缓冲及网络内存布局不变。
+
+新增CHIRP_DIAG与CHIRP_STATE共享原1000ms节流，交替输出，总体约1Hz、每次最多一行。SCAN_MS包含Scan调用，SCORE_MS包含Search调用（含任务缓存/清理等前台开销），不是纯点积计时；GAP_MS是相邻有效进入Process之间的最大HAL毫秒差，不是DMA中断间隔。新的计时调用及较长心跳带来小量观测开销，不能据此承诺积压已改善。
+
+TIMEOUT只统计Search中单任务期限拒绝；HISTORY是所需主副本输入已丢失；FULL为队列满拒绝；RANGE为帧范围/缓存长度非法；RESET为失败End、会话/流等整体失效时清队列。按实际分支优先级只选一个主原因；计数均uint32饱和，未饱和时五类之和等于DROP。DONE包括完整匹配及完整未匹配；缓存或排队不等于完成。整体副本过期造成的清理属于RESET，不能把所有时间相关清理都读成TIMEOUT。
+
+LOG_FULL、LOG_WRITE、LOG_BAD分别为日志队列满、BSP发送失败、非法长度次数，与原TX_ERRORS同路增加；均采用原有uint32自然回绕语义。LOG_Q是格式化心跳时的待发行数，尚不包含该心跳；LOG_HWM为本次成功初始化以来最高队列深度。新心跳仅CHIRP构建启用，旧版本格式保留；诊断构建使用256字节局部格式缓冲，满宽心跳163字节、CHIRP_DIAG174字节，均小于255字节上限。
+
+测试先在旧实现实际断言失败：`diagnostics-utg1wnj5/service-O0.txt`缺少CHIRP_DIAG，App缺少LOG_FULL等字段；随后实现。O0/O2的服务、统一排队、直接发送六组诊断全通过，覆盖五种原因、DONE、3ms分段/6ms整体、计时与调用间隔回绕、16/32行队列、DHT门控、深度/峰值、发送失败和重初始化清零。完整ChirpService快慢调度10/10、App、Audio、SoundEventTime回归通过；两配置构建及音频/ETH布局全过。证据 `Logs/Detector/M4_2_2/DIAG/`，独立复核另跑 `diagnostics-bb07muyy/`，无阻塞项。
+
+| DIAG构建 | Debug | Release |
+| --- | --- | --- |
+| Flash字节 | 274568 | 184188 |
+| BSS结束 / 最小堆栈段结束 | 0x2000E9CC / 0x2000EFD0 | 0x2000E9CC / 0x2000EFD0 |
+| 到音频DMA起点静态间隔 | 4144字节 | 4144字节 |
+
+原音频0x20010000..0x20020000、newlib堆起点0x20020000和MSP0x20047000..0x20048000不变；静态间隔不是运行栈水位。仅保留原RWX LOAD链接警告。
+
+- DIAG Debug SHA256：`d3e084b1d83e75ec0c23b4c3a6e5917cbf52f6b8adfdd9635d94315ff7806676`。
+- DIAG Release SHA256：`aade0fd3734963a13b968375d1dfd5c36ff5720899b4918b73a8c5f4cc70b3bf`。
+- 冻结Debug：`Logs/Firmware/M4_2_2_DIAG/d3e084b1d83e/Debug/SBCG.elf`；清单 `Logs/Detector/M4_2_2/DIAG/build-manifest.json`。
+
+DIAG已获用户对本镜像的明确授权，并仅A沿原配置完成烧录、校验与复位；本版不改选项字节、不主动播放声音。原R2批准未被复用，新授权及结果按本次记录。冻结镜像基于包含原用户PPS/生成文件改动的工作树，功能提交不混入这些既有改动，不能将纯提交检出构建冒充本次相同镜像。
+
+## DIAG实物定位结果及证据边界
+
+采集COM3共70.183867秒，120369字节、1205个完整行，BOOT后完整行窗口61.355118秒；精确FW/UID相符，新BOOT一次。OpenOCD退出0、Verified OK、复位成功，耗时8.694232秒；冻结Debug散列与批准值一致。
+
+| 本次观测 | 最后已收到的记录/窗口最大值 |
+| --- | --- |
+| CHIRP_DIAG | 29条；SCAN_MS59、SCORE_MS5、GAP_MS172 |
+| 分类丢弃与完成 | TIMEOUT21、HISTORY13、FULL/RANGE/RESET均0、DONE0 |
+| CHIRP_STATE | 29条；末CAND34、DROP34、MATCH0、BAD/SKIP/ERR均0、EVAL3704、PENDING0 |
+| HEARTBEAT | 58条；末TX_ERRORS208、LOG_FULL208、LOG_WRITE0、LOG_BAD0、LOG_Q20、LOG_HWM32 |
+| AUDIO | 51条；末OK342、DROP/ERR/HAL/DMA均0、VALID1、RATE_HZ48000 |
+| UI | 35条；末RUNNING、FRAMES858、ERRORS0、UPDATES58；未重新目视验屏 |
+| 目标判定 | **PASS_DIAGNOSTIC_OBSERVATION_SCOPE**；性能仍未修复 |
+
+扫描段是当前明确的主要耗时来源；这些最大值不一定来自同一次调用，不能简单相加当作严格最坏时限。评分段包含Search调度与缓存，而非纯点积。相邻Process最大172ms表明前台可发生较长间隔。21次超时和13次覆盖是诊断所报告的实际分支；日志错误在每条已收到心跳中均满足TX_ERRORS=LOG_FULL+LOG_WRITE+LOG_BAD，本窗均为队列满，没有串口写失败证据。DONE0说明本窗口尚没有完整搜索完成，不以MATCH0宣布分类质量通过。
+
+没有主动播放，但存在自然环境能量候选；没有网络或DHT验收。AUDIO和其他日志仍有缺口，累计硬件计数零不等于日志连续性通过。诊断与状态行交替约1Hz按主机已验证策略运行，缺行风险仍在，不能声称捕获了所有周期状态。
+
+**采集结束边界明确保留：** 70秒截止时最后一条SOUND_TIME只收到111字节，原raw没有末尾换行，严格完整文件验证首先拒绝。采集器将该残片按`incomplete_tail_hex`完整保存在JSONL；逐字节核对相等后，仅从分析输入排除该尾片，原始文件不改写。其余1205个完整行raw/JSON一致、严格ASCII，新BOOT后覆盖61.355118秒；本次只使用完整行定位，不以此宣称原文件尾部完整。
+
+- 原始完整raw SHA256：`9cea579f4d7127b15b303026fc72e8b27acc1ce23903e49dcf571d0c8457ffe4`。
+- 排除111字节尾片后的完整行前缀SHA256：`f024c05bf33a7e1a19a803bde759c2e80b5ee97e38986bc0677c72b580b9a002`。
+- 完整行规范化SHA256：`f60e534f1e47984298745639ade1014d447cd92e44eeba35711536a62a04dd97`。
+- 文件：`Logs/Chirp/quiet-diag-01-serial.bin`、`-serial.jsonl`、`-run.json`、`-flash.txt/.json`、`-summary.json`；摘要保留尾片hex、排除字节数及所有判定，不提交原始日志。
+
+下一软件目标：降低能量扫描的逐样本通用接口开销，再测日志队列是否仍供过于求。不能直接复用原SOUND候选替代扫频候选：原服务开/关阈值256/128，扫频门控128/64，直接替换会改变弱信号资格。应评估按64帧窗批量推进/共享统计且分别保留状态和阈值的方式，以原逐帧纯C实现作对照，保持完整搜索、End验证、失效清理和候选坐标。本轮不继续实施该下一增量。
 
 ## 初版实物失败证据与R1根因修复
 
@@ -67,7 +129,7 @@ COM3采集70.189030秒，BOOT后61.166706秒；879条原始行，排除4行旧�
 
 相比R1，本窗口音频累计丢块消失、串口错误减少，但多数搜索未完成；这些窗口不是完全相同的环境输入，不能将耗时差值当作严格性能对照。DROP包含超时、覆盖、容量及失效清理，现有日志不能证明56次全部由同一原因造成。没有网线、DHT未接，本窗不验网络、同步精度、自动温度或手机识别。
 
-下一软件增量应先拆分扫描/评分耗时及丢弃原因，降低每候选相关计算量，再处理诊断日志生产/排空的调度预算；不能仅扩大队列或延长超时来掩盖积压。新方案及实现另行推进，本次止于记录失败证据；没有新硬件配置或新IRQ/DMA/Cache关系。
+下一软件增量应先拆分扫描/评分耗时及丢弃原因，降低每候选相关计算量，再处理诊断日志生产/排空的调度预算；不能仅扩大队列或延长超时来掩盖积压。后续上文DIAG观测已实测，当前仍没有新的实物性能修复结论；无新硬件配置或IRQ/DMA/Cache关系。
 
 ## 文件变更
 
@@ -75,11 +137,11 @@ COM3采集70.189030秒，BOOT后61.166706秒；879条原始行，排除4行旧�
 - `App/Detector/chirp_service.h/.c`：CPU副本、独立队首输入缓存、候选门控、4任务搜索、8192帧/8窗预算及诊断。
 - `App/Audio/audio_capture.c`：唯一Begin内复制，真实End结果提交，归还后分批工作；保留原电平、能量候选与时间服务。
 - `cmake/audio-layout.cmake`：用户自有、可再生成保留的源码/宏注册，不修改生成CMake。
-- `App/app_main.c`：新增优先固件标识，仅本轮对应两行；原有未提交PPS部分保留、不得混入本轮提交。
+- `App/app_main.c`：新增优先固件标识及DIAG日志分类/心跳字段；原有未提交PPS部分保留、不得混入本轮提交。
 - `Tests/ChirpService/test_service.c`：窗口评分和服务所有权/预算/边界测试。
 - `Tests/ChirpService/test_capture.c`：真实AudioCapture回放，End时擦模拟DMA，验证10个实际WAV事件。
 - `Tests/ChirpService/run_tests.py`：原生O0/O2测试、逐次独立输出目录，避免并发测试争用可执行文件。
-- `Docs/Protocol.md`：仅追加M4.2.2串口定义；此前未提交PPS协议改动保留且不能混入本轮提交。
+- `Docs/Protocol.md`：仅追加M4.2.2及DIAG串口定义；此前未提交PPS协议改动保留且不能混入本轮提交。
 - `Docs/Plans/2026-10-25_Bounded_Chirp_Integration.md`：设计、阶段状态和待验收清单。
 - 本报告、`Docs/Project_State.md`、`Docs/README.md`、`Docs/Document_Status.md`、`Docs/Audio_Selection.md`：区分新固件准备与板上实物状态。
 
@@ -158,8 +220,8 @@ R1冻结Debug：`Logs/Firmware/M4_2_2_R1/94a2be871a98/Debug/SBCG.elf`，地址/�
 
 ## 未完成的验收与提交边界
 
-1. 本轮三次烧录/静默均已完成，不重复使用旧授权；R2仍失败，不作功能完成提交。
-2. 下一软件修复仍限M4.2.2：独立耗时及丢弃原因证据、相关计算预算和日志调度，保护唯一Begin/End和既有用户改动。
+1. 三次性能验证及一次DIAG定位均已完成，不重复使用旧授权；R2性能失败保留，本轮仅提交已验证的定位增量，不作识别/性能完成提交。
+2. DIAG已完成分段/分类观测；下一软件修复仍限M4.2.2，优先优化能量扫描，保留不同阈值和唯一Begin/End，再评估日志调度。
 3. 修复版完成测试、构建及复核后，新镜像另行取得烧录授权；先复验至少60秒静默下的原业务、搜索与日志完整性。
 4. 允许发声后另做手机20秒/10次文件，核对识别、重复/漏检、完整257窗及共存负载。静默不能替代这一验收。
 5. ±100μs、codec声学延迟、多径、其他播放设备和双板测距仍须独立验证。

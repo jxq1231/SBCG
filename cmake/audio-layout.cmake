@@ -12,6 +12,18 @@ if(_sbcg_audio_mode)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO=1 SBCG_USE_SOUND_DETECTOR=1)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/Detector/sound_detector.c App/Detector/sound_detector_service.c)
+    # CPU-owned copied PCM and bounded post-End search; no hardware changes.
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_CHIRP=1)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        App/Detector/chirp_matcher.c App/Detector/chirp_template.c
+        App/Detector/chirp_window.c App/Detector/chirp_service.c)
+    # Quiet R1 measurement with EVAL=0 showed 79 ms in the O0 gate/scan path.
+    # Optimize the complete PCM hot path in Debug, including the shared gate;
+    # preserve its tested integer semantics, no fast-math or hardware changes.
+    set_source_files_properties(
+        App/Detector/chirp_window.c App/Detector/chirp_service.c
+        App/Detector/sound_detector.c PROPERTIES
+        COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/BSP/bsp_audio.c App/Audio/audio_capture.c App/Audio/audio_statistics.c
         App/Audio/audio_frame_index.c)

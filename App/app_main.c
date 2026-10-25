@@ -4,7 +4,7 @@
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
- *              不承担IRQ处理；页面绘制与双板校时交由独立服务。
+ *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时交由各独立服务。
  */
 #include "app_main.h"
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
@@ -62,7 +62,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与有界日志队列；常规16行，事件时间版本32行，每行256字节。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_TOUCHGFX) && defined(SBCG_USE_RESET_DIAGNOSTIC)
+#if defined(SBCG_USE_CHIRP)
+#define APP_FIRMWARE_ID "SBCG-M4.2-DIAG"
+#elif defined(SBCG_USE_TOUCHGFX) && defined(SBCG_USE_RESET_DIAGNOSTIC)
 #define APP_FIRMWARE_ID "SBCG-U3.1-RESET"
 #elif defined(SBCG_USE_TOUCHGFX)
 #define APP_FIRMWARE_ID "SBCG-U3.1-TOUCHGFX"
@@ -97,13 +99,19 @@
 #else
 #define APP_LOG_QUEUE_CAPACITY 16U
 #endif
-/* BOOT/heartbeat remain short; allow longer service logs without larger locals. */
+/* 诊断心跳含日志原因与队列状态，满宽uint32字段仍须完整放入同一行。 */
+#ifdef SBCG_USE_CHIRP
+#define APP_STATUS_LINE_CAPACITY APP_LOG_LINE_CAPACITY
+#else
 #define APP_STATUS_LINE_CAPACITY 160U
+#endif
 
 static uint32_t last_heartbeat_ms;
 static uint32_t heartbeat_seq;
 /* Also observable in a debugger if the UART cannot send any text. */
 static volatile uint32_t app_tx_error_count;
+/* 与原TX_ERRORS相同的uint32自然回绕累计；队列深度和峰值单位为行。 */
+static uint32_t log_full_count,log_write_count,log_bad_count,log_high_water;
 /* UART is synchronous. Preserve legacy logs while the nonblocking DHT start
    pulse is active, without pausing Ethernet/PTP processing or changing IRQs. */
 static char pending_lines[APP_LOG_QUEUE_CAPACITY][APP_LOG_LINE_CAPACITY];
@@ -121,7 +129,7 @@ static bool app_identity_configured;
  * @brief   在DHT起始低电平结束后，尝试发送队首的一行日志。
  * @return  无返回值（void）。
  * @note    输入来自本模块待发队列；无数据或start-low期间不发送。
- *          串口写失败累计错误但仍移除该行，每次调用最多处理一行。
+ *          串口写失败累计TX_ERRORS和LOG_WRITE但仍移除该行，每次调用最多处理一行。
  */
 static void FlushOneLine(void)
 {
@@ -129,6 +137,7 @@ static void FlushOneLine(void)
     if (!BSP_Console_Write(pending_lines[pending_head], pending_lengths[pending_head]))
     {
         ++app_tx_error_count;
+        ++log_write_count;
     }
     pending_head = (pending_head + 1U) % APP_LOG_QUEUE_CAPACITY;
     --pending_count;
@@ -139,7 +148,7 @@ static void FlushOneLine(void)
  * @param   line 有效ASCII日志缓冲区；由调用者持有，必要时本函数同步复制。
  * @param   length 待发字节数，合法范围1～255，不包括字符串结尾的空字符。
  * @return  无返回值（void）。
- * @note    各服务以前台回调方式调用；长度非法、队满或串口失败累计TX_ERRORS。
+ * @note    各服务以前台回调调用；长度非法、队满、写失败分别累计LOG_BAD/FULL/WRITE及原TX_ERRORS。
  *          此处未检查line是否为NULL，调用方必须保证长度范围内的内存有效。
  */
 static void SendLine(const char *line, int length)
@@ -147,6 +156,7 @@ static void SendLine(const char *line, int length)
     if ((length <= 0) || ((size_t)length >= APP_LOG_LINE_CAPACITY))
     {
         ++app_tx_error_count;
+        ++log_bad_count;
         return;
     }
 
@@ -160,18 +170,21 @@ static void SendLine(const char *line, int length)
         if (pending_count == APP_LOG_QUEUE_CAPACITY)
         {
             ++app_tx_error_count;
+            ++log_full_count;
             return;
         }
         const uint32_t tail = (pending_head + pending_count) % APP_LOG_QUEUE_CAPACITY;
         memcpy(pending_lines[tail], line, (size_t)length);
         pending_lengths[tail] = (uint16_t)length;
         ++pending_count;
+        if(pending_count>log_high_water){log_high_water=pending_count;}
         return;
     }
 
     if (!BSP_Console_Write(line, (uint16_t)length))
     {
         ++app_tx_error_count;
+        ++log_write_count;
     }
 }
 
@@ -304,6 +317,7 @@ void App_Init(void)
 
     heartbeat_seq = 0U;
     app_tx_error_count = 0U;
+    log_full_count=log_write_count=log_bad_count=log_high_water=0U;
     pending_head = pending_count = 0U;
     BSP_Console_GetInfo(&info);
     const int length = snprintf(line, sizeof(line),
@@ -431,8 +445,16 @@ void App_Process(void)
         ++heartbeat_seq;
         char line[APP_STATUS_LINE_CAPACITY];
         const int length = snprintf(line, sizeof(line),
+#ifdef SBCG_USE_CHIRP
+            "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32
+            ",LOG_FULL=%" PRIu32 ",LOG_WRITE=%" PRIu32 ",LOG_BAD=%" PRIu32
+            ",LOG_Q=%" PRIu32 ",LOG_HWM=%" PRIu32 "\r\n",
+            heartbeat_seq,now_ms,(uint32_t)app_tx_error_count,log_full_count,
+            log_write_count,log_bad_count,pending_count,log_high_water);
+#else
             "$HEARTBEAT,SEQ=%" PRIu32 ",TICK_MS=%" PRIu32 ",TX_ERRORS=%" PRIu32 "\r\n",
             heartbeat_seq, now_ms, (uint32_t)app_tx_error_count);
+#endif
         SendLine(line, length);
     }
     EthernetMonitor_Process(BSP_Console_GetTickMs());
