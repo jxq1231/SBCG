@@ -45,30 +45,32 @@ bool AudioStatistics_Compute(const volatile int16_t *samples,
 {
     if (samples == NULL || output == NULL || frame_count == 0U ||
         frame_count > UINT16_MAX) { return false; }
-    AudioStatistics result = {0};
-    uint64_t energy[2] = {0};
-    for (unsigned c = 0; c < 2U; ++c)
+    /* 双声道展开为局部标量，去掉内层循环和结构体索引；整数和与字段语义不变。 */
+    int16_t minimum0 = INT16_MAX, maximum0 = INT16_MIN;
+    int16_t minimum1 = INT16_MAX, maximum1 = INT16_MIN;
+    uint32_t peak0 = 0U, peak1 = 0U;
+    uint64_t energy0 = UINT64_C(0), energy1 = UINT64_C(0);
+    const volatile int16_t *cursor = samples;
+    for (uint32_t i = 0U; i < frame_count; ++i)
     {
-        result.channel[c].minimum = INT16_MAX;
-        result.channel[c].maximum = INT16_MIN;
+        const int32_t value0 = *cursor++;
+        const int32_t value1 = *cursor++;
+        const uint32_t magnitude0 = (uint32_t)(value0 < 0 ? -value0 : value0);
+        const uint32_t magnitude1 = (uint32_t)(value1 < 0 ? -value1 : value1);
+        if (value0 < minimum0) { minimum0 = (int16_t)value0; }
+        if (value0 > maximum0) { maximum0 = (int16_t)value0; }
+        if (value1 < minimum1) { minimum1 = (int16_t)value1; }
+        if (value1 > maximum1) { maximum1 = (int16_t)value1; }
+        if (magnitude0 > peak0) { peak0 = magnitude0; }
+        if (magnitude1 > peak1) { peak1 = magnitude1; }
+        energy0 += (uint64_t)magnitude0 * magnitude0;
+        energy1 += (uint64_t)magnitude1 * magnitude1;
     }
-    for (uint32_t i = 0; i < frame_count; ++i)
-    {
-        for (unsigned c = 0; c < 2U; ++c)
-        {
-            const int32_t value = *samples++;
-            AudioChannelStatistics *channel = &result.channel[c];
-            const uint32_t magnitude = (uint32_t)(value < 0 ? -value : value);
-            if (value < channel->minimum) { channel->minimum = (int16_t)value; }
-            if (value > channel->maximum) { channel->maximum = (int16_t)value; }
-            if (magnitude > channel->peak) { channel->peak = magnitude; }
-            energy[c] += (uint64_t)magnitude * magnitude;
-        }
-    }
-    for (unsigned c = 0; c < 2U; ++c)
-    {
-        result.channel[c].rms = SquareRoot(energy[c] / frame_count);
-    }
+    AudioStatistics result;
+    result.channel[0] = (AudioChannelStatistics){
+        minimum0, maximum0, peak0, SquareRoot(energy0 / frame_count)};
+    result.channel[1] = (AudioChannelStatistics){
+        minimum1, maximum1, peak1, SquareRoot(energy1 / frame_count)};
     *output = result;
     return true;
 }
