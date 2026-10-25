@@ -16,6 +16,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
+| 扫频识别现在做到哪一步 | [M4.2.1匹配核心](Milestones/M4_2_1_Chirp_Matcher_Core.md) | 纯C/电脑端通过，未接入固件；先处理实时预算，再做手机实测 |
 | 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
 | 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 正文为历史口头稿，先看页首U3.1更新；当前TouchGFX无RTOS |
 | 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
@@ -26,7 +27,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
 | 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；TouchGFX已实屏验收，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
 | 串口和UDP字段 | [Protocol](Protocol.md) | 协议为现行接口，历史固件标识仅说明首次引入版本 |
-| 自选标准音频和下载素材 | [Audio_Selection](Audio_Selection.md) | 老师允许自行选择；短扫频候选文件已准备，模板检测与实机识别率未验收 |
+| 自选标准音频和下载素材 | [Audio_Selection](Audio_Selection.md) | 老师允许自行选择；素材和纯C核心已准备，板端识别率未验收 |
 | 网页串口怎么使用 | [SerialWeb](SerialWeb.md) | 115200/8N1；当前已支持手动温度命令；后半为早期发送实验 |
 | 仅核对SYS/RCC | [CubeMX_Step1](CubeMX_Step1.md) | 已完成的系统基线，不重复启用外设 |
 | 最近一次板端实验详情 | [M4.1.3静默验收](Milestones/M4_1_3_Sound_Event_Time.md) | 原失败保留，R1后67.933秒静默窗口与9条模型结果 |
