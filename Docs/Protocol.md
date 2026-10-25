@@ -441,3 +441,17 @@ $CHIRP_DIAG,SCAN_MS=3,SCORE_MS=5,GAP_MS=80,TIMEOUT=0,HISTORY=0,FULL=0,RANGE=0,RE
 - `JOB_MS=1500`仍为任务/副本期限，超期任务记TIMEOUT并按`DROP_MAX_MS`报告。完成时延≤1000ms是受控负载下的工程目标，不是本协议保证，也不把丢弃样本从统计中剔除。
 
 2026-10-26 A板Debug（`SBCG-M4.2-BATCH`）静默实测：SCAN_MS最大3、DONE_MAX_MS=831、丢弃原因/日志/音频错误全0；主动标准音频与MATCH未验收。详见[M4.2.3-B记录](Milestones/M4_2_3_B_Batch_Scan.md)。
+
+## M4.2.4-A2 同循环前台归因（CHIRP构建心跳追加字段）
+
+仅CHIRP构建在`$HEARTBEAT`的`LOG_HWM`后追加四个uint32最大毫秒字段；非CHIRP构建心跳格式不变：
+
+```text
+$HEARTBEAT,SEQ=10,TICK_MS=10000,TX_ERRORS=5,LOG_FULL=5,LOG_WRITE=0,LOG_BAD=0,LOG_Q=20,LOG_HWM=32,LOOP_MS=54,AUDIO_MS=7,UI_MS=26,OTHER_MS=21
+```
+
+- `LOOP_MS`：`App_Process`入口（身份检查后）到`FlushOneLine()`后的迄今最大单轮HAL毫秒差，包含本诊断自身读取与心跳追加字段。
+- `AUDIO_MS`/`UI_MS`：上述最大轮内`AudioCapture_Process`与UI处理（TouchGFX或LCD）的HAL毫秒耗时；UI不含其日志`Report()`格式/发送，AUDIO含其内部服务与日志处理。
+- `OTHER_MS`：`LOOP_MS-AUDIO_MS-UI_MS`的残差（下溢钳0），包含`FlushOneLine`同步UART、LwIP、温度/PTP/PPS、AudioAnchor/SOUND_TIME、SDRAM等，不是纯CPU或“未解释时间”。
+- **采样口径限制**：`GAP_MS`在`AudioCapture_Process`内相邻`ChirpService_Process`之间测量；DHT起始低电平会整轮跳过UI、日志跳过时下一次GAP可能跨多轮。LOOP_MS与GAP_MS不是同一采样点，只能作同调度周期的近似对照，**不得用LOOP_MS−GAP_MS推断未归因时间**。
+- 只保留迄今最大一轮的分解；较慢轮被记录后，后续轮次不会覆盖，除非出现更慢轮。0表示未跨HAL tick或未发生；1ms分辨率，不是最坏执行时间或声学精度证据。
