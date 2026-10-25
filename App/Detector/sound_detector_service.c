@@ -92,11 +92,12 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
     return true;
 }
 /**
- * @brief 在已有Begin认领内暂算整个交错PCM半块。
+ * @brief 在已有Begin认领内暂算整个交错PCM半块；64点批量入口优先，其他配置自动回退。
  * @param now_ms 当前HAL毫秒，校验完成块年龄。
  * @param block 非NULL借用描述符，仅本次调用访问其中PCM。
  * @return true为暂存完成，false为元数据/生命周期错误，之后都须Complete。
- * @note 工作副本推进全部8192帧；不打印、不保存PCM指针，不改已提交计数或状态。
+ * @note 工作副本推进全部8192帧；每次从交错PCM抽取最多64点到128字节局部缓冲，不新增整块
+ *       单声道BSS，不保存PCM指针，不改已提交计数或状态。
  */
 bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
 {
@@ -113,18 +114,26 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
         block->first_frame!=current.last_frame+1U);
     if(boundary)(void)SoundDetector_Reset(&working);
     const uint32_t begin_ms=BSP_Console_GetTickMs();
-    for(uint32_t i=0U;i<block->frame_count;++i)
+    int16_t batch[SOUND_DETECTOR_BATCH_MAX_FRAMES];
+    uint32_t offset=0U;
+    while(offset<block->frame_count)
     {
-        SoundCandidate event;
-        const SoundDetectorResult result=SoundDetector_Push(&working,block->session,block->first_frame+i,
-            block->samples[2U*i+diagnostics.channel],&event);
-        if(result==SOUND_DETECTOR_INVALID || result==SOUND_DETECTOR_DISCONTINUITY)
-        { RecordStageTime(begin_ms);return false; }
+        const uint32_t remaining=block->frame_count-offset;
+        const uint16_t available=(uint16_t)(remaining<SOUND_DETECTOR_BATCH_MAX_FRAMES ?
+            remaining:SOUND_DETECTOR_BATCH_MAX_FRAMES);
+        for(uint16_t i=0U;i<available;++i)
+            batch[i]=block->samples[2U*(offset+i)+diagnostics.channel];
+        SoundCandidate event;uint16_t consumed=0U;
+        const SoundDetectorResult result=SoundDetector_PushBatch(&working,block->session,
+            block->first_frame+offset,batch,available,&consumed,&event);
+        if(consumed==0U || consumed>available){RecordStageTime(begin_ms);return false;}
+        offset+=consumed;
         if(result==SOUND_DETECTOR_EVENT)
         {
             ++staged_total;
             if(staged_count<SOUND_DETECTOR_QUEUE_CAPACITY)staged[staged_count++]=event;
         }
+        else if(result!=SOUND_DETECTOR_NONE){RecordStageTime(begin_ms);return false;}
     }
     RecordStageTime(begin_ms);
     stage_valid=true;return true;

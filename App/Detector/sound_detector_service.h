@@ -11,7 +11,7 @@
 #define SOUND_DETECTOR_QUEUE_CAPACITY 4U
 extern const SoundDetectorConfig SoundDetectorService_DefaultConfig;
 /** @brief 服务计数饱和递增，pending为当前已验证队列条数，armed仅是能量检测布防。
- *  max_stage_ms为Stage内8192帧逐帧暂算循环的最大HAL毫秒（不含入口校验/工作副本拷贝）；
+ *  max_stage_ms为Stage内8192帧批量/逐帧回退暂算循环的最大HAL毫秒（不含入口校验/工作副本拷贝）；
  *  max_process_ms为Process入口守卫后到返回的最大HAL毫秒（包含日志格式化/发送）。 */
 typedef struct {
     uint32_t valid_blocks,rejected_blocks,resets,candidates,dropped,errors;
@@ -35,7 +35,8 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
  * @param now_ms 当前HAL毫秒，用于块年龄<250ms校验。
  * @param block 只读Begin描述符及借用PCM，仅本调用内访问，须在End前调用。
  * @return true表示已完成暂存，false为无效元数据/生命周期；任何结果之后均须Complete。
- * @note 不打印、不发布、不调用Begin/End；8192帧可产生多个候选，超4条暂存损失待End成功才计数。
+ * @note 不打印、不发布、不调用Begin/End；优先使用64点批量入口，未满足快速资格时按原逐帧回退；
+ *       8192帧可产生多个候选，超4条暂存损失待End成功才计数。
  */
 bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block);
 /**
