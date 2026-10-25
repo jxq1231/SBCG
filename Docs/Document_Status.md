@@ -20,6 +20,8 @@
 
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
+| [启动原因诊断](Milestones/U3_Reset_Diagnosis.md) | 记录能力已实测·历史根因未明 | 当前诊断固件、三组对照及尚未关闭的问题 |
+| [诊断计划](Plans/U3_Reset_Diagnosis/task_plan.md) | 本轮实施记录·根因仍开放 | 不重复已完成对照，不将记录能力当根因修复 |
 | [U3.1状态页记录](Milestones/U3_1_TouchGFX_Status_Page.md) | 显示范围通过·首窗重启未解 | 当前固件、首帧竞态修复、SDK复现及待补范围 |
 | [U3.1状态页计划](Plans/2026-10-25_TouchGFX_Status_Page.md) | 已完成·历史计划 | 已生成NoOS/CRC/LTDC IRQ，不重复硬件设置 |
 | [U2状态页验收](Milestones/U2_LTDC_Status_Page.md) | 历史后端·单A实屏通过 | 初版失败、R1/R2修复、温度页面联动及证据边界 |

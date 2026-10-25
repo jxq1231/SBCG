@@ -72,3 +72,14 @@ class TouchGFXAnalysisTests(unittest.TestCase):
         self.assertEqual(raw,b'$DATA,A=1\n')
         self.assertEqual(tail,b'$HEARTBEAT,SEQ=2')
         self.assertEqual(len(rows),1)
+
+    def test_reset_firmware_must_be_selected_explicitly(self):
+        import touchgfx_status_analysis as analysis
+        raw=b'$BOOT,FW=SBCG-U3.1-RESET,UID=1\n$DATA,A=1\n'
+        rows=[dict(elapsed_s=i,line=p.decode()) for i,p in enumerate(raw[:-1].split(b'\n'))]
+        with self.assertRaises(ValueError):analysis.select_reset_window(raw,rows)
+        selected,_=analysis.select_reset_window(raw,rows,firmware='SBCG-U3.1-RESET')
+        self.assertIn('SBCG-U3.1-RESET',selected[0]['line'])
+
+    def test_reset_firmware_report_identity_matches_selection(self):
+        self.assertEqual(evaluate(self.rows,self.prior,firmware='SBCG-U3.1-RESET')['firmware'],'SBCG-U3.1-RESET')

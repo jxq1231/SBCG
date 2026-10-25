@@ -23,6 +23,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
+#ifdef SBCG_USE_RESET_DIAGNOSTIC
+#include "BSP/bsp_reset.h"
+#endif
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -80,7 +83,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+#ifdef SBCG_USE_RESET_DIAGNOSTIC
+  /* 在HAL/时钟初始化前保存并清除累计复位状态，不改变时钟或引脚配置。 */
+  BSP_Reset_Capture();
+#endif
   /* USER CODE END 1 */
 
   /* MPU Configuration--------------------------------------------------------*/

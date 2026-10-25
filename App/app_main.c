@@ -7,6 +7,9 @@
  *              不承担IRQ处理；页面绘制与双板校时交由独立服务。
  */
 #include "app_main.h"
+#ifdef SBCG_USE_RESET_DIAGNOSTIC
+#include "BSP/bsp_reset.h"
+#endif
 #ifdef SBCG_USE_TOUCHGFX
 #include "UI/touchgfx_service.h"
 #include "BSP/bsp_touchgfx_display.h"
@@ -59,7 +62,9 @@
  * 作用：按编译功能组合标识固件，维护心跳与有界日志队列；常规16行，事件时间版本32行，每行256字节。
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
-#if defined(SBCG_USE_TOUCHGFX)
+#if defined(SBCG_USE_TOUCHGFX) && defined(SBCG_USE_RESET_DIAGNOSTIC)
+#define APP_FIRMWARE_ID "SBCG-U3.1-RESET"
+#elif defined(SBCG_USE_TOUCHGFX)
 #define APP_FIRMWARE_ID "SBCG-U3.1-TOUCHGFX"
 #elif defined(SBCG_USE_LCD)
 #define APP_FIRMWARE_ID "SBCG-U2-STATUS-R2"
@@ -244,12 +249,35 @@ static void ReportSdram(uint32_t now_ms)
  * 调度顺序：外设生成初始化之后执行；先拆外层网络包装，再按依赖顺序安装。
  * 调用关系：main调用一次；保留既有重复初始化保护，不在这里改外设配置。
  */
+#ifdef SBCG_USE_RESET_DIAGNOSTIC
 /**
- * @brief   读取板卡身份并按依赖顺序初始化当前构建启用的应用服务。
- * @return  无返回值（void）。
- * @note    依赖已初始化的UART/I2C/LwIP/SAI等资源；服务通过SendLine报告状态。
- *          事件时间版本统一排队，App_Process每轮至多排空一行，避免周期突发阻塞PCM归还。
- *          先拆PTP最外层再拆UDPTimeExchange；任一所有权不能安全拆除时立即返回。
+ * @brief BOOT后输出本次早期捕获的原始复位状态，不推断唯一根因。
+ * @return 无返回值；使用原有有界前台日志队列，未捕获明确记CAPTURED=0。
+ * @note FLAGS为CSR高七位，位可同时置位；CLEAR_OK表示旧标志已清除，供下一次启动比较。
+ */
+static void ReportReset(void)
+{
+    BSP_ResetSnapshot reset = {0};
+    const bool captured = BSP_Reset_GetSnapshot(&reset);
+    char line[APP_LOG_LINE_CAPACITY];
+    const uint32_t flags = reset.reset_flags;
+    const int length = snprintf(line, sizeof line,
+        "$RESET,CSR=%08" PRIX32 ",FLAGS=%08" PRIX32 ",PIN=%u,POR=%u,BOR=%u,SFT=%u"
+        ",IWDG=%u,WWDG=%u,LPWR=%u,CLEAR_OK=%u,CAPTURED=%u\r\n",
+        reset.raw_csr, flags, (unsigned)((flags >> 26U) & 1U),
+        (unsigned)((flags >> 27U) & 1U), (unsigned)((flags >> 25U) & 1U),
+        (unsigned)((flags >> 28U) & 1U), (unsigned)((flags >> 29U) & 1U),
+        (unsigned)((flags >> 30U) & 1U), (unsigned)((flags >> 31U) & 1U),
+        captured && reset.clear_ok ? 1U : 0U, captured ? 1U : 0U);
+    SendLine(line, length);
+}
+#endif
+
+/**
+ * @brief 读取身份并按依赖顺序初始化，诊断版本在BOOT后排队一次复位副本。
+ * @return 无返回值。
+ * @note 依赖生成初始化；先拆最外层PTP再拆UDPTimeExchange，所有权失败则返回。
+ *       前台队列每轮至多发送一行，避免周期突发阻塞PCM归还；不自行触发复位。
  */
 void App_Init(void)
 {
@@ -283,6 +311,9 @@ void App_Init(void)
         ",UID_W0=%08" PRIX32 ",UID_W1=%08" PRIX32 ",UID_W2=%08" PRIX32 "\r\n",
         info.core_clock_hz, info.uid_words[0], info.uid_words[1], info.uid_words[2]);
     SendLine(line, length);
+#ifdef SBCG_USE_RESET_DIAGNOSTIC
+    ReportReset();
+#endif
     last_heartbeat_ms = BSP_Console_GetTickMs();
 #ifdef SBCG_USE_BOARD_IDENTITY
     const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();

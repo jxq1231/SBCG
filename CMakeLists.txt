@@ -56,6 +56,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     App/app_main.c
     App/BSP/bsp_console.c
+    App/BSP/bsp_reset.c
     App/BSP/bsp_ethernet.c
     App/Network/ethernet_monitor.c
     App/Sync/sync_estimator.c
@@ -104,6 +105,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
+    SBCG_USE_RESET_DIAGNOSTIC=1
 )
 
 # Remove wrong libob.a library dependency when using cpp files

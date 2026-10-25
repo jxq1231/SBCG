@@ -8,9 +8,9 @@ import ui_status_analysis as legacy
 FIRMWARE='SBCG-U3.1-TOUCHGFX'
 
 
-def select_reset_window(raw,records):
+def select_reset_window(raw,records,firmware=FIRMWARE):
     """Use the established strict raw proof, including an interrupted old UART line."""
-    lines,proof=legacy.pipeline.validate_boot_capture(raw,records,FIRMWARE)
+    lines,proof=legacy.pipeline.validate_boot_capture(raw,records,firmware)
     start=proof['discarded_pre_boot_lines']
     selected=[dict(row,line=line) for row,line in zip(records[start:],lines)]
     return selected,proof
@@ -27,7 +27,7 @@ def complete_capture(original,records):
     return raw+b'\n',records[:-1],tail
 
 
-def evaluate(records,prior):
+def evaluate(records,prior,firmware=FIRMWARE):
     """Retain all quiet-pipeline gates and independently check 1Hz data progress."""
     result=legacy.evaluate(records,prior)
     rows=[(row.get('elapsed_s',0),legacy.pipeline.fields(row['line'])[1])
@@ -45,29 +45,30 @@ def evaluate(records,prior):
     except (KeyError,ValueError):
         checks['live_data_generation']=False
     result['status']='PASS_TOUCHGFX_RUNTIME_PENDING_VISUAL' if all(checks.values()) else 'FAIL_OR_INCOMPLETE'
-    result['firmware']=FIRMWARE
+    result['firmware']=firmware
     result['scope']='single A, no cable/sound; frame count and data generation are distinct'
     return result
 
 
-def analyze(prefix):
+def analyze(prefix,firmware=FIRMWARE):
     """Analyze one immutable capture and preserve its exact reset-boundary proof."""
     run=json.loads(Path(str(prefix)+'-run.json').read_text(encoding='utf-8'))
     records=[json.loads(line) for line in Path(str(prefix)+'-serial.jsonl').read_text(encoding='utf-8').splitlines()]
     original=Path(str(prefix)+'-serial.bin').read_bytes()
     raw,records,tail=complete_capture(original,records)
-    records,proof=select_reset_window(raw,records)
-    prior=legacy.pipeline.evaluate(records,run,1,quiet=True,expected_firmware=FIRMWARE)
+    records,proof=select_reset_window(raw,records,firmware)
+    prior=legacy.pipeline.evaluate(records,run,1,quiet=True,expected_firmware=firmware)
     prior['integrity']={**proof,'original_raw_sha256':hashlib.sha256(original).hexdigest(),
                         'excluded_tail_bytes':len(tail),'excluded_tail_hex':tail.hex()}
-    return evaluate(records,prior)
+    return evaluate(records,prior,firmware)
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prefix',type=Path,required=True)
+    parser.add_argument('--firmware',choices=(FIRMWARE,'SBCG-U3.1-RESET'),default=FIRMWARE)
     args=parser.parse_args()
-    try:result=analyze(args.prefix)
+    try:result=analyze(args.prefix,args.firmware)
     except (OSError,ValueError,KeyError,IndexError) as error:
         result={'status':'FAIL_OR_INCOMPLETE','error':str(error),
                 'physical_panel_verified':False,'external_sync_precision_verified':False}

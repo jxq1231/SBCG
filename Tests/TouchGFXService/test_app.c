@@ -14,6 +14,7 @@ void UI_TouchGFX_Init(uint32_t now,void(*log)(const char*,int))
 void UI_TouchGFX_Process(uint32_t now,bool allow)
 {assert(audio_calls==lwip_calls&&now==tick_ms&&allow==!temperature_low);++framework_calls;}
 /** @brief 执行真实App与两种显示后端互斥断言。@return 全部通过为0。 */
+#ifndef SBCG_TEST_SKIP_TOUCH_MAIN
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);
@@ -24,3 +25,4 @@ int main(void)
  puts("PASS TouchGFX App: preclear before audio, framework after services, exclusive UI dispatch, current DHT gate");
  return 0;
 }
+#endif

@@ -376,3 +376,15 @@ $UI,STATE=RUNNING,FRAMES=3966,ERRORS=0,DISCARDS=0,CAPTURE_MS=81893,ROLE=A,NET=DO
 - `CAPTURE_MS`：HAL毫秒计数；`TEMP_MC`有符号毫摄氏度、`C_MM_S`无符号毫米/秒，仅`TEMP_VALID=1`时可用。`TEMP_VALID=0`行内0不代表0°C，屏上显示占位。
 
 当前A参考显示LOCAL REFERENCE且偏差--，不伪造0偏差。即使B以后显示INTERNAL LOCK，仍不代表外部±10us验收。完整单板证据及首次窗口未知重启见[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md)。
+
+## 启动原因诊断（SBCG-U3.1-RESET）
+
+BOOT之后新增一条ASCII/CRLF日志，原UDP和周期业务保持原协议：
+
+```text
+$RESET,CSR=14000000,FLAGS=14000000,PIN=1,POR=0,BOR=0,SFT=1,IWDG=0,WWDG=0,LPWR=0,CLEAR_OK=1,CAPTURED=1
+```
+
+CSR为早期读取的完整uint32十六进制原值，FLAGS=CSR&FE000000；PIN/POR/BOR/SFT/IWDG/WWDG/LPWR分别为26/27/25/28/29/30/31位的0/1值。多位可同时置位，PIN1不等于人工按键；上述数据是明确软件复位对照的实测结果。
+
+CAPTURED1表示早期单次捕获存在；CLEAR_OK1表示保存后清除旧累计复位标志并读回成功。Get不再次清标志，任一资格为0时不能把下次标志直接当独立新原因。CSR是状态记录，不是纳秒时间，也不承诺唯一根因。历史额外启动仍待复现，见[诊断报告](Milestones/U3_Reset_Diagnosis.md)。
