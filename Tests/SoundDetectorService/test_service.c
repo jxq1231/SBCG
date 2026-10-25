@@ -4,6 +4,7 @@
  * @note 合成PCM及状态快照，不访问实物。
  */
 #include "Detector/sound_detector_service.h"
+#include "BSP/bsp_console.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,13 +15,17 @@ static BSP_AudioSnapshot health;
 static unsigned candidate_logs,state_logs,all_logs;
 static bool borrowed;
 static char last_candidate[256];
+static char last_state[256];
 static SoundDetectorConfig config={4,8,2,2,2,0};
+static uint32_t service_tick,service_step;
+/** @brief 受控HAL毫秒；service_step非零时每次读取推进，用于验证计时字段语义。 */
+uint32_t BSP_Console_GetTickMs(void){service_tick+=service_step;return service_tick;}
 /** @brief 验证只在归还后发送有界完整行；text为借用文本、length为字节数，无返回值。 */
 static void Log(const char *text,int length)
 {
  CHECK(!borrowed && length>1 && length<256 && text[length-2]=='\r' && text[length-1]=='\n');++all_logs;
  if(strncmp(text,"$SOUND_CAND,",12)==0){memcpy(last_candidate,text,(size_t)length);last_candidate[length]=0;++candidate_logs;}
- if(strncmp(text,"$SOUND_STATE,",13)==0)++state_logs;
+ if(strncmp(text,"$SOUND_STATE,",13)==0){memcpy(last_state,text,(size_t)length);last_state[length]=0;++state_logs;}
 }
 /** @brief 复制公开状态；无参数，返回只读测试副本。 */
 static SoundDetectorServiceSnapshot Snap(void){SoundDetectorServiceSnapshot s;SoundDetectorService_GetSnapshot(&s);return s;}
@@ -109,5 +114,38 @@ static void TestOther(void)
  SoundDetectorService_GetSnapshot(NULL);
  puts("PASS other: selected channel, tick wrap, bounded uint64 logs, invalid init and unpaired transaction reject");
 }
+/** @brief 验证Stage/Process最大毫秒计数只在真实调用后更新、初始化归零；无参数，无返回值。 */
+static void TestTiming(void)
+{
+ service_tick=100U;service_step=0U;Setup(100U,0U);
+ SoundDetectorServiceSnapshot s=Snap();
+ CHECK(s.max_stage_ms==0U && s.max_process_ms==0U);
+ service_step=2U;Tone(8,8192,0);borrowed=true;CHECK(SoundDetectorService_Stage(100,&block));
+ borrowed=false;CHECK(SoundDetectorService_Complete(true));service_step=0U;
+ s=Snap();CHECK(s.max_stage_ms==2U && s.max_process_ms==0U);
+ service_step=3U;SoundDetectorService_Process(250,&health);service_step=0U;
+ s=Snap();CHECK(s.max_process_ms==3U && s.max_stage_ms==2U);
+ /* 回绕与“先大后小”仍保持最大值。 */
+ service_tick=UINT32_MAX-1U;service_step=2U;borrowed=true;CHECK(SoundDetectorService_Stage(100,&block));
+ borrowed=false;CHECK(SoundDetectorService_Complete(true));service_step=0U;
+ s=Snap();CHECK(s.max_stage_ms==2U);
+ service_step=1U;borrowed=true;CHECK(SoundDetectorService_Stage(100,&block));
+ borrowed=false;CHECK(SoundDetectorService_Complete(true));service_step=0U;
+ s=Snap();CHECK(s.max_stage_ms==2U);
+ Setup(500U,0U);s=Snap();CHECK(s.max_stage_ms==0U && s.max_process_ms==0U);
+ puts("PASS timing: bounded stage/process max HAL ms, wrap/max-hold and reset on reinit");
+}
+/** @brief 验证$SOUND_STATE始终包含计时字段，且持续故障快照仍按原1000ms节流输出状态；无参数，无返回值。 */
+static void TestStateLogging(void)
+{
+ Setup(0U,0U);
+ SoundDetectorService_Process(1000U,&health);
+ CHECK(state_logs==1U && strstr(last_state,",STAGE_MS=")!=NULL && strstr(last_state,",PROC_MS=")!=NULL);
+ health.running=false;
+ const unsigned before=state_logs;
+ SoundDetectorService_Process(2000U,&health);CHECK(state_logs==before+1U);
+ SoundDetectorService_Process(3000U,&health);CHECK(state_logs==before+2U);
+ puts("PASS state log: timing fields present and fault path keeps periodic $SOUND_STATE");
+}
 /** @brief 运行真实服务边界测试；无参数，成功0。 */
-int main(void){TestCommit();TestRejected();TestQueue();TestBoundaries();TestOther();puts("PASS sound service: 5 groups");return 0;}
+int main(void){TestCommit();TestRejected();TestQueue();TestBoundaries();TestOther();TestTiming();TestStateLogging();puts("PASS sound service: 7 groups + timing");return 0;}

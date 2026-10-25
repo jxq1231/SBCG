@@ -14,11 +14,13 @@
 #include "Detector/sound_detector_service.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 unsigned framework_inits, framework_calls, bsp_inits;
 static unsigned polls, reveals, captures, logs;
 static bool init_ok=true, irq_advance, framework_error;
 static uint32_t tick;
+static uint32_t clock_reads,clock_step;
 static BoardIdentityProfile identity;
 static BSP_TouchGFXDisplaySnapshot lcd;
 static TemperatureSnapshot temp;
@@ -42,12 +44,18 @@ void TimeSync_GetSnapshot(uint32_t n,TimeSyncSnapshot*out){assert(n==tick);*out=
 void TemperatureService_GetSnapshot(uint32_t n,TemperatureSnapshot*out){assert(n==tick);*out=temp;}
 /** @brief 模拟快照期间到达的新音频IRQ时间。@param out 非NULL输出。@return 无返回值。 */
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot*out){*out=audio;out->last_callback_ms=tick+(irq_advance?1U:0U);}
-/** @brief 返回复制音频副本之后的测试毫秒。@return 当前毫秒，必要时比入口晚1ms。 */
-uint32_t BSP_Console_GetTickMs(void){return tick+(irq_advance?1U:0U);}
+/** @brief 返回复制音频副本之后的测试毫秒；clock_step非零时每次读取递增，用于UI计时测试。 */
+uint32_t BSP_Console_GetTickMs(void)
+{
+ const uint32_t now=tick+(irq_advance?1U:0U)+clock_reads*clock_step;
+ ++clock_reads;
+ return now;
+}
 /** @brief 提供只读候选计数。@param out 非NULL输出。@return 无返回值。 */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot*out){*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=7};}
-/** @brief 检查有界机器日志。@param s 本次有效文本，不保存地址。@param n 字节长度。@return 无返回值。 */
-static void Log(const char*s,int n){assert(n>0&&n<256&&s[n-2]=='\r'&&s[n-1]=='\n');assert(strstr(s,"BACKEND=TOUCHGFX"));++logs;}
+/** @brief 检查有界机器日志并保存最近一行；@param s 本次有效文本，不保存地址。@param n 字节长度。@return 无返回值。 */
+static char last_log[256];
+static void Log(const char*s,int n){assert(n>0&&n<256&&s[n-2]=='\r'&&s[n-1]=='\n');assert(strstr(s,"BACKEND=TOUCHGFX"));assert(strstr(s,"UPDATE_MS="));memcpy(last_log,s,(size_t)n);last_log[n]=0;++logs;}
 /** @brief 执行一次前台。@param n 测试毫秒。@param allow DHT许可。@return 无返回值。 */
 static void Step(uint32_t n,bool allow){tick=n;UI_TouchGFX_Process(n,allow);}
 /** @brief 在真实入口桩内部注入显示错误。@return 无返回值。 */
@@ -76,6 +84,14 @@ int main(int argc,char**argv)
  UI_TouchGFX_GetSnapshot(&s);assert(s.page.audio_valid&&s.page.candidates==7U&&!s.page.measurement_valid);
  if(!strcmp(test,"b")){assert(s.page.offset_valid&&s.page.offset_x2_ns==-4200&&!strcmp(text.offset,"-2.100 US"));}
  else assert(s.page.sync==UI_SYNC_LOCAL&&!s.page.offset_valid&&!strcmp(text.offset,"-- US"));
+ if(!strcmp(test,"timing")){
+  clock_step=2U;Step(2000U,true);
+  const char *update=strstr(last_log,"UPDATE_MS=");
+  assert(update!=NULL&&atoi(update+10)>0);
+  clock_step=0U;
+  puts("PASS TouchGFX service timing: UPDATE_MS positive and bounded");
+  return 0;
+ }
  if(!strcmp(test,"race")){
   /* IRQ在父endFrame返回之前已换页，之后没有任何新绘图或换页通知。 */
   UI_TouchGFX_BufferVisible(BSP_TOUCHGFX_FRAME_B);Step(1,true);assert(!reveals);

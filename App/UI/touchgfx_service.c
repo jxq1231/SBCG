@@ -7,6 +7,7 @@
 #include "touchgfx_service.h"
 #include "status_snapshot.h"
 #include "BSP/bsp_touchgfx_display.h"
+#include "BSP/bsp_console.h"
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdatomic.h>
@@ -21,10 +22,19 @@ static UI_TouchGFXSnapshot state;
 static UI_StatusText prepared_text;
 static bool attempted;
 static uint32_t last_update_ms, last_report_ms;
+/** UI_TouchGFX_Process入口到各返回路径的最大HAL毫秒；不含Report()日志格式化/发送。 */
+static uint32_t max_update_ms;
 static void (*emit_line)(const char *, int);
 static _Atomic(uint32_t) completed_buffer_mask;
 static _Atomic(bool) invalid_visible_address;
 static _Atomic(uint32_t) pending_visible_address;
+
+/** @brief 记录UI前台入口begin_ms到当前的饱和最大HAL毫秒耗时；无返回值，仅前台。 */
+static void RecordUpdateTime(uint32_t begin_ms)
+{
+    const uint32_t elapsed = BSP_Console_GetTickMs() - begin_ms;
+    if (elapsed > max_update_ms) { max_update_ms = elapsed; }
+}
 
 /**
  * @brief 将固定缓冲字节地址映射为独立完成标志位。
@@ -62,13 +72,13 @@ static void Report(uint32_t now_ms, const BSP_TouchGFXDisplaySnapshot *lcd)
     const int length = snprintf(line, sizeof line,
         "$UI,STATE=%s,FRAMES=%" PRIu32 ",ERRORS=%u,DISCARDS=0,CAPTURE_MS=%" PRIu32
         ",ROLE=%s,NET=%s,TEMP_SOURCE=%s,TEMP_VALID=%u,TEMP_MC=%" PRId32 ",C_MM_S=%" PRIu32
-        ",BACKEND=TOUCHGFX,UPDATES=%" PRIu32 "\r\n",
+        ",BACKEND=TOUCHGFX,UPDATES=%" PRIu32 ",UPDATE_MS=%" PRIu32 "\r\n",
         name, state.frames, errors != 0U ? 1U : 0U, state.page.captured_ms,
         state.page.role == UI_ROLE_A ? "A" : state.page.role == UI_ROLE_B ? "B" : "UNKNOWN",
         state.page.network == UI_NET_UP ? "UP" : state.page.network == UI_NET_DOWN ? "DOWN" : "UNKNOWN",
         state.page.temperature_manual ? "MANUAL" : "AUTO", valid ? 1U : 0U,
         valid ? state.page.temperature_milli_c : 0, valid ? state.page.sound_speed_mm_s : 0U,
-        state.data_generation);
+        state.data_generation, max_update_ms);
     if (length > 0 && (size_t)length < sizeof line) { emit_line(line, length); }
 }
 
@@ -90,6 +100,7 @@ void UI_TouchGFX_Init(uint32_t now_ms, void (*log)(const char *, int))
     if (attempted) { return; }
     attempted = true;
     emit_line = log;
+    max_update_ms = 0U;
     last_update_ms = now_ms - UI_REFRESH_MS;
     last_report_ms = now_ms - UI_REFRESH_MS;
     state.initialized = BSP_TouchGFXDisplay_Init();
@@ -106,12 +117,14 @@ void UI_TouchGFX_Init(uint32_t now_ms, void (*log)(const char *, int))
 void UI_TouchGFX_Process(uint32_t now_ms, bool allow)
 {
     if (!attempted || !allow) { return; }
+    const uint32_t begin_ms = BSP_Console_GetTickMs();
     if (state.ready) { BSP_TouchGFXDisplay_Process(); }
     BSP_TouchGFXDisplaySnapshot lcd;
-    if (!DisplayReady(&lcd)) { Report(now_ms, &lcd); return; }
+    if (!DisplayReady(&lcd)) { RecordUpdateTime(begin_ms); Report(now_ms, &lcd); return; }
     if (atomic_exchange_explicit(&invalid_visible_address, false, memory_order_acq_rel)) {
         (void)BSP_TouchGFXDisplay_Reveal(0U);
         (void)DisplayReady(&lcd);
+        RecordUpdateTime(begin_ms);
         Report(now_ms, &lcd);
         return;
     }
@@ -126,7 +139,7 @@ void UI_TouchGFX_Process(uint32_t now_ms, bool allow)
     __real_MX_TouchGFX_Process();
     /* 框架处理期间IRQ可能锁存硬件错误，因此展示与日志之前再次检查。 */
     BSP_TouchGFXDisplay_Process();
-    if (!DisplayReady(&lcd)) { Report(now_ms, &lcd); return; }
+    if (!DisplayReady(&lcd)) { RecordUpdateTime(begin_ms); Report(now_ms, &lcd); return; }
     /* 可见IRQ允许先于完成回调；保留最近可见地址，等待同一缓冲的实际绘制完成位。 */
     const uint32_t visible = atomic_load_explicit(&pending_visible_address, memory_order_acquire);
     const uint32_t completed = atomic_load_explicit(&completed_buffer_mask, memory_order_acquire);
@@ -136,6 +149,7 @@ void UI_TouchGFX_Process(uint32_t now_ms, bool allow)
         state.visible_address = visible;
     }
     (void)DisplayReady(&lcd);
+    RecordUpdateTime(begin_ms);
     Report(now_ms, &lcd);
 }
 

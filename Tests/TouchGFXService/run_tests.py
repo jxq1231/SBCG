@@ -30,5 +30,5 @@ subprocess.run([shutil.which('gcc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
                 '-pedantic', '-I', str(root / 'App'), *map(str, sources),
                 '-Wl,--wrap=MX_TouchGFX_Process', '-o', str(exe)], check=True, timeout=30)
 for case in ['basic', 'gate', 'initfail', 'b', 'irq', 'fail', 'audio_error', 'drop',
-             'invalid', 'framework_error', 'race', 'initial_address', 'no_draw']:
+             'invalid', 'framework_error', 'race', 'initial_address', 'no_draw', 'timing']:
     subprocess.run([str(exe), case], check=True, timeout=10)

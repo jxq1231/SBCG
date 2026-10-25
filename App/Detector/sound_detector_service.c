@@ -8,6 +8,7 @@
 #ifdef SBCG_USE_SOUND_TIME
 #include "sound_event_time.h"
 #endif
+#include "BSP/bsp_console.h"
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -46,6 +47,14 @@ static void Emit(const char *line,int length)
 /** @brief 丢弃已验证但尚未发送的队列并记录损失；无参数，无返回值，不访问PCM。 */
 static void DropQueue(void)
 { Add(&diagnostics.dropped,count);head=count=0U; }
+/** @brief 记录Stage入口begin_ms到当前的饱和最大HAL毫秒耗时，无返回值。 */
+static void RecordStageTime(uint32_t begin_ms)
+{ const uint32_t elapsed=BSP_Console_GetTickMs()-begin_ms;
+  if(elapsed>diagnostics.max_stage_ms)diagnostics.max_stage_ms=elapsed; }
+/** @brief 记录Process入口begin_ms到当前的饱和最大HAL毫秒耗时，无返回值。 */
+static void RecordProcessTime(uint32_t begin_ms)
+{ const uint32_t elapsed=BSP_Console_GetTickMs()-begin_ms;
+  if(elapsed>diagnostics.max_process_ms)diagnostics.max_process_ms=elapsed; }
 /** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
 static void ResetHistory(void)
 {
@@ -103,18 +112,21 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
         block->session!=current.session || current.last_frame==UINT64_MAX ||
         block->first_frame!=current.last_frame+1U);
     if(boundary)(void)SoundDetector_Reset(&working);
+    const uint32_t begin_ms=BSP_Console_GetTickMs();
     for(uint32_t i=0U;i<block->frame_count;++i)
     {
         SoundCandidate event;
         const SoundDetectorResult result=SoundDetector_Push(&working,block->session,block->first_frame+i,
             block->samples[2U*i+diagnostics.channel],&event);
-        if(result==SOUND_DETECTOR_INVALID || result==SOUND_DETECTOR_DISCONTINUITY)return false;
+        if(result==SOUND_DETECTOR_INVALID || result==SOUND_DETECTOR_DISCONTINUITY)
+        { RecordStageTime(begin_ms);return false; }
         if(result==SOUND_DETECTOR_EVENT)
         {
             ++staged_total;
             if(staged_count<SOUND_DETECTOR_QUEUE_CAPACITY)staged[staged_count++]=event;
         }
     }
+    RecordStageTime(begin_ms);
     stage_valid=true;return true;
 }
 /**
@@ -166,10 +178,12 @@ void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
 {
     if(!diagnostics.configured || active)return;
+    const uint32_t begin_ms=BSP_Console_GetTickMs();
     if(snapshot==NULL || !snapshot->running || snapshot->index_faults!=0U ||
         snapshot->session==0U || snapshot->callback_count==0U ||
         (uint32_t)(now_ms-snapshot->last_callback_ms)>=STREAM_MAX_AGE_MS ||
-        (current.have_input && current.session!=snapshot->session))ResetHistory();
+        (current.have_input && current.session!=snapshot->session))
+    { ResetHistory(); }
     for(uint8_t i=0U;i<SOUND_DETECTOR_QUEUE_CAPACITY && count!=0U;++i)
     {
         if((uint32_t)(now_ms-queue[head].completed_ms)<STREAM_MAX_AGE_MS)break;
@@ -190,11 +204,14 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
         (void)SoundEventTime_Submit(now_ms,item.sequence,&item.event);
 #endif
     }
-    if((uint32_t)(now_ms-last_state_ms)<STATE_LOG_PERIOD_MS)return;
+    if((uint32_t)(now_ms-last_state_ms)<STATE_LOG_PERIOD_MS){RecordProcessTime(begin_ms);return;}
     last_state_ms=now_ms;
     Emit(line,snprintf(line,sizeof line,
         "$SOUND_STATE,VALID_BLOCKS=%" PRIu32 ",REJECTED=%" PRIu32 ",RESETS=%" PRIu32 ",CANDIDATES=%" PRIu32
-        ",DROPPED=%" PRIu32 ",ERRORS=%" PRIu32 ",PENDING=%u,ARMED=%u,CH=%u,SYNC=0\r\n",
+        ",DROPPED=%" PRIu32 ",ERRORS=%" PRIu32 ",PENDING=%u,ARMED=%u,CH=%u,SYNC=0"
+        ",STAGE_MS=%" PRIu32 ",PROC_MS=%" PRIu32 "\r\n",
         diagnostics.valid_blocks,diagnostics.rejected_blocks,diagnostics.resets,diagnostics.candidates,
-        diagnostics.dropped,diagnostics.errors,(unsigned)count,current.armed ? 1U:0U,(unsigned)diagnostics.channel));
+        diagnostics.dropped,diagnostics.errors,(unsigned)count,current.armed ? 1U:0U,
+        (unsigned)diagnostics.channel,diagnostics.max_stage_ms,diagnostics.max_process_ms));
+    RecordProcessTime(begin_ms);
 }

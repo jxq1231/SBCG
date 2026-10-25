@@ -10,9 +10,12 @@
 #include "BSP/bsp_audio.h"
 #define SOUND_DETECTOR_QUEUE_CAPACITY 4U
 extern const SoundDetectorConfig SoundDetectorService_DefaultConfig;
-/** @brief 服务计数饱和递增，pending为当前已验证队列条数，armed仅是能量检测布防。 */
+/** @brief 服务计数饱和递增，pending为当前已验证队列条数，armed仅是能量检测布防。
+ *  max_stage_ms为Stage内8192帧逐帧暂算循环的最大HAL毫秒（不含入口校验/工作副本拷贝）；
+ *  max_process_ms为Process入口守卫后到返回的最大HAL毫秒（包含日志格式化/发送）。 */
 typedef struct {
     uint32_t valid_blocks,rejected_blocks,resets,candidates,dropped,errors;
+    uint32_t max_stage_ms,max_process_ms;
     uint8_t pending,channel;
     bool configured,armed,staging;
 } SoundDetectorServiceSnapshot;
