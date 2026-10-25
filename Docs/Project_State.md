@@ -10,7 +10,7 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** A板已烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。用户说明当前环境不能主动发声，MATCH 10/10、双板与声学精度未验收；下一步仅剩主动标准音频与主机压力测试。[静默证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
-**M4.2.4-A2同循环归因已完成；C1 UI暂不启动。** A板运行A2测量镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `d19a0005…`）：两次静默采集最大循环38/42ms，同轮AUDIO=21/25ms、OTHER=16ms、UI=1ms；UI自身最大20ms不在最慢轮。GAP44ms、SCAN3、SCORE4、STAGE6，SOUND/CHIRP/AUDIO/LOG/UI错误全0。最大循环主要由AudioCapture与残差OTHER构成，下一步建议A3拆分AUDIO内部（音频统计等）与OTHER（FlushOneLine同步UART等），而不是直接改UI；主动标准音频仍因环境不能发声未验收。[A2记录](Milestones/M4_2_4_A2_Loop_Attribution.md)。
+**M4.2.4-A3 AUDIO/OTHER内部分解已完成；C1 UI继续暂缓。** A板运行A3测量镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `4e8a53f5…`）：最大循环40ms中AUDIO27ms、OTHER13ms（其中FLUSH12ms）、UI0；AudioCapture最大轮28ms中STAT15ms、SD_STAGE6ms、CH_PROC6ms。业务错误全0。下一优化对象是音频统计计算（15ms）与FlushOneLine同步UART（12ms），而非UI；主动标准音频仍因环境不能发声未验收。[A3记录](Milestones/M4_2_4_A3_Audio_Other_Profile.md)。
 
 **M4.2.1扫频匹配核心的软件范围已完成。** 固定2–6kHz/50ms模板及流式正确性基线经O0/O2各3001个C断言、38组独立参考验证。后续M4.2.2已注册固定模板和有界单窗评分，原逐采样流式直接相关仍仅作基线，不走板端实时路径。[历史软件证据](Milestones/M4_2_1_Chirp_Matcher_Core.md)。
 

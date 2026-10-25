@@ -1,12 +1,12 @@
 # M4.2.4 前台耗时分解与原声音候选批量迁移方案
 
-<!-- doc-status: stage-a-b-a2-complete-c-not-started; reviewed: 2026-10-26 -->
+<!-- doc-status: stage-a-b-a2-a3-complete-c-not-started; reviewed: 2026-10-26 -->
 
 方案始于2026-10-26。M4.2.3-A/B已完成；M4.2.3-B主动标准音频验收因当前环境不能发声暂缓，本方案只安排无需主动发声即可验收的软件增量。
 
 **目标：** 在不改变候选、门限、搜索、日志和时序语义的前提下，先定位并降低音频前台剩余耗时，为日后标准音频与双板验收留出稳定余量。
 
-**当前阶段：** A/B已完成并静默通过；A2同循环归因完成（最大循环内AUDIO21–25ms/UI1ms/OTHER16ms，UI峰值不在最慢轮），C1 UI优化暂不启动。下一步建议A3拆分AUDIO/OTHER。主动标准音频仍因环境不能发声阻塞。
+**当前阶段：** A/B/A2已完成；A3拆分AUDIO/OTHER完成（最大循环AUDIO27ms=STAT15+SD_STAGE6+CH_PROC6，OTHER13=FLUSH12；UI不在最慢轮）。下一步建议A4：优化音频统计计算15ms，再评估日志发送12ms（C2）；C1 UI继续暂缓。主动标准音频仍因环境不能发声阻塞。
 
 **Architecture：** 先增加只读、低频的分模块耗时分解；证据确认后，用与M4.2.3-A相同的逐字段等价方法把原声音候选链迁移到64点批量入口；UI、日志和搜索只在各自证据指向时另立增量。
 
@@ -24,7 +24,8 @@
 - [x] M4.2.4-A：已实现Stage/Process/UI计时并通过主机测试、构建与静默实测；详见[静默记录](../Milestones/M4_2_4_A_Foreground_Profile.md)。
 - [x] M4.2.4-B：已完成原声音候选链64点批量迁移、主机等价测试和两次静默对比；详见[批量Stage记录](../Milestones/M4_2_4_B_Batch_Stage.md)。
 - [x] M4.2.4-A2（补充测量）：同循环归因完成，最大循环内AUDIO21–25ms、UI1ms、OTHER16ms；UI最大20ms不在最慢轮。详见[A2记录](../Milestones/M4_2_4_A2_Loop_Attribution.md)。
-- [ ] M4.2.4-C：未触发；C1 UI暂不启动，等待A3对AUDIO/OTHER的拆分证据与用户决定。
+- [x] M4.2.4-A3（补充测量）：AUDIO/OTHER内部分解完成；AUDIO最大轮28ms中STAT15、SD_STAGE6、CH_PROC6；同轮OTHER13中FLUSH12。详见[A3记录](../Milestones/M4_2_4_A3_Audio_Other_Profile.md)。
+- [ ] M4.2.4-C：未触发；C1 UI继续暂缓。C2日志策略已有FLUSH12ms证据但日志错误仍为0，需结合A4与真实错误决定。
 
 ## 执行边界
 
@@ -32,7 +33,7 @@
 - 只做静默可验收的软件范围；**新镜像烧录需另行取得授权**，本文件不是烧录授权。
 - No CubeMX change required；不改GPIO、时钟、SAI、DMA、NVIC、ETH、LTDC或Cache配置。
 - 保留既有PPS/CubeMX/协议等用户未提交改动，不混入本方案提交。
-- 当前A板为M4.2.4-A2测量镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `d19a0005da26454af2e0db6c15a5e9765bea7224fe85aa6d5203ea68197a2a98`）；C未开始，不烧录新镜像。
+- 当前A板为M4.2.4-A3测量镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `4e8a53f50ae3075ddccc7e3796c04657a966895199fbbb9ac7b563e694671f87`）；C未开始，不烧录新镜像。
 - 一次只实施一个增量；A通过后再决定是否启动B，B通过后再决定C；不自动进入下一增量。
 - 不扩大日志队列、不延长1500ms期限、不减少257窗/候选或8窗/轮、不改变两套阈值。
 
@@ -134,7 +135,7 @@ A实际结果：Stage 21ms、Process 1ms、UI 19–20ms、Scan 3ms、Score 4ms�
 
 ### C2 日志策略
 
-触发：真实静默/长窗口或主动音频窗口出现LOG_FULL/WRITE/BAD>0，或A/压力测试证明日志排空挤占前台。**A2把`FlushOneLine`等归入`OTHER_MS`（16ms）但未拆分**，需A3确认其占比后再决定；A2本身不触发C2。措施：降低纯状态行频率、合并普通状态；**保留BOOT/RESET、命令回复、声音事件、AUDIO_POS/锚点等分析证据**，必要时先适配Analysis脚本。验收：日志错误0、关键事件可核对、队列深度无持续增长；不得用主机合成32行/s结果直接改板端策略。
+触发：真实静默/长窗口或主动音频窗口出现LOG_FULL/WRITE/BAD>0，或A/压力测试证明日志排空挤占前台。**A3已量化最大循环内`FLUSH_MS=12ms`，但日志错误仍为0**；是否降频/合并需结合A4与真实错误证据，不以单次最大值直接改策略。措施：降低纯状态行频率、合并普通状态；**保留BOOT/RESET、命令回复、声音事件、AUDIO_POS/锚点等分析证据**，必要时先适配Analysis脚本。验收：日志错误0、关键事件可核对、队列深度无持续增长；不得用主机合成32行/s结果直接改板端策略。
 
 ## 6. 暂缓与不采用
 
@@ -180,9 +181,10 @@ python -B Tools/Monitor/check_eth_layout.py --preset Release
 | M4.2.4-A | 分模块计时代码、对应测试、静默分解报告、文档 | **已完成**；镜像`3cca12ce…` |
 | M4.2.4-B | 批量Stage实现、逐字段等价测试、静默前后对比、文档 | **已完成**；镜像`192c6a33…` |
 | M4.2.4-A2 | 同循环LOOP/AUDIO/UI/OTHER归因、主机测试、静默记录 | **已完成**；镜像`d19a0005…` |
-| M4.2.4-C | 仅在触发后退成本独立的UI或日志增量 | 未开始（C1未触发） |
+| M4.2.4-A3 | AUDIO内部分解、Flush/OTHER拆分、静默记录 | **已完成**；镜像`4e8a53f5…` |
+| M4.2.4-C | 仅在触发后退成本独立的UI或日志增量 | 未开始（C1未触发；C2需A4后决定） |
 
-A/B/A2已提交对应功能与文档；C未开始。下一步建议A3拆分AUDIO/OTHER，需用户确认并另行取得烧录授权。
+A/B/A2/A3已提交对应功能与文档；C未开始。下一步建议A4优化音频统计计算（STAT15ms），再评估FlushOneLine（12ms）；需用户确认并另行取得烧录授权。
 
 ## 9. 自查与实施入口
 

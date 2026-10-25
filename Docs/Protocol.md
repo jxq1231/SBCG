@@ -455,3 +455,18 @@ $HEARTBEAT,SEQ=10,TICK_MS=10000,TX_ERRORS=5,LOG_FULL=5,LOG_WRITE=0,LOG_BAD=0,LOG
 - `OTHER_MS`：`LOOP_MS-AUDIO_MS-UI_MS`的残差（下溢钳0），包含`FlushOneLine`同步UART、LwIP、温度/PTP/PPS、AudioAnchor/SOUND_TIME、SDRAM等，不是纯CPU或“未解释时间”。
 - **采样口径限制**：`GAP_MS`在`AudioCapture_Process`内相邻`ChirpService_Process`之间测量；DHT起始低电平会整轮跳过UI、日志跳过时下一次GAP可能跨多轮。LOOP_MS与GAP_MS不是同一采样点，只能作同调度周期的近似对照，**不得用LOOP_MS−GAP_MS推断未归因时间**。
 - 只保留迄今最大一轮的分解；较慢轮被记录后，后续轮次不会覆盖，除非出现更慢轮。0表示未跨HAL tick或未发生；1ms分辨率，不是最坏执行时间或声学精度证据。
+
+## M4.2.4-A3 AUDIO/OTHER内部分解（低频诊断行）
+
+仅CHIRP+AUDIO构建每5秒最多输出两行诊断；非CHIRP/无AUDIO构建不输出。两行均为迄今最大轮的HAL毫秒分解，不是最坏执行时间保证：
+
+```text
+$PROFILE,LOOP_MS=40,AUDIO_MS=27,UI_MS=0,OTHER_MS=13,FLUSH_MS=12
+$AUDIO_PROFILE,TOTAL_MS=28,STAT_MS=15,SD_STAGE_MS=6,SD_PROC_MS=0,CH_STAGE_MS=1,CH_COMP_MS=0,CH_PROC_MS=6,IO_MS=0,LOG_MS=1,OTHER_MS=0
+```
+
+- `$PROFILE`：最大`App_Process`循环的A2四字段加上同轮的`FLUSH_MS`（`FlushOneLine()`同步UART耗时）；`LOOP_MS`与`GAP_MS`采样点不同，不能相减推断。
+- `$AUDIO_PROFILE`：最大一轮`AudioCapture_Process`的`TOTAL_MS`及同轮分段：`STAT_MS`为`AudioStatistics_Compute`，`SD_STAGE_MS`/`SD_PROC_MS`为原声音候选Stage/Process，`CH_STAGE_MS`/`CH_COMP_MS`/`CH_PROC_MS`为Chirp复制/完成/扫描评分，`IO_MS`为Begin/End/候选Complete，`LOG_MS`为音频状态格式化/发送，`OTHER_MS`为总时长减已计分段的残差。
+- 两套都是“最大轮”快照而非平均/分布；1ms分辨率，含SysTick抢占和诊断自身开销（每行最多一次UART发送）。`$PROFILE`/`$AUDIO_PROFILE`每5秒各最多一行，`$PROFILE`最长106字符、`$AUDIO_PROFILE`最长222字符（最坏），实测63/132，均<256；新增两行会轻微抬高其报告值。
+- **口径**：`OTHER_MS`仍包含`FLUSH_MS`（`LOOP=AUDIO+UI+OTHER`，不能再用OTHER加FLUSH）；`$PROFILE`的最大循环与`$AUDIO_PROFILE`的最大AudioCapture轮是两次独立最大值，不能互相求和。A2无A3诊断时实测LOOP38/42、AUDIO21/25、OTHER16；A3为LOOP40、AUDIO27、OTHER13/FLUSH12，A3未抬高最慢LOOP，但AUDIO增量可能含插桩开销，FLUSH12与诊断行发送时长一致，不能完全排除A3诊断自扰动；A4前应做关闭诊断的对照采集。
+- 正式口径：`OTHER_MS`/`FLUSH_MS`不能当纯CPU；`STAT_MS`等分段是墙钟差，不是指令周期或最坏时间；不得用单次最大值直接改动日志/业务策略。
