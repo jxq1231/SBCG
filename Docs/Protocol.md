@@ -388,3 +388,24 @@ $RESET,CSR=14000000,FLAGS=14000000,PIN=1,POR=0,BOR=0,SFT=1,IWDG=0,WWDG=0,LPWR=0,
 CSR为早期读取的完整uint32十六进制原值，FLAGS=CSR&FE000000；PIN/POR/BOR/SFT/IWDG/WWDG/LPWR分别为26/27/25/28/29/30/31位的0/1值。多位可同时置位，PIN1不等于人工按键；上述数据是明确软件复位对照的实测结果。
 
 CAPTURED1表示早期单次捕获存在；CLEAR_OK1表示保存后清除旧累计复位标志并读回成功。Get不再次清标志，任一资格为0时不能把下次标志直接当独立新原因。CSR是状态记录，不是纳秒时间，也不承诺唯一根因。历史额外启动仍待复现，见[诊断报告](Milestones/U3_Reset_Diagnosis.md)。
+
+## M4.2.2 有界扫频匹配（SBCG-M4.2-CHIRP-R2，已烧录、静默失败）
+
+初版SBCG-M4.2-CHIRP、R1及R2均已烧录、静默未通过；当前A为R2，协议与R1字段相同。R2音频累计零丢块，但搜索DROP56、串口TX_ERRORS503，不能按示例数值认定通过。仅新增ASCII/CRLF串口日志，不改变UDP端口/报文或原SOUND_TIME语义。下面是格式示例，不是实物采集结果：
+
+```text
+$CHIRP_INIT,RESULT=OK,CH=0,TEMPLATE=2K6K50MS,SCAN=8192,SCORE=8,BEFORE=192,AFTER=64,CACHE_FRAMES=2656,JOB_MS=1500,RMS=64,CORR_PPM=800000,GATE_RMS=128,PROFILE=EXPERIMENTAL,SYNC=0
+$CHIRP,SEQ=1,SESSION=1,FIRST=48000,LAST=50399,CORR_PPM=1000000,RMS=11400,CLIP=0,INVERTED=0,LOCAL=1,SYNC=0
+$CHIRP_STATE,OK=100,BAD=0,CAND=10,MATCH=10,DROP=0,SKIP=0,ERR=0,EVAL=2570,COPY_MS=1,WORK_MS=2,S_MAX=8192,E_MAX=8,PENDING=0
+```
+
+- `CHIRP_INIT`：`CH`为交错PCM声道0/1；`TEMPLATE`标识当前固定2–6kHz/50ms候选，完整源文件SHA256见[本轮记录](Milestones/M4_2_2_Bounded_Chirp_Integration.md)。`SCAN/SCORE`是每轮最多8192帧/8个2400点窗口；当前块门控一次扫完，评分分轮执行。`CACHE_FRAMES=2656`为队首完整输入快照点数，`JOB_MS=1500`为任务/副本时限毫秒；`BEFORE/AFTER`为候选提示点前192/后64帧。`RMS`为匹配窗AC RMS门限64 PCM，`CORR_PPM`为评分门限800000/1000000，`GATE_RMS`为候选门控开启门限128 PCM。均为实验配置。
+- `CHIRP`：`SEQ`为独立uint32饱和匹配发布计数；`SESSION`为BSP采集会话uint32，重启后须以BOOT分段。`FIRST/LAST`为uint64十进制绝对双声道采样组帧号，含首含尾，共2400帧；不是int16元素索引、HAL毫秒或PTP纳秒。
+- `CORR_PPM`为绝对归一化相关度×1000000四舍五入的uint32，范围0..1000000，不是识别概率；`RMS`为匹配窗AC幅值uint16，范围0..32768。`CLIP=1`表示窗口出现PCM16极值，测量层不能直接当作未失真高质量结果。`INVERTED=1`表示相关分子为负，不是声源方向。
+- `LOCAL=1,SYNC=0`明确本地帧匹配，没有新增统一时间或距离。**CHIRP的SEQ独立于SOUND_CAND；现有SOUND_TIME仍对应原能量候选，不能把它的时间值拼接成CHIRP到达时间。** 本服务没有填造搜索结束时刻的采样游标。
+- `CHIRP_STATE`的`OK/BAD`为归还后提交/拒绝块数；`CAND/MATCH`为新门控候选/完整搜索过门限结果数。完整搜索未匹配不产生测量行，不计作数据丢失。
+- `DROP`为容量、过期、缺少历史、覆盖或失效清理导致未完成搜索被丢弃的数量；`SKIP`为新块替换时旧块尚未完全扫描的次数，和原`AUDIO,DROP`硬件/归还计数不同。`ERR`为生命周期或内部流处理错误数，`EVAL`为实际已评分窗口数。以上均为uint32饱和计数。
+- `COPY_MS/WORK_MS`为观察到的最大HAL毫秒差：分别覆盖服务复制，以及归还后的扫描/评分；后者不包含串口格式化、UART发送、原统计或其他主循环业务。0ms只表示未跨HAL tick，不代表零耗时。不是最坏执行时间证明。
+- `S_MAX/E_MAX`为单次Process实际最大扫描帧数/评分窗口数uint16，分别不得超过8192/8；`PENDING`为当前搜索队列数量uint8，0..4。状态约1Hz，匹配行优先，每次服务调用最多发送一行。
+
+能量门控和有限搜索在持续噪声、弱信号、处理积压或反射环境下可能漏检或选中较强反射；门限及范围尚未经过手机/音箱实机标定。格式及主机测试通过不等于现场识别率、±100μs或测距精度通过。
