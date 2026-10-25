@@ -1,12 +1,12 @@
 # M4.2.4 前台耗时分解与原声音候选批量迁移方案
 
-<!-- doc-status: proposed-plan-not-implemented; reviewed: 2026-10-26 -->
+<!-- doc-status: stage-a-complete-stage-b-not-started; reviewed: 2026-10-26 -->
 
 方案始于2026-10-26。M4.2.3-A/B已完成；M4.2.3-B主动标准音频验收因当前环境不能发声暂缓，本方案只安排无需主动发声即可验收的软件增量。
 
 **目标：** 在不改变候选、门限、搜索、日志和时序语义的前提下，先定位并降低音频前台剩余耗时，为日后标准音频与双板验收留出稳定余量。
 
-**当前阶段：** 仅完成规划；尚未修改固件、构建或烧录新镜像。当前A板仍为`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed），主动声音未验收。
+**当前阶段：** M4.2.4-A已实施、烧录A板并完成静默耗时分解（Debug SHA256 `3cca12ce…`）；M4.2.4-B尚未开始。主动标准音频仍因环境不能发声阻塞。
 
 **Architecture：** 先增加只读、低频的分模块耗时分解；证据确认后，用与M4.2.3-A相同的逐字段等价方法把原声音候选链迁移到64点批量入口；UI、日志和搜索只在各自证据指向时另立增量。
 
@@ -19,12 +19,19 @@
 - [x] 划分M4.2.4-A/B及条件增量C，写清停止条件和资源预算。
 - [x] 自查文件边界、验收命令和与既有用户改动的隔离方式。
 
+## 执行进度
+
+- [x] M4.2.4-A：已实现Stage/Process/UI计时并通过主机测试、构建与静默实测；详见[静默记录](../Milestones/M4_2_4_A_Foreground_Profile.md)。
+- [ ] M4.2.4-B：未开始，等待用户确认后实施；需按计划另取得新镜像烧录授权。
+- [ ] M4.2.4-C：未触发，等待A/B证据。
+
 ## 执行边界
 
 - 本方案不要求主动发声，不宣称标准音频MATCH、声学到达精度、双板配对或测距。
 - 只做静默可验收的软件范围；**新镜像烧录需另行取得授权**，本文件不是烧录授权。
 - No CubeMX change required；不改GPIO、时钟、SAI、DMA、NVIC、ETH、LTDC或Cache配置。
 - 保留既有PPS/CubeMX/协议等用户未提交改动，不混入本方案提交。
+- 当前A板为M4.2.4-A测量镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `3cca12cef6c47126bb6d223072e66bdbcfe55cbf3f221d92370072c955114365`）；B未开始，不烧录新镜像。
 - 一次只实施一个增量；A通过后再决定是否启动B，B通过后再决定C；不自动进入下一增量。
 - 不扩大日志队列、不延长1500ms期限、不减少257窗/候选或8窗/轮、不改变两套阈值。
 
@@ -33,12 +40,15 @@
 | 项目 | 已测结果 | 仍未回答的问题 |
 | --- | --- | --- |
 | 扫频扫描 | SCAN最大3ms（原59ms，目标≤10ms） | 无；扫描本身已无加速必要 |
-| 搜索/完成 | 静默DONE_MAX=831ms（目标≤1000ms），候选32全完成、丢弃0 | 音频事件负载下是否仍≤1000ms |
-| 前台GAP | 最大106ms（原172ms） | 106ms主要由哪个模块贡献未知 |
-| 原声音候选链 | 仍在每块8192帧内逐帧调用`SoundDetector_Push` | 每块Stage耗时未单独测量，批量收益未知 |
+| 搜索/完成 | 静默DONE_MAX=462ms（A最终采集157ms；目标≤1000ms），候选全完成、丢弃0 | 音频事件负载下是否仍≤1000ms |
+| 前台GAP | M4.2.4-A实测最大60–61ms（原106ms） | 剩余未归因部分（音频统计/网络/日志等） |
+| 原声音候选链 | M4.2.4-A实测`STAGE_MS`最大21ms；仍每帧调用`SoundDetector_Push` | 批量迁移后的实际下降量待B |
+| UI更新 | M4.2.4-A实测`UPDATE_MS`19–20ms | 是否长期为主要GAP来源 |
 | 日志 | 静默窗口LOG_FULL/WRITE/BAD=0 | 主动事件/长窗口下是否队满 |
 | 主机压力 | 约2候选/s在1ms级循环可完成（max 203ms）；34ms慢循环超载；32行/s突发令模拟队列溢出7行 | 真实日志突发和真实主循环分布未知 |
 | 主动音频 | 环境不能发声，MATCH 10/10未验收 | 标准音频识别、漏检/重复、声学完成时延 |
+
+2026-10-26 A实测（最终Debug SHA256 `3cca12ce…`，静默69.6秒）：STAGE=21ms、PROC=1ms、UPDATE=19ms、SCAN=3ms、SCORE=4ms、GAP=60ms；业务/日志/UI错误全0。先前同镜像原型两次采集为STAGE=21/UPDATE=20/GAP=61，可复现。结论：原候选Stage与UI是两个最大已测贡献，B批量迁移有明确依据；GAP仍有约20ms量级未归因。
 
 结论：继续优化扫描没有意义；在不能发声的前提下，应先量化“剩余前台时间花在哪里”，并迁移唯一仍逐帧处理的原候选链。UI、日志和搜索优化都必须由分解证据或真实日志数据触发。
 
@@ -62,18 +72,19 @@
 
 建议最小字段集（最终以代码可读性和行长<256为准）：
 
-- `$SOUND_STATE`追加`STAGE_MS`（`SoundDetectorService_Stage`整块逐帧暂算最大耗时）和`PROC_MS`（同服务Process最大耗时）。
-- `$AUDIO`追加`STAT_MS`（`AudioStatistics_Compute`最大耗时），必要时另加一次音频入口总耗时。
-- `$UI`追加`UPDATE_MS`（`UI_TouchGFX_Process`/显示`Process`最大耗时）。
-- 已有的CHIRP `SCAN_MS/SCORE_MS/COPY_MS/WORK_MS`和`GAP_MS`继续保留；不再新增周期日志行。
+- `$SOUND_STATE`追加`STAGE_MS`（`SoundDetectorService_Stage`内8192帧逐帧暂算循环最大耗时，不含入口校验/工作副本拷贝）和`PROC_MS`（同服务Process入口守卫后到返回最大耗时，含日志格式化/发送）。
+- `$UI`追加`UPDATE_MS`（`UI_TouchGFX_Process`入口到返回最大耗时，不含`Report()`日志格式化/发送）。
+- 已有CHIRP `SCAN_MS/SCORE_MS/COPY_MS/WORK_MS`和`GAP_MS`继续保留；不新增周期日志行。
+- `$AUDIO`的`STAT_MS`**未实施**：该行最坏长度已接近256字节，追加字段可能越界；本次先不做，若剩余GAP仍需归因，另立短行/缩短字段方案，不擅自改现有AUDIO格式。
 
 文件：
 
 - `App/Detector/sound_detector_service.c/.h`：Stage/Process计时字段及快照说明。
-- `App/Audio/audio_capture.c`：统计计算计时；如需要，补充音频入口最大耗时。
 - `App/UI/touchgfx_service.c`（及必要头文件）：UI处理计时字段。
-- `Tests/SoundDetectorService/test_service.c`、`Tests/Audio/run_tests.py`、`Tests/App/run_tests.py`等对应主机测试：验证计时字段语义、回绕与清零，不把主机耗时当板端值。
-- 本计划、`Docs/Project_State.md`及索引文档：区分“测量增量”与“性能修复”。
+- `Tests/SoundDetectorService/test_service.c`、`Tests/TouchGFXService/test_service.c`、对应run_tests.py：验证计时字段、回绕/清零、故障状态日志仍按原周期输出，不把主机耗时当板端值。
+- 本计划、`Docs/Project_State.md`、里程碑报告及索引文档：区分“测量增量”与“性能修复”。
+
+A实际结果：Stage 21ms、Process 1ms、UI 19–20ms、Scan 3ms、Score 4ms、GAP 60–61ms；最终镜像静默采集69.6秒，业务/日志/UI错误0。详见[M4.2.4-A测量记录](../Milestones/M4_2_4_A_Foreground_Profile.md)。独立复核首轮发现F1（不健康快照分支提前return改变状态日志），已修正并补测试后重新烧录最终镜像；delta复核PASS_WITH_RESERVATIONS，保留项为低风险口径/覆盖（Stage仅测循环、AUDIO STAT_MS未测、PROC/UPDATE统计区间不同）。
 
 验收：
 
@@ -136,7 +147,7 @@
 | 指标 | A验收 | B验收 |
 | --- | --- | --- |
 | 行为 | 输出/状态/日志完全不变 | 候选/质量/状态与逐帧参考完全一致 |
-| 计时 | 各模块最大值可解释GAP | STAGE_MS可测下降且GAP/DONE_MAX不退化 |
+| 计时 | 已完成：各模块最大值可解释GAP（STAGE21/UI19–20/SCAN3/SCORE4/GAP60–61ms） | STAGE_MS可测下降且GAP/DONE_MAX不退化 |
 | 原业务 | AUDIO零丢块/错误，CHIRP/LOG零错误 | 同左 |
 | 构建 | Debug/Release及布局通过 | 同左 |
 | 烧录 | 新镜像另行授权；静默采集≥60s | 同左 |
@@ -163,11 +174,11 @@ python -B Tools/Monitor/check_eth_layout.py --preset Release
 
 | 增量 | 交付物 | 提交 |
 | --- | --- | --- |
-| M4.2.4-A | 分模块计时代码、对应测试、静默分解报告、文档 | 一个`feat:`或`debug:`提交，一个`docs:`提交 |
-| M4.2.4-B | 批量Stage实现、逐字段等价测试、静默前后对比、文档 | 同上 |
+| M4.2.4-A | 分模块计时代码、对应测试、静默分解报告、文档 | **已完成**：功能提交与文档提交另行记录；镜像`3cca12ce…`已实测 |
+| M4.2.4-B | 批量Stage实现、逐字段等价测试、静默前后对比、文档 | 未开始 |
 | M4.2.4-C | 仅在触发后退成本独立的UI或日志增量 | 另立 |
 
-当前任务止于规划；不自动开始A，不在未授权时烧录新镜像。
+当前A已完成；B未开始，等待用户确认后再实施并另行取得新镜像烧录授权。不自动开始B。
 
 ## 9. 自查与实施入口
 

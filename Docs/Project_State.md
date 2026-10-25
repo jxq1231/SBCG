@@ -10,7 +10,7 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** A板已烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。用户说明当前环境不能主动发声，MATCH 10/10、双板与声学精度未验收；下一步仅剩主动标准音频与主机压力测试。[静默证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
-**下一批软件优化仅完成规划，尚未实施。** [M4.2.4方案](Plans/2026-10-26_M4_2_4_Foreground_Optimization.md)先做前台分模块耗时分解，再把原声音候选链迁移到64点批量入口；不依赖主动发声，可静默验收。新镜像烧录需另行授权；当前板仍为`SBCG-M4.2-BATCH`，没有待烧录修复镜像。
+**M4.2.4-A前台耗时分解已完成静默实测；M4.2.4-B尚未开始。** A板已烧录测量镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `3cca12ce…`）：静默69.6秒测得旧声音候选`STAGE_MS`最大21ms、UI`UPDATE_MS`19ms、`SCAN_MS`3ms、`SCORE_MS`4ms、`GAP_MS`60ms；AUDIO/CHIRP/SOUND/LOG/UI错误全0。原候选批量迁移（B）已有明确依据但未实施；主动标准音频仍因环境不能发声未验收。[测量记录](Milestones/M4_2_4_A_Foreground_Profile.md)。
 
 **M4.2.1扫频匹配核心的软件范围已完成。** 固定2–6kHz/50ms模板及流式正确性基线经O0/O2各3001个C断言、38组独立参考验证。后续M4.2.2已注册固定模板和有界单窗评分，原逐采样流式直接相关仍仅作基线，不走板端实时路径。[历史软件证据](Milestones/M4_2_1_Chirp_Matcher_Core.md)。
 
