@@ -4,7 +4,7 @@
 
 更新：2026-10-26。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
-当前A为`SBCG-M4.2-DIAG`（Debug d3e084b1d83e），61.36秒完整行定位通过：扫描59ms、评分5ms，搜索21次超时/13次覆盖，日志错误208次均为队列满。音频累计零丢块；性能仍未修复，下一步优先优化能量扫描，原文件截止尾片明确保留。[最新验收](Milestones/M4_2_2_Bounded_Chirp_Integration.md)。历史额外启动原因仍未知，下方显示验收按原U3.1范围理解。
+当前A为`SBCG-M4.2-DIAG`（Debug d3e084b1d83e），61.36秒完整行定位通过：扫描59ms、评分5ms，搜索21次超时/13次覆盖，日志错误208次均为队列满。音频累计零丢块；性能仍未修复，下一步优先优化能量扫描，原文件截止尾片明确保留。M4.2.3-A批量门控纯C核心已完成等价验证并提交`8862ffd`（未接入、未烧录），下一步按方案只迁移扫频扫描。[最新验收](Milestones/M4_2_2_Bounded_Chirp_Integration.md)。历史额外启动原因仍未知，下方显示验收按原U3.1范围理解。
 
 当前 **U3.1 TouchGFX显示范围已实机通过；首窗未知重启待查**：[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md) · [当前状态](Project_State.md)。NoOS、软件绘图、约1Hz真实状态，距离/方向/质量仍占位；8根颜色低位暂缓。U2真实RGB565、U0软件页面和U1 SDRAM为历史前置，不重做色条、FMC/MPU或破坏性内存测试。
 
@@ -16,14 +16,14 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
-| 性能问题下一步怎样优化 | [M4.2.3优化方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | 待实施：先批量核心等价性，再只接入扫频扫描，按复测决定日志优化 |
+| 性能问题下一步怎样优化 | [M4.2.3优化方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | 第一阶段批量核心已完成软件等价验证`8862ffd`（未接入）；下一步只接入扫频扫描，按复测决定日志优化 |
 | 扫频识别现在做到哪一步 | [M4.2.2有界接入](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 初版/R1/R2静默均失败；DIAG定位已实测；扫描为主要瓶颈，性能修复及手机识别仍待验收 |
 | 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
 | 答辩怎样解释系统 | [Defense_Guide](Defense_Guide.md) | 正文为历史口头稿，先看页首U3.1更新；当前TouchGFX无RTOS |
 | 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
-| 本次任务执行到哪里 | [M4.2.2验收记录](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 三版静默失败证据及下一软件工作；U3.1/U2显示报告按历史范围阅读 |
+| 本次任务执行到哪里 | [M4.2.3-A批量门控核心](Milestones/M4_2_3_A_Batch_Detector_Core.md) | 软件等价验证与复跑证据；未接入/未烧录，下一步M4.2.3-B |
 | 课程目标和未实现部分 | [Project_Roadmap](Project_Roadmap.md) | 基础/提高指标和整机路线仍有效，不是一次实现全部功能的授权 |
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
 | 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；TouchGFX已实屏验收，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |

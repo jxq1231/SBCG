@@ -13,3 +13,19 @@
 - 延迟目标包含缺尾等待和所有已接纳任务，未完成/丢弃不能从统计中剔除；正常负载与压力负载分别报告。
 - 文档编码、代码围栏、相对链接和差异检查通过；计划已自查，准备只提交7份规划/索引文档。
 - 2026-10-26：完成合同复核及交付检查；保留目录首次规划日期2026-10-25，现行入口更新到完成日期。
+
+## M4.2.3-A第一阶段实施
+
+2026-10-26：用户授权完成第一阶段。范围仅为sound_detector纯C批量入口、对照测试与文档；不接入Chirp扫描，不烧录。
+
+- 已保存58个既有未提交用户文件的散列快照，后续只提交本阶段文件。
+- 已保存改动前Debug/Release ELF及Flash内容散列，用于区分编译产物与板上原DIAG版本；原Debug前缀d3e084b1d83e。
+- 测试先行：验证完整64点路径不调用原逐帧Push，回退消费1点，逐字段比较所有有效状态，避免仅以输出事件相同掩盖状态差异。
+
+2026-10-26复跑与收尾（功能提交`8862ffd`）：
+
+- 复跑原生：原门控O0/O2各9组/6553114断言通过；批量O0/O2各11项通过（checks=405111537、calls=10724761、fast=126105、fallback=10598652、events=517）；Fraction参考175用例/2240340样本/711事件通过。
+- 复跑SoundDetectorService、ChirpService、ChirpMatcher、Audio、App、SoundEventTime六组回归全部退出0；Debug/Release构建通过，仅保留原RWX LOAD警告；音频/以太网两配置四项布局检查通过。
+- 构建ELF SHA256与阶段内既有build-after记录一致；`PushBatch`段在链接map的“Discarded input sections”中，未进入ELF。相对DIAG的Flash +32/+64字节已定位为`CompleteWindow`不再内联进`Push`，原逐帧源码未改。
+- 独立只读复核PASS_WITH_RESERVATIONS（代码/测试/合同PASS，无blocker/major；仅文档收尾minor与run_tests.py探测方式info）。复核自建差分模糊测试1677163条断言、UBSan通过并独立复现RED；报告`Logs/Detector/M4_2_3_A/review.json`。
+- 功能提交`8862ffd`（5个文件，作者/提交者jxq，未推送）；范围外用户改动未动。按复核意见更新任务计划、状态/入口文档及本记录后随文档提交收尾；M4.2.3-B仍未开始，不烧录。
