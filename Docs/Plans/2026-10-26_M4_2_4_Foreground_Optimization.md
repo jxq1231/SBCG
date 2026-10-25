@@ -26,7 +26,8 @@
 - [x] M4.2.4-A2（补充测量）：同循环归因完成，最大循环内AUDIO21–25ms、UI1ms、OTHER16ms；UI最大20ms不在最慢轮。详见[A2记录](../Milestones/M4_2_4_A2_Loop_Attribution.md)。
 - [x] M4.2.4-A3（补充测量）：AUDIO/OTHER内部分解完成；AUDIO最大轮28ms中STAT15、SD_STAGE6、CH_PROC6；同轮OTHER13中FLUSH12。详见[A3记录](../Milestones/M4_2_4_A3_Audio_Other_Profile.md)。
 - [x] M4.2.4-A4（对照+优化）：控制镜像排除A3诊断自扰动；统计优化后STAT15→8–9ms、AUDIO27→18ms、LOOP40→34ms。详见[A4记录](../Milestones/M4_2_4_A4_Control_Statistics.md)。
-- [ ] M4.2.4-C：C1 UI继续暂缓；C2日志策略候选（FLUSH≈15ms现为最大单项），待评估/用户决定。
+- [x] M4.2.4-C2（评估）：日志量化完成，UART占用约21.5%、23.7行/秒；建议集中quiet/full策略。详见[C2评估](../Milestones/M4_2_4_C2_Log_Evaluation.md)。
+- [ ] M4.2.4-C：C1 UI继续暂缓；C2实施待用户选择方案并另行授权烧录。
 
 ## 执行边界
 
@@ -136,7 +137,7 @@ A实际结果：Stage 21ms、Process 1ms、UI 19–20ms、Scan 3ms、Score 4ms�
 
 ### C2 日志策略
 
-触发：真实静默/长窗口或主动音频窗口出现LOG_FULL/WRITE/BAD>0，或A/压力测试证明日志排空挤占前台。**A4后FLUSH≈15ms已成为最大单项且日志错误仍为0**；是否降频/合并需结合真实错误与证据完整性决定，不以单次最大值直接改策略。措施：降低纯状态行频率、合并普通状态；**保留BOOT/RESET、命令回复、声音事件、AUDIO_POS/锚点等分析证据**，必要时先适配Analysis脚本。验收：日志错误0、关键事件可核对、队列深度无持续增长；不得用主机合成32行/s结果直接改板端策略。
+触发：真实静默/长窗口或主动音频窗口出现LOG_FULL/WRITE/BAD>0，或A/压力测试证明日志排空挤占前台。**A4后FLUSH≈15ms已成为最大单项且日志错误仍为0；C2评估测得70秒内UART占用约21.5%、23.7行/秒，最大单行`$UI`174B≈15.1ms。** 结论：单纯降频不能降低最大FLUSH，需“集中quiet/full过滤+关键行保留”，必要时压缩长行；详见[C2评估](../Milestones/M4_2_4_C2_Log_Evaluation.md)。实施前需用户选择quiet/full方式并另行授权烧录；不得仅凭单次最大值直接改策略。措施：默认quiet压制纯周期状态但保留BOOT/RESET/命令回复/声音事件及错误摘要；full模式恢复完整日志供分析。验收：日志错误0、关键事件可核对、UART占用和FLUSH下降、full模式字段可复现；不得用主机合成32行/s结果直接改板端策略。
 
 ## 6. 暂缓与不采用
 
