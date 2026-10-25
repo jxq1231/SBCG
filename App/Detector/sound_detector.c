@@ -1,7 +1,7 @@
 /**
  * @file        sound_detector.c
  * @brief       以短窗去直流能量定位候选声音帧并阻止持续声音重复触发。
- * @details     逐帧累计整数和/平方和；完整窗推进安静布防、连续高能量确认及静默/冷却再布防。
+ * @details     保留逐帧参考并增加完整64点批量统计；共用完整窗的布防、确认、静默和冷却判断。
  * @note        纯C、调用方独占状态；不读取HAL时钟、不借用DMA、不输出日志，不是标准音频分类或声学精定位。
  */
 #include "sound_detector.h"
@@ -168,4 +168,64 @@ SoundDetectorResult SoundDetector_Push(SoundDetector *detector,uint32_t session,
         detector->clipped=false;
     }
     return event ? SOUND_DETECTOR_EVENT : discontinuity ? SOUND_DETECTOR_DISCONTINUITY : SOUND_DETECTOR_NONE;
+}
+
+/**
+ * @brief 合并完整64点窗的统计和状态写回；不满足资格时仅回退一次原Push。
+ * @param detector 非NULL且已配置的独占流状态；拒绝分支不读取PCM。
+ * @param session 当前会话，0通过原Push保留清历史行为。
+ * @param first_frame 当前首点绝对帧，快速路径要求first_frame+63可表示。
+ * @param samples 调用期间借用至少max_frames个连续PCM16点，返回后不保留。
+ * @param max_frames 可用点数1..64；新参数非法不改变检测状态。
+ * @param consumed 非NULL输出，入口为0；接受一点或完整窗时为1或64。
+ * @param out 非NULL候选输出，入口清零，仅EVENT填写。
+ * @return 与原Push一致的结果，DISCONTINUITY已消费一点，INVALID不消费。
+ * @note 仅调用方串行上下文；不读时钟或访问硬件。输出与状态/PCM不得重叠。
+ *       64点的和绝对值<=2^21、平方和<=2^36，整数方差中间量<=2^42。
+ */
+SoundDetectorResult SoundDetector_PushBatch(SoundDetector *detector,uint32_t session,
+    uint64_t first_frame,const int16_t *samples,uint16_t max_frames,
+    uint16_t *consumed,SoundCandidate *out)
+{
+    if(consumed!=NULL){*consumed=0U;}
+    if(out!=NULL){*out=(SoundCandidate){0};}
+    if(consumed==NULL || out==NULL || samples==NULL || max_frames==0U ||
+       max_frames>SOUND_DETECTOR_BATCH_MAX_FRAMES){return SOUND_DETECTOR_INVALID;}
+
+    /* 原实现能在读样本前拒绝的分支，必须先执行，不能先求samples[0]。 */
+    if(detector==NULL || !detector->configured || session==0U ||
+       (detector->have_input && session==detector->session && detector->last_frame==UINT64_MAX))
+    {return SoundDetector_Push(detector,session,first_frame,0,out);}
+
+    const bool continuous=!detector->have_input ||
+        (session==detector->session && detector->last_frame!=UINT64_MAX &&
+         first_frame==detector->last_frame+1U);
+    if(max_frames<SOUND_DETECTOR_BATCH_MAX_FRAMES || detector->used!=0U ||
+       detector->config.window_frames!=SOUND_DETECTOR_BATCH_MAX_FRAMES || !continuous ||
+       first_frame>UINT64_MAX-(SOUND_DETECTOR_BATCH_MAX_FRAMES-1U))
+    {
+        const SoundDetectorResult result=SoundDetector_Push(detector,session,first_frame,samples[0],out);
+        if(result!=SOUND_DETECTOR_INVALID){*consumed=1U;}
+        return result;
+    }
+
+    int32_t sum=0;uint64_t squares=0U;uint32_t peak=0U;bool clipped=false;
+    for(uint16_t i=0U;i<SOUND_DETECTOR_BATCH_MAX_FRAMES;++i)
+    {
+        const int32_t sample=samples[i];
+        sum+=sample;squares+=(uint32_t)(sample*sample);
+        const uint32_t magnitude=(uint32_t)(sample<0 ? -sample:sample);
+        if(magnitude>peak){peak=magnitude;}
+        clipped=clipped || sample==INT16_MIN || sample==INT16_MAX;
+    }
+    detector->session=session;
+    detector->last_frame=first_frame+SOUND_DETECTOR_BATCH_MAX_FRAMES-1U;
+    detector->window_first=first_frame;detector->have_input=true;
+    detector->sum=sum;detector->sum_squares=squares;detector->peak_abs=peak;detector->clipped=clipped;
+    detector->used=SOUND_DETECTOR_BATCH_MAX_FRAMES;
+    const bool event=CompleteWindow(detector,detector->last_frame,out);
+    detector->used=0U;detector->sum=0;detector->sum_squares=0U;
+    detector->peak_abs=0U;detector->clipped=false;
+    *consumed=SOUND_DETECTOR_BATCH_MAX_FRAMES;
+    return event ? SOUND_DETECTOR_EVENT:SOUND_DETECTOR_NONE;
 }

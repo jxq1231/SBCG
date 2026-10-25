@@ -1,5 +1,6 @@
 """Compare real C to a window-wise exact Fraction specification, not hardware."""
 from fractions import Fraction
+import argparse
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,10 @@ def reference(samples, config, first):
 
 def main():
     root = Path(__file__).resolve().parents[2]
-    output = root / 'Logs/Detector/M4_1_1'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir',type=Path,default=root / 'Logs/Detector/M4_1_1')
+    output = parser.parse_args().output_dir
+    output.mkdir(parents=True,exist_ok=True)
     executable = output / ('detector_reference.exe' if os.name == 'nt' else 'detector_reference')
     command = [shutil.which('gcc'), '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-pedantic',
                '-I', str(root / 'App'), str(root / 'Tests/SoundDetector/reference_bridge.c'),

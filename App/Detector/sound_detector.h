@@ -1,13 +1,16 @@
 /**
  * @file        sound_detector.h
  * @brief       声明PCM16候选声音帧定位、质量和去重的纯C接口。
- * @details     调用方持有状态并逐帧输入选定声道；输出仅是能量候选，不代表指定音频或声学到达精度。
+ * @details     调用方持有状态，可逐帧或按完整64点批量输入；输出仅为能量候选，不代表声学到达精度。
  * @note        无HAL/时间戳/日志依赖；不认领DMA或保留样本指针，应用接入及物理验收是后续增量。
  */
 #ifndef SBCG_SOUND_DETECTOR_H
 #define SBCG_SOUND_DETECTOR_H
 #include <stdbool.h>
 #include <stdint.h>
+
+/** @brief 批量入口单次最多借用64个单声道PCM16点；未满足快速资格时只消费一个点。 */
+#define SOUND_DETECTOR_BATCH_MAX_FRAMES 64U
 
 /** @brief 可复制配置；阈值单位PCM16幅值，窗口/冷却单位双声道采样组中的帧数，不隐含采样率。 */
 typedef struct {
@@ -70,4 +73,22 @@ bool SoundDetector_Reset(SoundDetector *detector);
  */
 SoundDetectorResult SoundDetector_Push(SoundDetector *detector,uint32_t session,
     uint64_t frame_index,int16_t sample,SoundCandidate *out);
+/**
+ * @brief 在完整连续64点窗上批量推进，否则消费一点并沿用原逐帧行为。
+ * @param detector 调用方独占的状态；NULL或未配置时拒绝且不读取PCM。
+ * @param session 会话编号；0保留原清历史语义，返回INVALID且不读取PCM。
+ * @param first_frame 首输入点的绝对帧，非DMA元素偏移；快速路径末帧不得溢出。
+ * @param samples 至少max_frames点的连续只读PCM，仅本调用借用，不保存指针；NULL拒绝。
+ * @param max_frames 可借用点数1..64；越界时拒绝且不改检测状态。
+ * @param consumed 非NULL独占输出，入口清0；成功为1或64，INVALID为0。
+ * @param out 非NULL独占候选输出，入口清零；仅EVENT时填写。
+ * @return NONE无候选、EVENT一个有效候选、DISCONTINUITY已消费一点并清旧流、INVALID拒绝。
+ * @note 输出、状态、输入的存储不得重叠。新指针/长度非法优先拒绝且不改状态。
+ *       完整64点、空窗口、配置窗64及首次/同会话连续输入走快速统计；其他情况只消费一点。
+ *       同会话last_frame已为UINT64_MAX时在读PCM前拒绝。调用方须按consumed推进并防止坐标回绕。
+ *       无HAL、IRQ、DMA或日志访问；本接口不直接接管板端采集。
+ */
+SoundDetectorResult SoundDetector_PushBatch(SoundDetector *detector,uint32_t session,
+    uint64_t first_frame,const int16_t *samples,uint16_t max_frames,
+    uint16_t *consumed,SoundCandidate *out);
 #endif
