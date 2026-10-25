@@ -32,4 +32,30 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log);
  * @note    App_Process重复调度，非精确周期；Begin成功后必调用End，End通过才提交统计和候选，失败清检测历史；之后不再解引用DMA指针。
  */
 void AudioCapture_Process(uint32_t now_ms, bool processing_allowed);
+/**
+ * @brief   复制最大一轮AudioCapture内部耗时分解，仅测量，不改变业务。
+ * @param   out 非NULL调用方输出；NULL不写。
+ * @return  无返回值。
+ * @note    HAL毫秒墙钟最大值；各字段为同一次最大轮内的分段，other为总时长减去已计分段；
+ *          1ms分辨率且含IRQ抢占，不是纯CPU或最坏执行时间。
+ */
+typedef struct {
+    uint32_t total_ms;
+    uint32_t io_ms;
+    uint32_t stats_ms;
+    uint32_t sound_stage_ms;
+    uint32_t sound_process_ms;
+    uint32_t chirp_stage_ms;
+    uint32_t chirp_complete_ms;
+    uint32_t chirp_process_ms;
+    uint32_t log_ms;
+    uint32_t other_ms;
+} AudioCaptureProfile;
+/**
+ * @brief   复制AudioCapture最大一轮内部耗时快照。
+ * @param   out 非NULL调用方输出；NULL不写。
+ * @return  无返回值。
+ * @note    仅诊断；不授予PCM或DMA访问权，不清零累计最大值。
+ */
+void AudioCapture_GetProfile(AudioCaptureProfile *out);
 #endif

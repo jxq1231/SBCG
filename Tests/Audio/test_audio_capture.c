@@ -11,6 +11,15 @@ static char line[256], position[256];
 static unsigned position_logs;
 static uint64_t gap;
 static int16_t data[BSP_AUDIO_HALF_ELEMENTS];
+static uint32_t profile_tick;
+static bool profile_step;
+/** @brief 提供可推进的诊断HAL毫秒；测试既可用显式now_ms，也可让分段计时产生非零差。 */
+uint32_t BSP_Console_GetTickMs(void)
+{
+    const uint32_t now=profile_tick;
+    if(profile_step){++profile_tick;}
+    return now;
+}
 bool BSP_Audio_Stop(void){++stops;return stop_ok;}
 bool BSP_Audio_Start(void){++starts;snapshot.running=start_ok;return start_ok;}
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out){*out=snapshot;}
@@ -84,5 +93,16 @@ int main(void)
     stop_ok=true;start_ok=false;AudioCapture_Init(0,Log);CHECK(strstr(line,"RESULT=ERROR,"));
     AudioCapture_Init(0,NULL);before=begins;AudioCapture_Process(1000,true);CHECK(begins==before);
     puts("PASS: stop/start failures and null logger do not start an unobserved stream");
+    /* 让每次HAL读取前进1ms，覆盖GetProfile、最大轮更新与分段求和。 */
+    Init(0);available=true;snapshot.last_callback_ms=999;profile_tick=1000;profile_step=true;
+    AudioCapture_Process(1000,true);
+    AudioCaptureProfile profile;AudioCapture_GetProfile(&profile);
+    CHECK(profile.total_ms>0U && profile.total_ms>=profile.stats_ms);
+    CHECK(profile.total_ms>=profile.io_ms && profile.total_ms>=profile.chirp_stage_ms);
+    CHECK(profile.total_ms==profile.io_ms+profile.stats_ms+profile.sound_stage_ms+
+        profile.sound_process_ms+profile.chirp_stage_ms+profile.chirp_complete_ms+
+        profile.chirp_process_ms+profile.log_ms+profile.other_ms);
+    profile_step=false;
+    puts("PASS: audio profile getter and max-loop breakdown are readable and consistent");
     return 0;
 }

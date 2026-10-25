@@ -102,6 +102,10 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
     ++audio_calls;
     if (processing_allowed) { ++audio_allowed; }
 }
+void AudioCapture_GetProfile(AudioCaptureProfile *out)
+{
+    if (out != NULL) { *out = (AudioCaptureProfile){0}; }
+}
 
 void CodecMonitor_Init(uint32_t now_ms, CodecMonitor_Log log)
 {

@@ -111,6 +111,10 @@ static uint32_t heartbeat_seq;
 /* CHIRP构建：迄今最大前台循环总时长及同一轮AudioCapture/UI/其余耗时，仅诊断。 */
 #ifdef SBCG_USE_CHIRP
 static uint32_t max_loop_ms,max_loop_audio_ms,max_loop_ui_ms,max_loop_other_ms;
+static uint32_t max_loop_flush_ms;
+#ifdef SBCG_USE_AUDIO
+static uint32_t last_profile_ms;
+#endif
 #endif
 /* Also observable in a debugger if the UART cannot send any text. */
 static volatile uint32_t app_tx_error_count;
@@ -553,16 +557,46 @@ void App_Process(void)
     loop_ui_ms = BSP_Console_GetTickMs() - ui_begin_ms;
 #endif
 #endif
+#ifdef SBCG_USE_CHIRP
+    const uint32_t flush_begin_ms = BSP_Console_GetTickMs();
+#endif
     FlushOneLine();
 #ifdef SBCG_USE_CHIRP
+    const uint32_t loop_flush_ms = BSP_Console_GetTickMs() - flush_begin_ms;
     /* 只保留迄今最大一轮的分解；LOOP_MS与Chirp GAP_MS采样点不同，不能相减推断。 */
     const uint32_t loop_ms = BSP_Console_GetTickMs() - loop_begin_ms;
     if (loop_ms > max_loop_ms) {
         max_loop_ms = loop_ms;
         max_loop_audio_ms = loop_audio_ms;
         max_loop_ui_ms = loop_ui_ms;
+        max_loop_flush_ms = loop_flush_ms;
         const uint32_t known = loop_audio_ms + loop_ui_ms;
         max_loop_other_ms = loop_ms > known ? loop_ms - known : 0U;
     }
+#if defined(SBCG_USE_AUDIO)
+    /* 每5秒输出低频率A3分解：最大循环的OTHER/Flush与AudioCapture内部最大轮。 */
+    if ((uint32_t)(BSP_Console_GetTickMs() - last_profile_ms) >= 5000U) {
+        last_profile_ms = BSP_Console_GetTickMs();
+        AudioCaptureProfile audio_profile;
+        AudioCapture_GetProfile(&audio_profile);
+        char line[256];
+        int length = snprintf(line, sizeof(line),
+            "$PROFILE,LOOP_MS=%" PRIu32 ",AUDIO_MS=%" PRIu32 ",UI_MS=%" PRIu32
+            ",OTHER_MS=%" PRIu32 ",FLUSH_MS=%" PRIu32 "\r\n",
+            max_loop_ms, max_loop_audio_ms, max_loop_ui_ms, max_loop_other_ms,
+            max_loop_flush_ms);
+        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+        length = snprintf(line, sizeof(line),
+            "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
+            ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32
+            ",CH_PROC_MS=%" PRIu32 ",IO_MS=%" PRIu32 ",LOG_MS=%" PRIu32
+            ",OTHER_MS=%" PRIu32 "\r\n", audio_profile.total_ms, audio_profile.stats_ms,
+            audio_profile.sound_stage_ms, audio_profile.sound_process_ms,
+            audio_profile.chirp_stage_ms, audio_profile.chirp_complete_ms,
+            audio_profile.chirp_process_ms, audio_profile.io_ms, audio_profile.log_ms,
+            audio_profile.other_ms);
+        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    }
+#endif
 #endif
 }

@@ -15,6 +15,7 @@
 #endif
 #include "audio_statistics.h"
 #include "BSP/bsp_audio.h"
+#include "BSP/bsp_console.h"
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@ static bool have_rate_snapshot, level_valid;
 static AudioStatistics levels;
 /* Metadata only; the stored DMA pointer is never dereferenced after End. */
 static BSP_AudioBlock level_block;
+static AudioCaptureProfile max_profile;
 
 /* newlib-nano and native MinGW differ in long-long printf support. Keep
    the observed-frame counter portable without enabling larger printf libs. */
@@ -61,6 +63,7 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
     have_rate_snapshot = level_valid = false;
     levels = (AudioStatistics){0};
     level_block = (BSP_AudioBlock){0};
+    max_profile=(AudioCaptureProfile){0};
     const bool stopped = BSP_Audio_Stop();
     const bool started = stopped && log != NULL && BSP_Audio_Start();
 #ifdef SBCG_USE_SOUND_DETECTOR
@@ -90,49 +93,88 @@ void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
  * @return  无返回值。
  * @note    由App_Process调度，非精确周期；Begin成功后必调用End，End通过才提交电平及候选。
  *          扫频在借用内仅复制，失败清历史；归还后每块扫描一次8192帧、每轮至多8窗，不再解引用DMA指针。
+ *          同时记录最大一轮AudioCapture内部分解，仅测量；日志仍按原1秒节流。
  */
+/**
+ * @brief 结束一次AudioCapture轮次的分段计时并只在更慢轮保存分解。
+ * @param entry_ms 本轮入口tick；profile 本轮各分段，函数内补total/other。
+ * @return 无返回值；仅前台写静态最大快照，不改变业务状态。
+ */
+static void ProfileFinish(uint32_t entry_ms, AudioCaptureProfile *profile)
+{
+    const uint32_t total_ms = BSP_Console_GetTickMs() - entry_ms;
+    profile->total_ms = total_ms;
+    const uint32_t known = profile->io_ms + profile->stats_ms + profile->sound_stage_ms
+        + profile->sound_process_ms + profile->chirp_stage_ms + profile->chirp_complete_ms
+        + profile->chirp_process_ms + profile->log_ms;
+    profile->other_ms = total_ms > known ? total_ms - known : 0U;
+    if (total_ms > max_profile.total_ms) { max_profile = *profile; }
+}
 void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
 {
     if (log_line == NULL || !processing_allowed) { return; }
+    const uint32_t profile_entry_ms = BSP_Console_GetTickMs();
+    AudioCaptureProfile profile = {0};
     BSP_AudioBlock block;
+    uint32_t mark = BSP_Console_GetTickMs();
     if (BSP_Audio_BeginBlock(&block))
     {
+        profile.io_ms += BSP_Console_GetTickMs() - mark;
         AudioStatistics next;
+        mark = BSP_Console_GetTickMs();
         const bool computed = AudioStatistics_Compute(block.samples, BSP_AUDIO_HALF_FRAMES, &next);
+        profile.stats_ms = BSP_Console_GetTickMs() - mark;
 #ifdef SBCG_USE_CHIRP
         /* 只复制选定声道，相关处理必须等真实End验证通过。 */
+        mark = BSP_Console_GetTickMs();
         (void)ChirpService_Stage(BSP_Console_GetTickMs(),&block);
+        profile.chirp_stage_ms = BSP_Console_GetTickMs() - mark;
 #endif
 #ifdef SBCG_USE_SOUND_DETECTOR
         /* 暂算不能代表DMA仍有效；候选只在真实End结果之后提交。 */
         /* Begin可能刚好跨DMA IRQ，入口now_ms可能早于completed_ms；取新鲜时钟。 */
+        mark = BSP_Console_GetTickMs();
         (void)SoundDetectorService_Stage(BSP_Console_GetTickMs(),&block);
+        profile.sound_stage_ms = BSP_Console_GetTickMs() - mark;
 #endif
+        mark = BSP_Console_GetTickMs();
         const bool accepted=BSP_Audio_EndBlock(&block, computed);
+        profile.io_ms += BSP_Console_GetTickMs() - mark;
 #ifdef SBCG_USE_CHIRP
+        mark = BSP_Console_GetTickMs();
         (void)ChirpService_Complete(accepted);
+        profile.chirp_complete_ms = BSP_Console_GetTickMs() - mark;
 #endif
 #ifdef SBCG_USE_SOUND_DETECTOR
+        mark = BSP_Console_GetTickMs();
         (void)SoundDetectorService_Complete(accepted);
+        profile.io_ms += BSP_Console_GetTickMs() - mark;
 #endif
         if (accepted)
         { levels = next; level_ms = block.completed_ms; level_block = block; level_valid = true; }
         else { level_valid = false; }
     }
+    else { profile.io_ms += BSP_Console_GetTickMs() - mark; }
 #ifdef SBCG_USE_SOUND_DETECTOR
     /* 归还后才检查采集会话并限速输出；DHT门控已在函数入口处理。 */
     BSP_AudioSnapshot sound_snapshot;
     BSP_Audio_GetSnapshot(&sound_snapshot);
     /* 快照之后再读tick，避免新回调时间晚于旧入口时间而无符号下溢。 */
     now_ms=BSP_Console_GetTickMs();
+    mark = BSP_Console_GetTickMs();
     SoundDetectorService_Process(now_ms,&sound_snapshot);
+    profile.sound_process_ms = BSP_Console_GetTickMs() - mark;
 #endif
 #ifdef SBCG_USE_CHIRP
     BSP_AudioSnapshot chirp_snapshot;
     BSP_Audio_GetSnapshot(&chirp_snapshot);
+    mark = BSP_Console_GetTickMs();
     ChirpService_Process(BSP_Console_GetTickMs(),&chirp_snapshot);
+    profile.chirp_process_ms = BSP_Console_GetTickMs() - mark;
 #endif
-    if ((uint32_t)(now_ms - last_log_ms) < AUDIO_LOG_PERIOD_MS) { return; }
+    if ((uint32_t)(now_ms - last_log_ms) < AUDIO_LOG_PERIOD_MS)
+    { ProfileFinish(profile_entry_ms,&profile); return; }
+    const uint32_t log_begin_ms = BSP_Console_GetTickMs();
     BSP_AudioSnapshot snapshot;
     BSP_Audio_GetSnapshot(&snapshot);
 #if defined(SBCG_USE_SOUND_DETECTOR) || defined(SBCG_USE_CHIRP)
@@ -199,4 +241,14 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
         snapshot.index_faults, position_valid ? 1U : 0U);
     if (position_length > 0 && (size_t)position_length < sizeof line)
     { log_line(line, position_length); }
+    profile.log_ms = BSP_Console_GetTickMs() - log_begin_ms;
+    ProfileFinish(profile_entry_ms,&profile);
 }
+/**
+ * @brief 复制最大一轮AudioCapture内部耗时分解。
+ * @param out 非NULL调用方输出；NULL不写。
+ * @return 无返回值。
+ * @note 仅诊断；不清最大累计值，不授予PCM访问权。
+ */
+void AudioCapture_GetProfile(AudioCaptureProfile *out)
+{ if (out != NULL) { *out = max_profile; } }
