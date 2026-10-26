@@ -36,7 +36,7 @@ TRIALS_DEFAULT = ["toa-20261026-04", "toa-20261026-05", "toa-20261026-06",
 PEAK_REF = "c79bf25"
 
 FORMAT_MARKERS = ("bad json", "odd byte", "frames*2", "non-numeric",
-                  "bad json shape", "regresses", "metadata",
+                  "bad json shape", "regress", "metadata",
                   "without capture", "no capture domain",
                   "HINT ", "BEST ", "not object")
 
@@ -164,7 +164,10 @@ def build_ledger_for_trial(trial, log_root):
     entries, scan_problems = ledger_mod.scan_pcm_directory(
         log_root / "PCM" / trial, trial)
     ledger = ledger_mod.build_ledger(records, trial, entries, scan_problems)
-    return ledger, entries, parse_problems + scan_problems
+    # ledger.problems contains scan problems plus internal association/format
+    # problems (capture regressions, HINT mismatches, ...). They must reach the
+    # summary/TOOL_CHECK gate instead of being silently dropped.
+    return ledger, entries, parse_problems + list(ledger.problems)
 
 
 def first_int(fields, key):
@@ -221,6 +224,23 @@ def main():
     versions = ["peak_backtrack", "current_envelope"]
     if prior_snapshot is not None:
         versions.insert(1, "original_envelope")
+    version_meta = {}
+    for version in versions:
+        hashes = {name.split(":", 1)[1]: digest
+                  for name, digest in snapshot_hashes.items()
+                  if name.startswith(version + ":")}
+        if version == "peak_backtrack":
+            source = f"git:{PEAK_REF}"
+            semantic = "peak-backtrack reference"
+        elif version == "original_envelope":
+            source = f"prior-run:{args.prior_envelope}"
+            semantic = "prior envelope snapshot (provenance must be checked)"
+        else:
+            source = "worktree"
+            semantic = "current envelope"
+        version_meta[version] = {"source": source, "semantic": semantic,
+                                  "head": head if version == "current_envelope" else None,
+                                  "snapshot_hashes": hashes}
     gcc = shutil.which("gcc") or "gcc-missing"
     gcc_version = "unknown"
     if gcc != "gcc-missing":
@@ -269,6 +289,8 @@ def main():
 
     # ---- ledger + window extraction + replay ----
     assets = asset_check(args.assets_dir)
+    if assets.get("status") != "OK" and not args.skip_synthetic:
+        status["hard_failures"].append(f"assets: {assets.get('status')}")
     binaries = {}
     build_errors = []
     for version in versions:
@@ -437,6 +459,7 @@ def main():
                 "gcc -std=c11 {O0,O2} -Wall -Wextra -Werror -pedantic "
                 "-I <snap> Analysis/toa_replay_cli.c <snap>/toa_estimator.c -lm",
             "assets": assets, "inventory": inventory,
+            "versions": versions, "version_meta": version_meta,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "ledger.json").write_text(
         json.dumps({"conservation": conservation, "per_trial": per_trial,
@@ -512,6 +535,7 @@ def main():
     tool_check_ok = (determinism_bad == 0 and determinism_opt_mismatch == 0
                      and not status["hard_failures"] and not format_errors)
     summary = {"run_dir": str(run_dir), "conservation": conservation,
+               "versions": versions, "version_meta": version_meta,
                "per_trial": per_trial, "diagnostics": diagnostics,
                "synthetic": {"windows": len(synthetic_results),
                              "corr_reference": corr_ref,
@@ -520,7 +544,7 @@ def main():
                "reproducibility": {"repeat_rows": determinism_rows,
                                    "repeat_mismatch": determinism_bad,
                                    "opt_mismatch": determinism_opt_mismatch},
-               "hard_failures": status["hard_failures"],
+               "hard_failures": status["hard_failures"], "assets": assets,
                "conclusions": {"TOOL_CHECK": "PASS" if tool_check_ok else "FAIL",
                                "DATA_COVERAGE": {
                                    k: detail_summary(d) for k, d in per_trial.items()},
@@ -803,6 +827,28 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
             if ra and rb and ra["valid"] and rb["valid"]:
                 deltas[f"{a}_to_{b}"].append(
                     rb["fraction_frames"] - ra["fraction_frames"])
+    validity_delta = {}
+    for a, b in pairs:
+        valid_to_invalid, invalid_to_valid = [], []
+        both_valid = both_invalid = 0
+        for key, runs in per_window.items():
+            ra, rb = runs.get(a), runs.get(b)
+            if not ra or not rb:
+                continue
+            if ra["valid"] and rb["valid"]:
+                both_valid += 1
+            elif ra["valid"]:
+                valid_to_invalid.append("|".join(key))
+            elif rb["valid"]:
+                invalid_to_valid.append("|".join(key))
+            else:
+                both_invalid += 1
+        validity_delta[f"{a}_to_{b}"] = {
+            "both_valid": both_valid,
+            "valid_to_invalid": valid_to_invalid,
+            "invalid_to_valid": invalid_to_valid,
+            "both_invalid": both_invalid}
+    diagnostics["version_validity_delta"] = validity_delta
     for key in sorted(by_trial_version):
         trial, version = key
         diagnostics["by_trial_version"].setdefault(trial, {})[version] = \
@@ -855,7 +901,7 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
                     "max_dev_us": round(max(abs(d) for d in deviations), 2),
                     "sigma_us": round((sum(d * d for d in deviations) /
                                        len(deviations)) ** 0.5, 2)}
-            missing = [k for k in range(N_SLOTS) if k not in slots]
+            missing = [k for k in range(N_SLOTS) if str(k) not in slots]
             group_stats["per_version"][version] = {
                 "slots": slots, "missing_slots": missing,
                 "full_10_slot_consistency_possible": complete}

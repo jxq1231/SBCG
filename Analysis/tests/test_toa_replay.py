@@ -161,7 +161,8 @@ class PipelineTest(unittest.TestCase):
         summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
         self.assertEqual(summary["hard_failures"], [])
         rows = [json.loads(line) for line in
-                (run_dir / "replay.jsonl").open(encoding="utf-8")]
+                (run_dir / "replay.jsonl").read_text(
+                    encoding="utf-8").splitlines()]
         windows = [r for r in rows if r["kind"] == "WINDOW"]
         self.assertEqual(len(windows), 2)
         self.assertTrue(all(r["offline_window_status"] == "OK" for r in windows))
@@ -177,7 +178,8 @@ class PipelineTest(unittest.TestCase):
         self.assertNotEqual(first, second)
         def canonical(path):
             rows = []
-            for line in (path / "replay.jsonl").open(encoding="utf-8"):
+            for line in (path / "replay.jsonl").read_text(
+                    encoding="utf-8").splitlines():
                 row = json.loads(line)
                 row.pop("trial", None)
                 rows.append(json.dumps(row, sort_keys=True))
@@ -195,11 +197,49 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         run_dir = sorted((self.root / "Replay").iterdir())[-1]
         rows = [json.loads(line) for line in
-                (run_dir / "replay.jsonl").open(encoding="utf-8")]
+                (run_dir / "replay.jsonl").read_text(
+                    encoding="utf-8").splitlines()]
         versions = {rw["version"] for row in rows
                     for rw in row.get("replays", [])}
         self.assertEqual(versions, {"peak_backtrack", "original_envelope",
                                     "current_envelope"})
+
+    def test_ledger_problem_fails_tool_check(self):
+        # F1: capture ID regression is a ledger-level format problem. It must
+        # propagate into per_trial.problems/format_errors and make TOOL_CHECK
+        # fail instead of silently passing with exit 0.
+        tmp = Path(self.tmp.name) / "ledgerbad"
+        trial = "t1"
+        trial_dir = tmp / "Logs" / "Chirp" / trial
+        pcm_dir = tmp / "Logs" / "Chirp" / "PCM" / trial
+        trial_dir.mkdir(parents=True)
+        pcm_dir.mkdir(parents=True)
+        captures = [
+            "$CHIRP_CAPTURE,ID=2,SESSION=1,FIRST=200000,FRAMES=1000,"
+            "CLAMP=0,TAIL=1,PKTS=2,TOTAL=2,RESULT=OK",
+            "$CHIRP_CAPTURE,ID=1,SESSION=1,FIRST=100000,FRAMES=1000,"
+            "CLAMP=0,TAIL=1,PKTS=2,TOTAL=2,RESULT=OK",
+        ]
+        (trial_dir / "run.jsonl").write_text(
+            "".join(json.dumps({"t": 0.1 * i, "line": line}) + "\n"
+                    for i, line in enumerate(captures)), encoding="utf-8")
+        out_root = tmp / "Replay"
+        result = subprocess.run(
+            [sys.executable, "-B",
+             str(Path(__file__).resolve().parents[1] / "toa_replay.py"),
+             "--trials", trial, "--output-root", str(out_root),
+             "--root", str(tmp / "Logs" / "Chirp"),
+             "--assets-dir", str(tmp / "NoAssets"), "--skip-synthetic"],
+            capture_output=True, text=True, timeout=300)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        summary = json.loads(
+            (sorted(out_root.iterdir())[-1] / "summary.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(summary["conclusions"]["TOOL_CHECK"], "FAIL")
+        self.assertTrue(any("capture ids regress" in p
+                            for p in summary["format_errors"]))
+        self.assertTrue(any("capture ids regress" in p
+                            for p in summary["per_trial"][trial]["problems"]))
 
 
 class CliSaferTest(unittest.TestCase):
@@ -329,6 +369,52 @@ class SlotGateTest(unittest.TestCase):
         self.assertFalse(
             group["per_version"]["current_envelope"]
             ["full_10_slot_consistency_possible"])
+
+    def test_missing_slots_reports_only_absent_slots(self):
+        # F3: slots are stored with str keys; missing_slots must compare keys
+        # in the same type, otherwise it always reports all ten slots missing.
+        from toa_replay import aggregate_diagnostics
+        rows = []
+        base_us = 10_000_000.0
+        for trial in ("toaB-20261026-07", "toaB-20261026-08",
+                      "toaB-20261026-09"):
+            for slot in range(5):
+                frac = (base_us + slot * 2_000_000.0) * 48000 / 1e6
+                rows.append({"trial": trial, "sound_key": f"w:{trial}:{slot}",
+                             "offline_window_status": "OK", "anchor": 0,
+                             "replays": [
+                                 {"version": "current_envelope", "opt": "-O0",
+                                  "runs": [{"valid": True,
+                                            "fraction_frames": frac}]}]})
+        diagnostics = aggregate_diagnostics(rows, ["current_envelope"])
+        group = diagnostics["cross_round_by_group"]["B"][
+            "per_version"]["current_envelope"]
+        self.assertEqual(group["missing_slots"], [5, 6, 7, 8, 9])
+        self.assertEqual(sorted(group["slots"]), ["0", "1", "2", "3", "4"])
+
+    def test_validity_delta_reports_transition(self):
+        # F2: delta statistics must not hide a valid->invalid transition.
+        from toa_replay import aggregate_diagnostics
+        rows = []
+        specs = [("both", True, True), ("lost", True, False),
+                 ("gained", False, True)]
+        for label, peak_valid, current_valid in specs:
+            rows.append({"trial": "toaB-20261026-07",
+                         "sound_key": label, "offline_window_status": "OK",
+                         "anchor": 0, "replays": [
+                             {"version": "peak_backtrack", "opt": "-O0",
+                              "runs": [{"valid": peak_valid,
+                                        "fraction_frames": 1.0}]},
+                             {"version": "current_envelope", "opt": "-O0",
+                              "runs": [{"valid": current_valid,
+                                        "fraction_frames": 2.0}]}]})
+        diagnostics = aggregate_diagnostics(
+            rows, ["peak_backtrack", "current_envelope"])
+        delta = diagnostics["version_validity_delta"][
+            "peak_backtrack_to_current_envelope"]
+        self.assertEqual(delta["both_valid"], 1)
+        self.assertIn("toaB-20261026-07|lost", delta["valid_to_invalid"])
+        self.assertIn("toaB-20261026-07|gained", delta["invalid_to_valid"])
 
 
 if __name__ == "__main__":
