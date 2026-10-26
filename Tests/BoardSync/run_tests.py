@@ -30,6 +30,10 @@ if not status and (root/'Tests/BoardSync/test_ptp_board_sync.c').exists():
     status=run(command)
     if not status:
         status=run([str(out/'test_ptp_board_sync.exe')])
+if not status:
+    status=run(common+[str(root/'Tests/BoardSync/test_time_domain.c'),str(root/'App/Sync/time_domain.c'),'-o',str(out/'test_time_domain.exe')])
+if not status:
+    status=run([str(out/'test_time_domain.exe')])
 target=out/('transport_red.txt' if '--red' in sys.argv else 'transport_tests.txt')
 target.write_text(''.join(logs),encoding='utf-8')
 raise SystemExit(status)

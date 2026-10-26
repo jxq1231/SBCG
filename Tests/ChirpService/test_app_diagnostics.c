@@ -11,6 +11,7 @@
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Detector/standard_sequence.h"
+#include "Sync/time_domain.h"
 /** @brief 空锚点源，out借用不写，返回false。 */
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){(void)out;return false;}
 /** @brief 未投递锚点的桩，参数借用不保存，无返回值。 */
@@ -55,6 +56,15 @@ void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o)
 
 /** @brief App测试桩：撤销权威测量结果。 */
 void MeasurementResult_Invalidate(uint32_t now){(void)now;}
+
+/** @brief App测试桩：无同步快照，共同域无效。 */
+void TimeSync_GetSnapshot(uint32_t now,TimeSyncSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+/** @brief App测试桩：清空共同时间域。 */
+void TimeDomain_Init(void){}
+/** @brief App测试桩：所有同步快照均不产生共同域。 */
+void TimeDomain_Update(const TimeSyncSnapshot *sync){(void)sync;}
+/** @brief App测试桩：共同时间域无效。 */
+void TimeDomain_Get(TimeDomainSnapshot *out){if(out){out->valid=false;out->id=0U;}}
 int main(void)
 {
  Reset(0U,true);temperature_low=true;

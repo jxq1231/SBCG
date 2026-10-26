@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.6共同时间域门控软件完成（2026-10-27）。** `time_domain`由`TimeSync`派生：A配置且未FAULT、B还要求offset_valid/internal_locked；域无效时不发事件UDP并撤销MeasurementResult，替代固定诊断domain。尚未直接读取PPS QUALIFIED/未烧录，内部锁定不等于外部±10µs验收。见[M4.3.6记录](Milestones/M4_3_6_Time_Domain_Gate.md)。
+
 **M4.3.5标准声周期序列监控软件原型完成（2026-10-27）。** `standard_sequence`用10次/2s契约检测周期事件串，输出事件数/周期误差/质量；O0/O2主机测试通过。App已接入事件流并输出`$STANDARD_SEQUENCE`诊断；测量发布要求序列形成且quality≥50，不足则撤销结果；UDP事件仍为诊断发送；周期候选不等于标准声身份；模板MATCH0仍未解决，未烧录/未两板验证。见[M4.3.5记录](Milestones/M4_3_5_Standard_Sequence_Monitor.md)。
 
 **标准声已正式选定（2026-10-27）。** 按老师允许自选的说明，当前`Data/Audio/standard_chirp_2-6khz_10x_20s.wav`（SHA256 `56dedc45…`，10次50ms 2–6kHz chirp，1/3/…/19s）被冻结为标准声；选择契约`Data/Audio/standard_selection.json`和只读校验`Analysis/verify_standard_selection.py`通过。其识别证据仍为MATCH0/最高raw相关0.773821，标准识别未通过；不能把能量/TOA诊断当标准识别验收。见[标准音频说明](Audio_Selection.md)。

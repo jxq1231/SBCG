@@ -8,6 +8,8 @@
 
 **最新先读[M4.2.5真实播放复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。** 用户已开放声音测试；`SBCG-M4.2-SEARCHDIAG` 镜像自动播放标准WAV 20秒/10次，24个完整任务全部`LOW_CORR`、MATCH0；最高raw相关0.773821<0.80、RMS≈2300、N=257/V=257、LR/Z/I=0，RPT24/RLOST0，资源/日志/UI错误0；10个高能量候选、7个高相关任务。数字WAV与模板相关1.0，诊断链已实机工作；失败在门限前相关度，不是搜索预算/范围/低RMS；独立复核PASS_WITH_RESERVATIONS（无阻塞）。下一步保存PCM/受控声学实验，不直接降低门限；识别/PTP/测距仍未验收。
 
+**最新M4.3.6共同时间域门控（2026-10-27）：** 用TimeSync状态派生A参考/B内部锁定域，域无效时不发事件UDP并撤销测量结果；替代固定诊断domain。PPS QUALIFIED未直接接入、未烧录/未两板验收；标准声识别/距离仍需硬件。[M4.3.6记录](Milestones/M4_3_6_Time_Domain_Gate.md)。
+
 **最新M4.3.5周期序列监控（2026-10-27）：** 冻结标准声后新增纯C 10次/2s周期检测（抖动/漏步/低质量/长静默O0/O2测试通过）；尚未接入App/UDP/测量门控，周期候选不等于标准声识别；MATCH0仍未解决、未烧录。[M4.3.5记录](Milestones/M4_3_5_Standard_Sequence_Monitor.md)。
 
 **最新M4.3.4测量结果/状态页（2026-10-27）：** 配对结果收口为唯一`MeasurementResult`（ID/距离/方向/质量/温度版本/2s有效期），LCD/TouchGFX从同一快照显示；无温度/超龄/越界不出值。仍为诊断时间域/SYNC=0，未接真实两板/未烧录。[M4.3.4记录](Milestones/M4_3_4_Measurement_UI.md)。

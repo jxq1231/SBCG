@@ -31,6 +31,7 @@
 #include "BSP/bsp_console.h"
 #ifdef SBCG_USE_BOARD_SYNC
 #include "Sync/time_sync.h"
+#include "Sync/time_domain.h"
 #endif
 #ifdef SBCG_USE_BOARD_IDENTITY
 #include "BSP/bsp_board_identity.h"
@@ -344,7 +345,9 @@ static void PublishMeasurement(const SoundPairResult *pair)
     const uint32_t now_ms=BSP_Console_GetTickMs();
     TemperatureService_GetSnapshot(now_ms,&temperature);
     StandardSequence_Get(&standard_sequence,&sequence);
-    if(!sequence.detected || sequence.quality<50U){
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(!domain.valid || !sequence.detected || sequence.quality<50U){
         MeasurementResult_Invalidate(now_ms);
         return;
     }
@@ -441,6 +444,7 @@ void App_Init(void)
         static const char error[] = "$SYNC_INIT,RESULT=INIT_ERROR\r\n";
         SendLine(error, (int)(sizeof(error) - 1U));
     }
+    TimeDomain_Init();
 #endif
 #endif
     TemperatureService_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
@@ -562,6 +566,11 @@ void App_Process(void)
 #ifdef SBCG_USE_BOARD_SYNC
     /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
     TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    {
+        TimeSyncSnapshot sync_snapshot;
+        TimeSync_GetSnapshot(BSP_Console_GetTickMs(), &sync_snapshot);
+        TimeDomain_Update(&sync_snapshot);
+    }
 #ifdef SBCG_USE_PPS
     /* DHT拉低只禁止新目标排程；安全截止及已到达目标的消费每轮仍须执行。 */
     PpsService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
@@ -614,12 +623,19 @@ void App_Process(void)
                 SendLine(sequence_line,(int)strlen(sequence_line));
                 standard_sequence_detected=sequence_detected;
             }
+            TimeDomainSnapshot domain;
+            TimeDomain_Get(&domain);
+            if (!domain.valid)
+            {
+                MeasurementResult_Invalidate(BSP_Console_GetTickMs());
+                continue;
+            }
             SoundEventRecord event = {0};
             event.valid = true;
             event.type = SOUND_EVENT_CHIRP;
             event.quality = 100U;
             event.side = event_profile->role == BOARD_ROLE_A ? SOUND_SIDE_A : SOUND_SIDE_B;
-            event.time_domain = APP_SOUND_EVENT_DIAGNOSTIC_DOMAIN;
+            event.time_domain = domain.id;
             event.session = notice.session;
             event.sequence = notice.sequence;
             event.time_ns = notice.time_ns;

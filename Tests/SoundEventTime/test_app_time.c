@@ -6,6 +6,7 @@
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Detector/standard_sequence.h"
+#include "Sync/time_domain.h"
 #include "BSP/bsp_board_identity.h"
 #include "Sync/time_sync.h"
 static BoardIdentityProfile identity;
@@ -56,6 +57,15 @@ void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o)
 
 /** @brief App测试桩：撤销权威测量结果。 */
 void MeasurementResult_Invalidate(uint32_t now){(void)now;}
+
+/** @brief App测试桩：无同步快照，共同域无效。 */
+void TimeSync_GetSnapshot(uint32_t now,TimeSyncSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+/** @brief App测试桩：清空共同时间域。 */
+void TimeDomain_Init(void){}
+/** @brief App测试桩：所有同步快照均不产生共同域。 */
+void TimeDomain_Update(const TimeSyncSnapshot *sync){(void)sync;}
+/** @brief App测试桩：共同时间域无效。 */
+void TimeDomain_Get(TimeDomainSnapshot *out){if(out){out->valid=false;out->id=0U;}}
 int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
  Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
  start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);
