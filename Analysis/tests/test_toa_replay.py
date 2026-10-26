@@ -184,6 +184,23 @@ class PipelineTest(unittest.TestCase):
             return rows
         self.assertEqual(canonical(first), canonical(second))
 
+    def test_prior_envelope_adds_third_version(self):
+        # A --prior-envelope run dir freezes original_envelope as a third version.
+        prior = self.root / "prior_run" / "source_snapshots" / "current_envelope"
+        prior.mkdir(parents=True, exist_ok=True)
+        for name in ("toa_estimator.c", "toa_estimator.h"):
+            shutil.copy(ROOT / "App" / "Detector" / name, prior / name)
+        self.args += ["--prior-envelope", str(self.root / "prior_run")]
+        result = self.pipeline()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        run_dir = sorted((self.root / "Replay").iterdir())[-1]
+        rows = [json.loads(line) for line in
+                (run_dir / "replay.jsonl").open(encoding="utf-8")]
+        versions = {rw["version"] for row in rows
+                    for rw in row.get("replays", [])}
+        self.assertEqual(versions, {"peak_backtrack", "original_envelope",
+                                    "current_envelope"})
+
 
 if __name__ == "__main__":
     unittest.main()

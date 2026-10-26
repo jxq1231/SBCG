@@ -18,6 +18,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "Analysis"))
@@ -59,19 +60,23 @@ def make_run_dir(output_root: Path) -> Path:
     return candidate
 
 
-def freeze_snapshots(run_dir: Path):
+def freeze_snapshots(run_dir: Path, prior_envelope: Optional[Path] = None):
     snapshot_dir = run_dir / "source_snapshots"
     snapshot_dir.mkdir()
     frozen = {}
-    for version, ref in (("peak_backtrack", PEAK_REF), ("current_envelope", "worktree")):
+    sources = [("peak_backtrack", PEAK_REF), ("current_envelope", "worktree")]
+    if prior_envelope is not None:
+        sources.insert(1, ("original_envelope", prior_envelope))
+    for version, ref in sources:
         dest = snapshot_dir / version
         dest.mkdir()
         for name in ("toa_estimator.c", "toa_estimator.h"):
-            source = ROOT / "App" / "Detector" / name
             if ref == "worktree":
-                content = source.read_bytes()
+                content = (ROOT / "App" / "Detector" / name).read_bytes()
+            elif isinstance(ref, Path):
+                content = (ref / name).read_bytes()
             else:
-                content = run_git(["show", f"{ref}:App/Detector/{name}"]).stdout.encode()
+                content = run_git([f"show", f"{ref}:App/Detector/{name}"]).stdout.encode()
             (dest / name).write_bytes(content)
             frozen[f"{version}:{name}"] = sha256_bytes(content)
     return snapshot_dir, frozen
@@ -170,6 +175,8 @@ def main():
                         help="log tree (Logs/Chirp by default)")
     parser.add_argument("--assets-dir", type=Path, default=ROOT / "Data" / "Audio")
     parser.add_argument("--skip-synthetic", action="store_true")
+    parser.add_argument("--prior-envelope", type=Path, default=None,
+                        help="run dir snapshot to freeze as original_envelope")
     args = parser.parse_args()
 
     run_dir = make_run_dir(args.output_root)
@@ -179,7 +186,16 @@ def main():
     git_status = subprocess.run(["git", "status", "--short"], cwd=ROOT,
                                 capture_output=True, text=True).stdout
     head = run_git(["rev-parse", "HEAD"]).stdout.strip()
-    snapshot_dir, snapshot_hashes = freeze_snapshots(run_dir)
+    prior_snapshot = None
+    if args.prior_envelope is not None:
+        prior_snapshot = args.prior_envelope / "source_snapshots" / "current_envelope"
+        if not prior_snapshot.exists():
+            status["hard_failures"].append(
+                f"prior envelope snapshot missing: {prior_snapshot}")
+    snapshot_dir, snapshot_hashes = freeze_snapshots(run_dir, prior_snapshot)
+    versions = ["peak_backtrack", "current_envelope"]
+    if prior_snapshot is not None:
+        versions.insert(1, "original_envelope")
     gcc = shutil.which("gcc") or "gcc-missing"
     gcc_version = "unknown"
     if gcc != "gcc-missing":
@@ -227,7 +243,7 @@ def main():
     assets = asset_check(args.assets_dir)
     binaries = {}
     build_errors = []
-    for version in ("peak_backtrack", "current_envelope"):
+    for version in versions:
         for opt in ("-O0", "-O2"):
             code, exe = compile_cli(run_dir, snapshot_dir, version, opt)
             if code != 0:
@@ -368,7 +384,7 @@ def main():
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     # ---- summary ----
-    diagnostics = aggregate_diagnostics(replay_rows)
+    diagnostics = aggregate_diagnostics(replay_rows, versions)
     synthetic_results = [] if args.skip_synthetic else run_synthetic(
         run_dir, binaries, args.assets_dir)
     determinism_rows = 0
@@ -388,7 +404,7 @@ def main():
             key = (rw["version"], rw["opt"])
             run_a = rw["runs"][0]
             opt_fractions[key] = (run_a["valid"], run_a["fraction_frames"])
-        for version in ("peak_backtrack", "current_envelope"):
+        for version in versions:
             o0 = opt_fractions.get((version, "-O0"))
             o2 = opt_fractions.get((version, "-O2"))
             if o0 is not None and o2 is not None and o0 != o2:
@@ -602,7 +618,8 @@ def slot_diagnostics(values_us):
             "verdict_possible": complete}
 
 
-def aggregate_diagnostics(replay_rows):
+def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
+                                                 "current_envelope")):
     """Per-version per-trial slot stats plus version cross-reference."""
     by_trial_version = {}
     for row in replay_rows:
@@ -619,7 +636,6 @@ def aggregate_diagnostics(replay_rows):
             by_trial_version.setdefault(key, []).append(
                 nominal_us(anchor, run0["fraction_frames"]))
     diagnostics = {"by_trial_version": {}}
-    version_deltas = []
     per_window = {}
     for row in replay_rows:
         if row["offline_window_status"] != "OK":
@@ -628,11 +644,14 @@ def aggregate_diagnostics(replay_rows):
             run0 = rw["runs"][0]
             per_window.setdefault((row["trial"], row["sound_key"]),
                                   {})[rw["version"]] = run0
-    both_us = []
-    for key, versions in per_window.items():
-        pb, ce = versions.get("peak_backtrack"), versions.get("current_envelope")
-        if pb and ce and pb["valid"] and ce["valid"]:
-            both_us.append((ce["fraction_frames"] - pb["fraction_frames"]))
+    pairs = [(a, b) for a, b in zip(versions, versions[1:])]
+    deltas = {f"{a}_to_{b}": [] for a, b in pairs}
+    for key, runs in per_window.items():
+        for a, b in pairs:
+            ra, rb = runs.get(a), runs.get(b)
+            if ra and rb and ra["valid"] and rb["valid"]:
+                deltas[f"{a}_to_{b}"].append(
+                    rb["fraction_frames"] - ra["fraction_frames"])
     for key in sorted(by_trial_version):
         trial, version = key
         diagnostics["by_trial_version"].setdefault(trial, {})[version] = \
@@ -647,7 +666,7 @@ def aggregate_diagnostics(replay_rows):
     cross = {}
     for group, trials in groups.items():
         group_stats = {"trials": list(trials), "per_version": {}}
-        for version in ("peak_backtrack", "current_envelope"):
+        for version in versions:
             per_slot = {}
             for trial in trials:
                 values_us = by_trial_version.get((trial, version), [])
@@ -682,13 +701,15 @@ def aggregate_diagnostics(replay_rows):
                 "full_10_slot_consistency_possible": complete}
         cross[group] = group_stats
     diagnostics["cross_round_by_group"] = cross
-    if both_us:
-        import statistics
-        diagnostics["version_delta_frames"] = {
-            "n": len(both_us),
-            "mean": round(statistics.mean(both_us), 4),
-            "stdev": round(statistics.pstdev(both_us), 4),
-            "min": round(min(both_us), 4), "max": round(max(both_us), 4)}
+    for name, values in deltas.items():
+        if values:
+            diagnostics["version_delta_frames_" + name] = {
+                "n": len(values),
+                "mean_frames": round(statistics.mean(values), 4),
+                "stdev_frames": round(statistics.pstdev(values), 4),
+                "min_frames": round(min(values), 4),
+                "max_frames": round(max(values), 4),
+                "mean_us": round(statistics.mean(values) * 1e6 / SAMPLE_HZ, 2)}
     return diagnostics
 
 
