@@ -82,6 +82,19 @@ void TimeDomain_InitWithId(uint32_t id){(void)id;}
 void TimeDomain_AdoptPeerId(uint32_t id){(void)id;}
 /** @brief App测试桩：安装对端事件消费者。 */
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink){(void)sink;}
+
+/** @brief App测试桩：安装共同域消费者。 */
+void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink sink){(void)sink;}
+/** @brief App测试桩：发送共同域REQ。 */
+bool UDPSoundEvent_SendDomainRequest(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
+/** @brief App测试桩：发送共同域ACK。 */
+bool UDPSoundEvent_SendDomainAck(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
+/** @brief App测试桩：接收对端REQ。 */
+bool TimeDomain_OnPeerRequest(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
+/** @brief App测试桩：接收对端ACK。 */
+bool TimeDomain_OnPeerAck(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
+/** @brief App测试桩：域超时检查。 */
+void TimeDomain_Tick(uint32_t now){(void)now;}
 int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
  Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
  start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);

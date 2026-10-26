@@ -81,6 +81,19 @@ void TimeDomain_InitWithId(uint32_t id){(void)id;}
 void TimeDomain_AdoptPeerId(uint32_t id){(void)id;}
 /** @brief App测试桩：安装对端事件消费者。 */
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink){(void)sink;}
+
+/** @brief App测试桩：安装共同域消费者。 */
+void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink sink){(void)sink;}
+/** @brief App测试桩：发送共同域REQ。 */
+bool UDPSoundEvent_SendDomainRequest(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
+/** @brief App测试桩：发送共同域ACK。 */
+bool UDPSoundEvent_SendDomainAck(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
+/** @brief App测试桩：接收对端REQ。 */
+bool TimeDomain_OnPeerRequest(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
+/** @brief App测试桩：接收对端ACK。 */
+bool TimeDomain_OnPeerAck(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
+/** @brief App测试桩：域超时检查。 */
+void TimeDomain_Tick(uint32_t now){(void)now;}
 int main(void)
 {
  Reset(0U,true);temperature_low=true;

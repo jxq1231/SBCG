@@ -342,6 +342,66 @@ static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
  * @return 无返回值；不读PCM，不修改网络/配对状态。
  */
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
+/**
+ * @brief 处理对端域报文：B采用A令牌并回ACK；A只接受同令牌ACK。
+ * @param message 非NULL已通过UDP来源/长度/角色校验的域消息，仅本次有效。
+ * @return 无返回值；不修改PPS/TimeSync资格。
+ */
+static void HandleDomainMessage(const DomainMessage *message)
+{
+    if(message==NULL)return;
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL)return;
+    const uint32_t now=BSP_Console_GetTickMs();
+    if(profile->role==BOARD_ROLE_B && message->type==DOMAIN_MESSAGE_REQUEST &&
+       message->role==BOARD_ROLE_A)
+    {
+        if(TimeDomain_OnPeerRequest(message->token,now))
+        { (void)UDPSoundEvent_SendDomainAck(now,message->token); }
+    }
+    else if(profile->role==BOARD_ROLE_A && message->type==DOMAIN_MESSAGE_ACK &&
+            message->role==BOARD_ROLE_B && message->state==DOMAIN_LOCAL_VALID)
+    {
+        (void)TimeDomain_OnPeerAck(message->token,now);
+    }
+}
+/**
+ * @brief A周期发REQ并检查对端超时；B只检查超时（ACK由回调发）。
+ * @param now_ms 当前HAL毫秒。
+ * @return 无返回值；域无效时事件路径自行拒绝。
+ */
+static void ServiceDomain(uint32_t now_ms)
+{
+    TimeDomain_Tick(now_ms);
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL)return;
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    static bool last_valid;
+    static uint32_t last_domain_log_ms;
+    if(domain.valid!=last_valid)
+    {
+        last_valid=domain.valid;
+        char line[160];
+        const int length=snprintf(line,sizeof line,
+            "$DOMAIN,ROLE=%s,VALID=%u,LOCAL=%u,PEER=%u,TOKEN=%" PRIu32
+            ",PEER_AGE_MS=%" PRIu32 "\n",
+            profile->role==BOARD_ROLE_A?"A":"B",domain.valid?1U:0U,
+            domain.local_valid?1U:0U,domain.peer_seen?1U:0U,
+            domain.id,domain.peer_age_ms);
+        SendLine(line,length);
+        last_domain_log_ms=now_ms;
+    }
+    (void)last_domain_log_ms;
+    if(profile->role!=BOARD_ROLE_A)return;
+    if(!domain.local_valid || domain.id==0U)return;
+    static uint32_t last_request_ms;
+    if((uint32_t)(now_ms-last_request_ms)>=500U)
+    {
+        if(UDPSoundEvent_SendDomainRequest(now_ms,domain.id))
+            last_request_ms=now_ms;
+    }
+}
 static void PublishMeasurement(const SoundPairResult *pair)
 {
     const uint32_t now_ms=BSP_Console_GetTickMs();
@@ -377,18 +437,6 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
         return;
     }
     (void)MeasurementResult_PublishRemote(result,BSP_Console_GetTickMs());
-}
-/**
- * @brief B只有收到A的本端事件才采用A域令牌；A事件侧/域非零由UDP层已校验。
- * @param event 非NULL对端事件，仅本次调用有效。
- * @return 无返回值；不修改A/B角色、PPS或TimeSync。
- */
-static void AdoptPeerDomain(const SoundEventRecord *event)
-{
-    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(event==NULL || profile==NULL || profile->role!=BOARD_ROLE_B)return;
-    if(event->side==SOUND_SIDE_A && event->time_domain!=0U)
-        TimeDomain_AdoptPeerId(event->time_domain);
 }
 /**
  * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
@@ -550,7 +598,7 @@ void App_Init(void)
     else {
         UDPSoundEvent_SetResultSink(PublishMeasurement);
         UDPSoundEvent_SetMeasurementSink(PublishRemoteMeasurement);
-        UDPSoundEvent_SetEventSink(AdoptPeerDomain);
+        UDPSoundEvent_SetDomainSink(HandleDomainMessage);
     }
 #endif
 #endif
@@ -729,6 +777,7 @@ void App_Process(void)
         }
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_BOARD_IDENTITY
+        ServiceDomain(BSP_Console_GetTickMs());
         ServiceAuthoritativeResult(BSP_Console_GetTickMs());
 #endif
     }

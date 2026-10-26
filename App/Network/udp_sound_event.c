@@ -23,6 +23,8 @@ static uint32_t (*read_tick)(void);
 static UDPSoundEvent_Log emit;
 static UDPSoundEvent_ResultSink result_sink;
 static UDPSoundEvent_EventSink event_sink;
+static UDPSoundEvent_DomainSink domain_sink;
+static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
 static uint32_t last_bind_ms, last_state_ms;
@@ -62,6 +64,24 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet==NULL)return;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_SOUND_EVENT_BOARD_PORT)
     {Increment(&foreign);pbuf_free(packet);return;}
+    if(packet->tot_len==DOMAIN_WIRE_BYTES)
+    {
+        uint8_t domain_data[DOMAIN_WIRE_BYTES];
+        if(pbuf_copy_partial(packet,domain_data,sizeof domain_data,0)!=sizeof domain_data)
+        {Increment(&rx_bad);pbuf_free(packet);return;}
+        pbuf_free(packet);
+        DomainMessage message;
+        if(DomainWire_Decode(domain_data,sizeof domain_data,&message)!=DOMAIN_WIRE_OK)
+        {Increment(&rx_bad);return;}
+        if((local_profile.role==BOARD_ROLE_A &&
+            (message.type!=DOMAIN_MESSAGE_ACK || message.role!=BOARD_ROLE_B)) ||
+           (local_profile.role==BOARD_ROLE_B &&
+            (message.type!=DOMAIN_MESSAGE_REQUEST || message.role!=BOARD_ROLE_A)))
+        {Increment(&rx_bad);return;}
+        if(domain_sink!=NULL){domain_sink(&message);}
+        Increment(&rx_ok);
+        return;
+    }
     if(packet->tot_len==MEASUREMENT_WIRE_BYTES)
     {
         uint8_t measurement_data[MEASUREMENT_WIRE_BYTES];
@@ -126,6 +146,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     last_bind_ms=now_ms-1000U;last_state_ms=now_ms;
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;
     result_tx_ok=result_tx_err=result_rx_ok=result_rx_bad=0U;
+    domain_sequence=0U;
     configured=true;return true;
 }
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
@@ -142,6 +163,44 @@ void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink)
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink)
 {
     event_sink=sink;
+}
+/** @brief 安装共同域消费者；NULL不回调。 */
+void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink sink)
+{
+    domain_sink=sink;
+}
+/** @brief 发送一条DOMAIN消息；type/role由本板角色决定。 */
+static bool SendDomain(uint32_t token,DomainMessageType type)
+{
+    if(!configured || service_pcb==NULL || token==0U ||
+       !netif_is_link_up(&gnetif)){Increment(&tx_err);return false;}
+    DomainMessage message;
+    message.type=type;message.role=local_profile.role;
+    message.state=DOMAIN_LOCAL_VALID;message.token=token;
+    message.boot_nonce=token;message.sequence=++domain_sequence;
+    if(domain_sequence==0U)message.sequence=++domain_sequence;
+    uint8_t data[DOMAIN_WIRE_BYTES];
+    if(DomainWire_Encode(&message,data,sizeof data)!=DOMAIN_WIRE_OK)
+    {Increment(&tx_err);return false;}
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&tx_err);return false;}
+    Increment(&tx_ok);return true;
+}
+bool UDPSoundEvent_SendDomainRequest(uint32_t now_ms,uint32_t token)
+{
+    (void)now_ms;
+    if(local_profile.role!=BOARD_ROLE_A){Increment(&tx_err);return false;}
+    return SendDomain(token,DOMAIN_MESSAGE_REQUEST);
+}
+bool UDPSoundEvent_SendDomainAck(uint32_t now_ms,uint32_t token)
+{
+    (void)now_ms;
+    if(local_profile.role!=BOARD_ROLE_B){Increment(&tx_err);return false;}
+    return SendDomain(token,DOMAIN_MESSAGE_ACK);
 }
 /** @brief A板发送权威结果；非A/未绑定/编码失败返回false并计数。 */
 bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *result)

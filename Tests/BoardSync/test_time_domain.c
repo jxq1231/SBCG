@@ -48,15 +48,19 @@ int main(void)
     pps.state=PPS_SERVICE_QUALIFIED;pps.qualified=true;pps.faulted=false;pps.configured=true;
     TimeDomain_InitWithId(0x12345678U);
     TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);
-    assert(out.valid && out.id==0x12345678U);
+    assert(!out.valid && out.local_valid && !out.peer_seen);
+    assert(TimeDomain_OnPeerAck(0x12345678U,100U));
+    TimeDomain_Get(&out);assert(out.valid && out.id==0x12345678U);
     TimeDomain_Invalidate();TimeDomain_Get(&out);assert(!out.valid && out.id==0U);
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);assert(!out.valid);
+    assert(TimeDomain_OnPeerAck(0xBADU,101U)==false);
+    assert(TimeDomain_OnPeerAck(0x12345678U,102U));
+    assert(TimeDomain_OnPeerAck(0x12345678U,103U));
+    TimeDomain_Tick(103U+TIME_DOMAIN_PEER_TIMEOUT_MS);
+    TimeDomain_Get(&out);assert(!out.valid && out.local_valid && !out.peer_seen);
+    TimeDomain_InitWithId(0U);
     TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);
-    assert(out.valid && out.id==0x12345678U);
-    TimeDomain_AdoptPeerId(0x87654321U);
-    TimeDomain_UpdateWithPps(&b,&pps);TimeDomain_Get(&out);
-    assert(out.valid && out.id==0x87654321U);
-    TimeDomain_InitWithId(0U);TimeDomain_UpdateWithPps(&a,&pps);
-    TimeDomain_Get(&out);assert(out.valid && out.id==0U);
-    puts("PASS time domain: A/B sync+PPS gating, shared token adoption and fallback");
+    assert(out.local_valid && !out.valid && out.id==0U);
+    puts("PASS time domain: A/B sync+PPS gating, bidirectional token and timeout");
     return 0;
 }

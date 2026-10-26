@@ -19,6 +19,7 @@ static unsigned int sends, allocs, frees;
 static SoundPairResult paired;
 static unsigned pair_count;
 static uint32_t adopted_domain;
+static DomainMessage received_domain;
 static uint32_t tick_ms;
 
 struct udp_pcb *udp_new(void) { return &fake_pcb; }
@@ -42,16 +43,20 @@ static void Result(const SoundPairResult *result)
 { paired=*result; ++pair_count; }
 static void EventSink(const SoundEventRecord *event)
 { adopted_domain=event->time_domain; }
+static void DomainSink(const DomainMessage *message)
+{ received_domain=*message; }
 static uint32_t Tick(void) { return tick_ms; }
 
-static void ReceiveWire(const uint8_t *wire)
+static void ReceiveBytes(const uint8_t *wire,uint16_t length)
 {
     struct pbuf packet;
     memset(&packet,0,sizeof packet);
     packet.payload=(void*)wire;
-    packet.tot_len=SOUND_EVENT_WIRE_BYTES;
+    packet.tot_len=length;
     receive_cb(receive_arg,&fake_pcb,&packet,&peer_ip,5009U);
 }
+static void ReceiveWire(const uint8_t *wire)
+{ ReceiveBytes(wire,SOUND_EVENT_WIRE_BYTES); }
 
 int main(void)
 {
@@ -65,6 +70,7 @@ int main(void)
     assert(UDPSoundEvent_Init(0U,&profile,Tick,Log));
     UDPSoundEvent_SetResultSink(Result);
     UDPSoundEvent_SetEventSink(EventSink);
+    UDPSoundEvent_SetDomainSink(DomainSink);
     UDPSoundEvent_Process(100U); /* lazy bind before send */
     SoundEventRecord local={0};
     local.valid=true;local.type=SOUND_EVENT_CHIRP;local.quality=80U;
@@ -87,6 +93,25 @@ int main(void)
     assert(pair_count==1U && paired.valid && paired.distance_mm==343U &&
            paired.direction==SOUND_DIRECTION_A && paired.a_sequence==1U &&
            paired.b_sequence==2U);
-    puts("PASS udp sound event: local send submitted + peer receive pair once");
+    DomainMessage request={DOMAIN_MESSAGE_REQUEST,BOARD_ROLE_A,
+        DOMAIN_LOCAL_VALID,0x12345678U,0x12345678U,1U},decoded;
+    uint8_t domain_wire[DOMAIN_WIRE_BYTES];
+    assert(DomainWire_Encode(&request,domain_wire,sizeof domain_wire)==DOMAIN_WIRE_OK);
+    assert(DomainWire_Decode(domain_wire,sizeof domain_wire,&decoded)==DOMAIN_WIRE_OK);
+    assert(decoded.type==DOMAIN_MESSAGE_REQUEST && decoded.role==BOARD_ROLE_A &&
+           decoded.token==0x12345678U && decoded.sequence==1U);
+    domain_wire[12]=0U;domain_wire[13]=0U;domain_wire[14]=0U;domain_wire[15]=0U;
+    assert(DomainWire_Decode(domain_wire,sizeof domain_wire,&decoded)==DOMAIN_WIRE_INVALID_FIELD);
+    assert(UDPSoundEvent_SendDomainRequest(200U,0x12345678U));
+    assert(DomainWire_Decode(sent,DOMAIN_WIRE_BYTES,&decoded)==DOMAIN_WIRE_OK);
+    assert(decoded.type==DOMAIN_MESSAGE_REQUEST && decoded.token==0x12345678U);
+    assert(!UDPSoundEvent_SendDomainAck(201U,0x12345678U));
+    DomainMessage ack={DOMAIN_MESSAGE_ACK,BOARD_ROLE_B,DOMAIN_LOCAL_VALID,
+        0x12345678U,0x12345678U,2U};
+    assert(DomainWire_Encode(&ack,domain_wire,sizeof domain_wire)==DOMAIN_WIRE_OK);
+    ReceiveBytes(domain_wire,DOMAIN_WIRE_BYTES);
+    assert(received_domain.type==DOMAIN_MESSAGE_ACK && received_domain.role==BOARD_ROLE_B &&
+           received_domain.token==0x12345678U);
+    puts("PASS udp sound event: local+peer pairing, DOMN send/receive");
     return 0;
 }
