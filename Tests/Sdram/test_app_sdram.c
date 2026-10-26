@@ -6,6 +6,7 @@
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
+#include "Detector/standard_sequence.h"
 #include "BSP/bsp_board_identity.h"
 #include "Sync/time_sync.h"
 static BoardIdentityProfile identity;
@@ -48,6 +49,13 @@ void BSP_SDRAM_GetSnapshot(BSP_SdramSnapshot*out){*out=sdram;}
 
 /** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+
+/** @brief App测试桩：标准序列初始化不访问硬件。 */
+bool StandardSequence_Init(StandardSequence *s,const StandardSequenceConfig *c){(void)s;(void)c;return true;}
+/** @brief App测试桩：不检测周期序列。 */
+bool StandardSequence_Push(StandardSequence *s,uint64_t t,uint8_t q){(void)s;(void)t;(void)q;return false;}
+/** @brief App测试桩：清零序列快照。 */
+void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o){(void)s;if(o)memset(o,0,sizeof *o);}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);

@@ -5,6 +5,7 @@
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
+#include "Detector/standard_sequence.h"
 #include "BSP/bsp_board_identity.h"
 #include "Sync/time_sync.h"
 static BoardIdentityProfile identity;
@@ -45,6 +46,13 @@ void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink){(void)sink;}
 
 /** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+
+/** @brief App测试桩：标准序列初始化不访问硬件。 */
+bool StandardSequence_Init(StandardSequence *s,const StandardSequenceConfig *c){(void)s;(void)c;return true;}
+/** @brief App测试桩：不检测周期序列。 */
+bool StandardSequence_Push(StandardSequence *s,uint64_t t,uint8_t q){(void)s;(void)t;(void)q;return false;}
+/** @brief App测试桩：清零序列快照。 */
+void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o){(void)s;if(o)memset(o,0,sizeof *o);}
 int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
  Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
  start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);

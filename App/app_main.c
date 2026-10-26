@@ -23,6 +23,7 @@
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
+#include "Detector/standard_sequence.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -108,6 +109,10 @@
 /* Diagnostic-only common event domain until the synchronized time-domain service exists.
    Both boards use the same constant, so this is NOT a claim of PTP synchronization. */
 #define APP_SOUND_EVENT_DIAGNOSTIC_DOMAIN 1U
+#if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
+static StandardSequence standard_sequence;
+static bool standard_sequence_detected;
+#endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
 /* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。 */
@@ -450,6 +455,12 @@ void App_Init(void)
     SoundEventTime_Init(SendLine);
 #ifdef SBCG_USE_BOARD_IDENTITY
     MeasurementResult_Init(BSP_Console_GetTickMs());
+    {
+        const StandardSequenceConfig sequence_config={
+            STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
+        (void)StandardSequence_Init(&standard_sequence,&sequence_config);
+        standard_sequence_detected=false;
+    }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))
     {
@@ -585,6 +596,18 @@ void App_Process(void)
 #ifdef SBCG_USE_BOARD_IDENTITY
             const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
             if (event_profile == NULL) { break; }
+            const bool sequence_detected=StandardSequence_Push(
+                &standard_sequence,notice.time_ns,100U);
+            if(sequence_detected!=standard_sequence_detected){
+                StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
+                char sequence_line[256];
+                (void)snprintf(sequence_line,sizeof sequence_line,
+                    "$STANDARD_SEQUENCE,STATUS=%s,EVENTS=%u,ERR_NS=%" PRIu32 ",QUALITY=%u,DIAG=1,LOCAL=1,SYNC=0\r\n",
+                    sequence.detected?"DETECTED":"RESET",(unsigned)sequence.events,
+                    (uint32_t)sequence.max_period_error_ns,(unsigned)sequence.quality);
+                SendLine(sequence_line,(int)strlen(sequence_line));
+                standard_sequence_detected=sequence_detected;
+            }
             SoundEventRecord event = {0};
             event.valid = true;
             event.type = SOUND_EVENT_CHIRP;

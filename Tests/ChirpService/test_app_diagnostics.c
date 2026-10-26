@@ -10,6 +10,7 @@
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
+#include "Detector/standard_sequence.h"
 /** @brief 空锚点源，out借用不写，返回false。 */
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){(void)out;return false;}
 /** @brief 未投递锚点的桩，参数借用不保存，无返回值。 */
@@ -44,6 +45,13 @@ void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink){(void)sink;}
 
 /** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+
+/** @brief App测试桩：标准序列初始化不访问硬件。 */
+bool StandardSequence_Init(StandardSequence *s,const StandardSequenceConfig *c){(void)s;(void)c;return true;}
+/** @brief App测试桩：不检测周期序列。 */
+bool StandardSequence_Push(StandardSequence *s,uint64_t t,uint8_t q){(void)s;(void)t;(void)q;return false;}
+/** @brief App测试桩：清零序列快照。 */
+void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o){(void)s;if(o)memset(o,0,sizeof *o);}
 int main(void)
 {
  Reset(0U,true);temperature_low=true;
