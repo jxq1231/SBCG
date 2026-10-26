@@ -1,0 +1,26 @@
+# M4.2.7-A 单板声事件到达时刻（TOA）子帧估算
+
+## 目标
+
+在不依赖波形模板匹配的前提下，为已验证的能量候选输出本板计时基准的声到达时刻（帧+前沿子帧插值，单位 μs），支撑任务书基础(2)「同一位置重复播放，相邻两次到达时刻差 ≤±100μs」的单板验收。不改变 0.80 相关门限、不做识别达标承诺。
+
+## 实现
+
+- `App/Detector/toa_estimator.c/.h`：纯C轻松估算。取候选窗绝对幅值峰值，实际阈值=max(配置阈值, 峰值/relative_scale)，扫描首个自下而上过阈样本对，线性插值出子帧位置；窗口8..512点。
+- `App/Detector/sound_detector_service.c/.h`：Stage 借用期内取 onset 起 32 帧做估算，存入队列项；Process 发布 `$SOUND_CAND` 时追加 `TOA_US`（帧坐标+插值分数 → μs，无效为 `NA`）；快照增 `toa_ok/toa_miss`。
+- `cmake/audio-layout.cmake`：注册 toa_estimator.c；三个测试运行器对应补源。
+
+## 验证（软件）
+
+- `Tests/Detector/test_toa_estimator.c` O0/O2：整数/分数前沿、相对阈值自适应、首样本过阈/全零/恒压拒绝、参数非法不改输出，全过。
+- `Tests/SoundDetectorService/test_service.c`：新增确定斜坡用例，断言 `TOA_US=231` 与计数；既有 7 组 + 批量逐字段 + 其余服务/音频/Chirp/App 回归全过。
+- Debug/Release 构建 GREEN，check_audio/check_eth 两配置 PASS；仅改前台计算与串口行，无新 IRQ/DMA/CubeMX。
+
+## 待实物
+
+- 烧录新镜像后再做：固定位置重复播放 N 次，串口对每次 `$SOUND_CAND` 的 `TOA_US` 计算相邻差最大偏差与 σ vs ±100μs；静默 60s 无 `TOA_US` 输出（基础(4)）。允许诊断期继续不识别，不调 0.80。
+
+## 限制
+
+- TOA_US 为帧栅格 20.8μs×子帧插值，受波形斜率/反射影响，其精度以实测抖动为准，不承诺绝对声学时刻。
+- 本里程碑不涉及两板 PTP 域换算（由后续 SoundEventTime 锚点复用/双板阶段完成）与测距/方向显示（下一步 M4.2.7-B）。

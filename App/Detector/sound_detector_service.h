@@ -16,6 +16,8 @@ extern const SoundDetectorConfig SoundDetectorService_DefaultConfig;
 typedef struct {
     uint32_t valid_blocks,rejected_blocks,resets,candidates,dropped,errors;
     uint32_t max_stage_ms,max_process_ms;
+    /** @brief 子帧前沿过阈估算成功/失败次数；失败不改变候选内容，仅TOA_US为NA。 */
+    uint32_t toa_ok,toa_miss;
     uint8_t pending,channel;
     bool configured,armed,staging;
 } SoundDetectorServiceSnapshot;

@@ -11,7 +11,8 @@ if(_sbcg_audio_mode)
     endforeach()
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO=1 SBCG_USE_SOUND_DETECTOR=1)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        App/Detector/sound_detector.c App/Detector/sound_detector_service.c)
+        App/Detector/sound_detector.c App/Detector/sound_detector_service.c
+        App/Detector/toa_estimator.c)
     # CPU-owned copied PCM and bounded post-End search; no hardware changes.
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_CHIRP=1)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE

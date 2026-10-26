@@ -9,6 +9,7 @@
 #include "sound_event_time.h"
 #endif
 #include "BSP/bsp_console.h"
+#include "toa_estimator.h"
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -16,12 +17,17 @@
 #define STREAM_MAX_AGE_MS 1000U
 #define EVENT_LOG_PERIOD_MS 250U
 #define STATE_LOG_PERIOD_MS 1000U
+#define TOA_WINDOW_FRAMES 32U
+#define AUDIO_RATE_HZ 48000U
 const SoundDetectorConfig SoundDetectorService_DefaultConfig={64U,256U,128U,2U,8U,24000U};
-typedef struct { SoundCandidate event; uint32_t completed_ms,sequence; } QueuedCandidate;
+typedef struct { SoundCandidate event; uint32_t completed_ms,sequence;
+                 double toa_fraction; bool toa_valid; } QueuedCandidate;
 static SoundDetector current,working;
 static SoundDetectorServiceSnapshot diagnostics;
 static SoundCandidate staged[SOUND_DETECTOR_QUEUE_CAPACITY];
 static QueuedCandidate queue[SOUND_DETECTOR_QUEUE_CAPACITY];
+static double staged_toa[SOUND_DETECTOR_QUEUE_CAPACITY];
+static bool staged_toa_ok[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint32_t staged_total,staged_ms,last_event_ms,last_state_ms;
 static uint8_t staged_count,head,count;
 static bool active,stage_valid,boundary;
@@ -55,6 +61,33 @@ static void RecordStageTime(uint32_t begin_ms)
 static void RecordProcessTime(uint32_t begin_ms)
 { const uint32_t elapsed=BSP_Console_GetTickMs()-begin_ms;
   if(elapsed>diagnostics.max_process_ms)diagnostics.max_process_ms=elapsed; }
+/**
+ * @brief 在Stage借用期内对候选窗做前沿子帧估算并写入暂存槽。
+ * @param samples 非NULL借用交错PCM；first_frame为块首绝对帧；event为暂存的候选。
+ * @param slot 暂存槽位，写入toa分数与有效性。
+ * @return 无返回值；失败置toa_valid=false且计toa_miss。
+ * @note 仅前台、仅在借用期间调用；窗取自onset起32帧，不足8帧或过阈失败不产出TOA。
+ */
+static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
+    uint8_t slot,uint8_t channel)
+{
+    staged_toa_ok[slot]=false;staged_toa[slot]=0.0;
+    if(event->onset_frame<block->first_frame)return;
+    const uint64_t local=event->onset_frame-block->first_frame;
+    if(local>=block->frame_count)return;
+    const uint64_t available=block->frame_count-local;
+    const uint16_t frames=(uint16_t)(available<TOA_WINDOW_FRAMES ?
+        available:TOA_WINDOW_FRAMES);
+    if(frames<8U){Add(&diagnostics.toa_miss,1U);return;}
+    int16_t window[TOA_WINDOW_FRAMES];
+    for(uint16_t i=0U;i<frames;++i)
+        window[i]=block->samples[2U*(size_t)(local+i)+channel];
+    double fraction=0.0;
+    if(!ToaEstimator_Estimate(&ToaEstimator_DefaultConfig,window,&fraction)){
+        Add(&diagnostics.toa_miss,1U);return;
+    }
+    staged_toa[slot]=fraction;staged_toa_ok[slot]=true;Add(&diagnostics.toa_ok,1U);
+}
 /** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
 static void ResetHistory(void)
 {
@@ -131,7 +164,11 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
         if(result==SOUND_DETECTOR_EVENT)
         {
             ++staged_total;
-            if(staged_count<SOUND_DETECTOR_QUEUE_CAPACITY)staged[staged_count++]=event;
+            if(staged_count<SOUND_DETECTOR_QUEUE_CAPACITY){
+                staged[staged_count]=event;
+                EstimateToa(block,&event,staged_count,diagnostics.channel);
+                ++staged_count;
+            }
         }
         else if(result!=SOUND_DETECTOR_NONE){RecordStageTime(begin_ms);return false;}
     }
@@ -162,7 +199,8 @@ bool SoundDetectorService_Complete(bool accepted)
         Add(&sequence,1U);
         if(count==SOUND_DETECTOR_QUEUE_CAPACITY){Add(&diagnostics.dropped,1U);continue;}
         const uint8_t tail=(uint8_t)((head+count)%SOUND_DETECTOR_QUEUE_CAPACITY);
-        queue[tail]=(QueuedCandidate){staged[i],staged_ms,sequence};++count;
+        queue[tail]=(QueuedCandidate){staged[i],staged_ms,sequence,
+            staged_toa[i],staged_toa_ok[i]};++count;
     }
     active=stage_valid=false;staged_count=0U;staged_total=0U;return true;
 }
@@ -202,12 +240,18 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
     if(count!=0U && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
     {
         const QueuedCandidate item=queue[head];head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;
-        last_event_ms=now_ms;char first[21],confirmed[21];Decimal(item.event.onset_frame,first);Decimal(item.event.confirmed_frame,confirmed);
+        last_event_ms=now_ms;char first[21],confirmed[21],toa_us[16];
+        Decimal(item.event.onset_frame,first);Decimal(item.event.confirmed_frame,confirmed);
+        if(item.toa_valid){
+            /* 子帧到达时刻换算为微秒：帧坐标+插值分数再乘以(1e6/采样率)。 */
+            const double frames=(double)item.event.onset_frame+item.toa_fraction;
+            Decimal((uint64_t)(frames*1000000.0/(double)AUDIO_RATE_HZ+0.5),toa_us);
+        }else{toa_us[0]='N';toa_us[1]='A';toa_us[2]='\0';}
         Emit(line,snprintf(line,sizeof line,
             "$SOUND_CAND,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",CH=%u,FIRST=%s,CONFIRMED=%s,E_AC=%" PRIu32
-            ",PEAK=%" PRIu32 ",CLIP=%u,LOCAL=1,SYNC=0\r\n",
+            ",PEAK=%" PRIu32 ",CLIP=%u,LOCAL=1,SYNC=0,TOA_US=%s\r\n",
             item.sequence,item.event.session,(unsigned)diagnostics.channel,first,confirmed,item.event.mean_square_ac,
-            item.event.peak_abs,item.event.clipped ? 1U:0U));
+            item.event.peak_abs,item.event.clipped ? 1U:0U,toa_us));
 #ifdef SBCG_USE_SOUND_TIME
         /* 已归还并验证且已发布的元数据副本；时间服务不访问PCM。 */
         (void)SoundEventTime_Submit(now_ms,item.sequence,&item.event);

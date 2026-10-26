@@ -71,7 +71,8 @@ void ChirpService_GetSnapshot(ChirpServiceSnapshot*s){if(s)*s=(ChirpServiceSnaps
             if code:return code
             capture=output/f'capture_{option[1:]}.exe'
             sources=['Tests/ChirpService/test_capture.c','App/Audio/audio_capture.c',
-                     'App/Audio/audio_statistics.c','App/Detector/sound_detector_service.c']
+                     'App/Audio/audio_statistics.c','App/Detector/sound_detector_service.c',
+                     'App/Detector/toa_estimator.c']
             cmd=[shutil.which('gcc'),'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
                  '-DSBCG_USE_SOUND_DETECTOR=1','-DSBCG_USE_CHIRP=1','-I',str(ROOT/'App'),
                  *[str(ROOT/p) for p in sources],str(source),*[str(ROOT/p) for p in extra],

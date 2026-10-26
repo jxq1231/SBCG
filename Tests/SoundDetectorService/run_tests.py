@@ -20,7 +20,7 @@ void SoundDetectorService_Process(uint32_t n,const BSP_AudioSnapshot*s){(void)n;
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot*s){if(s)*s=(SoundDetectorServiceSnapshot){0};}
 ''',encoding='utf-8')
  exe=out/'test_sound_service.exe'
- command=[shutil.which('gcc'),'-std=c11','-O2','-Wall','-Wextra','-Werror','-pedantic','-I',str(root/'App'),str(root/'Tests/SoundDetectorService/test_service.c'),str(source),str(root/'App/Detector/sound_detector.c'),'-o',str(exe)]
+ command=[shutil.which('gcc'),'-std=c11','-O2','-Wall','-Wextra','-Werror','-pedantic','-I',str(root/'App'),str(root/'Tests/SoundDetectorService/test_service.c'),str(source),str(root/'App/Detector/sound_detector.c'),str(root/'App/Detector/toa_estimator.c'),'-o',str(exe)]
  p=subprocess.run(command,capture_output=True,text=True,timeout=30);log=p.stdout+p.stderr
  if not p.returncode:
   p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30);log+=p.stdout+p.stderr
@@ -32,7 +32,7 @@ void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot*s){if(s)*s=(S
   command=[shutil.which('gcc'),'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
            '-finstrument-functions','-I',str(root/'App'),
            str(root/'Tests/SoundDetectorService/test_batch_service.c'),str(source),
-           str(root/'App/Detector/sound_detector.c'),'-o',str(exe)]
+           str(root/'App/Detector/sound_detector.c'),str(root/'App/Detector/toa_estimator.c'),'-o',str(exe)]
   p=subprocess.run(command,capture_output=True,text=True,timeout=30);log=p.stdout+p.stderr
   if not p.returncode:
    p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30);log+=p.stdout+p.stderr
