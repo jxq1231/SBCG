@@ -6,6 +6,7 @@
  */
 #include "udp_sound_event.h"
 #include "sound_event_wire.h"
+#include "measurement_wire.h"
 #include "udp_config.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
@@ -21,6 +22,7 @@ static ip_addr_t peer;
 static uint32_t (*read_tick)(void);
 static UDPSoundEvent_Log emit;
 static UDPSoundEvent_ResultSink result_sink;
+static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
 static uint32_t last_bind_ms, last_state_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
@@ -58,6 +60,23 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet==NULL)return;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_SOUND_EVENT_BOARD_PORT)
     {Increment(&foreign);pbuf_free(packet);return;}
+    if(packet->tot_len==MEASUREMENT_WIRE_BYTES)
+    {
+        uint8_t measurement_data[MEASUREMENT_WIRE_BYTES];
+        if(pbuf_copy_partial(packet,measurement_data,sizeof measurement_data,0)!=
+           sizeof measurement_data)
+        {Increment(&rx_bad);pbuf_free(packet);return;}
+        pbuf_free(packet);
+        if(local_profile.role!=BOARD_ROLE_B){Increment(&rx_bad);return;}
+        MeasurementResultSnapshot result;
+        if(MeasurementWire_Decode(measurement_data,sizeof measurement_data,&result)!=
+           MEASUREMENT_WIRE_OK)
+        {Increment(&rx_bad);return;}
+        result.captured_ms=read_tick!=NULL?read_tick():0U;
+        if(measurement_sink!=NULL){measurement_sink(&result);}
+        Increment(&rx_ok);
+        return;
+    }
     if(packet->tot_len!=SOUND_EVENT_WIRE_BYTES)
     {Increment(&rx_bad);pbuf_free(packet);return;}
     uint8_t data[SOUND_EVENT_WIRE_BYTES];
@@ -109,6 +128,29 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
 void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)
 {
     result_sink=sink;
+}
+/** @brief 安装权威结果消费者；NULL仅丢弃。 */
+void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink)
+{
+    measurement_sink=sink;
+}
+/** @brief A板发送权威结果；非A/未绑定/编码失败返回false并计数。 */
+bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *result)
+{
+    (void)now_ms;
+    if(!configured || service_pcb==NULL || result==NULL ||
+       local_profile.role!=BOARD_ROLE_A || !netif_is_link_up(&gnetif))
+    {Increment(&tx_err);return false;}
+    uint8_t data[MEASUREMENT_WIRE_BYTES];
+    if(MeasurementWire_Encode(result,data,sizeof data)!=MEASUREMENT_WIRE_OK)
+    {Increment(&tx_err);return false;}
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&tx_err);return false;}
+    Increment(&tx_ok);return true;
 }
 /** @brief 发布本板事件；未绑定/编码失败返回false并计数。 */
 bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)

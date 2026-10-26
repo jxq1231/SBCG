@@ -8,6 +8,8 @@
 
 **最新先读[M4.2.5真实播放复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。** 用户已开放声音测试；`SBCG-M4.2-SEARCHDIAG` 镜像自动播放标准WAV 20秒/10次，24个完整任务全部`LOW_CORR`、MATCH0；最高raw相关0.773821<0.80、RMS≈2300、N=257/V=257、LR/Z/I=0，RPT24/RLOST0，资源/日志/UI错误0；10个高能量候选、7个高相关任务。数字WAV与模板相关1.0，诊断链已实机工作；失败在门限前相关度，不是搜索预算/范围/低RMS；独立复核PASS_WITH_RESERVATIONS（无阻塞）。下一步保存PCM/受控声学实验，不直接降低门限；识别/PTP/测距仍未验收。
 
+**最新M4.3.8两屏权威结果交换（2026-10-27）：** A板发布唯一结果并用28字节MRES报文发给B，B校共同域/来源后显示A的同一ID/距离、不重算；无重传/ACK、未烧录、未两板实测。[M4.3.8记录](Milestones/M4_3_8_Authoritative_Result_Exchange.md)。
+
 **最新M4.3.7波形分类接入（2026-10-27）：** 新增`event_classifier`（包络长度/前后过零率趋势/差分能量比，输出CHIRP/CLAP/UNKNOWN+quality），非CHIRP不进标准序列/UDP/配对；事件quality不再固定100。仅合成测试/未真实标准声/未烧录。[M4.3.7记录](Milestones/M4_3_7_Chirp_Clap_Classifier.md)。
 
 **最新M4.3.6共同时间域门控（2026-10-27）：** 用TimeSync状态派生A参考/B内部锁定域，域无效时不发事件UDP并撤销测量结果；替代固定诊断domain。PPS QUALIFIED未直接接入、未烧录/未两板验收；标准声识别/距离仍需硬件。[M4.3.6记录](Milestones/M4_3_6_Time_Domain_Gate.md)。

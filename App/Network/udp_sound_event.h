@@ -8,6 +8,7 @@
 #define SBCG_UDP_SOUND_EVENT_H
 
 #include "Measure/sound_pair.h"
+#include "Measure/measurement_result.h"
 #include "BSP/board_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,6 +18,12 @@ typedef void (*UDPSoundEvent_Log)(const char *line, int length);
 typedef void (*UDPSoundEvent_ResultSink)(const SoundPairResult *result);
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
 void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink);
+/** @brief B板接收A板权威结果的回调；NULL仅丢弃。 */
+typedef void (*UDPSoundEvent_MeasurementSink)(const MeasurementResultSnapshot *result);
+/** @brief 安装权威结果消费者；A板发送、B板接收。 */
+void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink);
+/** @brief A板向B板发送权威结果；仅A角色/已绑定/有效结果。 */
+bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *result);
 
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,

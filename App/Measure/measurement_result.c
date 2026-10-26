@@ -50,6 +50,23 @@ bool MeasurementResult_PublishPair(const SoundPairResult *pair,
     latest.sound_speed_mm_s = temperature->sound_speed_mm_s;
     latest.temperature_version = temperature->version;
     latest.temperature_valid = true;
+    latest.time_domain = pair->time_domain;
+    return true;
+}
+
+bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
+                                     uint32_t now_ms)
+{
+    if (result == NULL || result->status != MEASUREMENT_VALID || !result->valid ||
+        result->id == 0U || result->distance_mm < 0 ||
+        result->distance_mm > (int32_t)MEASUREMENT_MAX_DISTANCE_MM ||
+        result->quality > 100U || result->sound_speed_mm_s == 0U ||
+        result->time_domain == 0U) { return false; }
+    latest = *result;
+    latest.captured_ms = now_ms;
+    latest.status = MEASUREMENT_VALID;
+    latest.valid = true;
+    latest.temperature_valid = true;
     return true;
 }
 

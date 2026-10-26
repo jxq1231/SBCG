@@ -66,6 +66,15 @@ void TimeDomain_Init(void){}
 void TimeDomain_Update(const TimeSyncSnapshot *sync){(void)sync;}
 /** @brief App测试桩：共同时间域无效。 */
 void TimeDomain_Get(TimeDomainSnapshot *out){if(out){out->valid=false;out->id=0U;}}
+
+/** @brief App测试桩：安装权威结果消费者。 */
+void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink){(void)sink;}
+/** @brief App测试桩：A→B权威结果发送。 */
+bool UDPSoundEvent_SendResult(uint32_t now,const MeasurementResultSnapshot *result){(void)now;(void)result;return true;}
+/** @brief App测试桩：接收并发布A板权威结果。 */
+bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,uint32_t now){(void)result;(void)now;return false;}
+/** @brief App测试桩：不读取权威结果。 */
+bool MeasurementResult_Get(uint32_t now,MeasurementResultSnapshot *out){(void)now;(void)out;return false;}
 int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
  Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
  start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);

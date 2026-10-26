@@ -36,6 +36,7 @@ typedef struct
     uint32_t sound_speed_mm_s;
     uint32_t temperature_version;
     bool temperature_valid;
+    uint32_t time_domain;
 } MeasurementResultSnapshot;
 
 /** @brief 复位结果和ID；now_ms仅作时间基准，不读硬件。 */
@@ -50,6 +51,15 @@ void MeasurementResult_Init(uint32_t now_ms);
 bool MeasurementResult_PublishPair(const SoundPairResult *pair,
                                    const TemperatureSnapshot *temperature,
                                    uint32_t now_ms);
+
+/**
+ * @brief 接收A板权威结果并按原ID/距离/方向/质量发布；B板只显示，不重算。
+ * @param result 非NULL已通过线协议校验的结果；captured_ms由本函数覆盖。
+ * @param now_ms 接收/发布时的本地毫秒，用于2s有效期。
+ * @return 字段合法且已发布返回true；否则false且不改当前结果。
+ */
+bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
+                                     uint32_t now_ms);
 
 /** @brief 显式撤销当前结果（时钟/流/配对边界由上层调用）；now_ms仅记录。 */
 void MeasurementResult_Invalidate(uint32_t now_ms);

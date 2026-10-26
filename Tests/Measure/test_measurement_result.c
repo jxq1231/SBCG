@@ -41,6 +41,15 @@ int main(void)
            out.distance_mm==350 && out.sound_speed_mm_s==350000U && out.temperature_version==9U);
     MeasurementResult_Invalidate(600U);
     assert(!MeasurementResult_Get(600U,&out) && out.status==MEASUREMENT_NONE);
-    puts("PASS measurement result: id/age/temp version/direction/speed/range gating");
+    /* Remote A result keeps its ID/distance and is not recomputed locally. */
+    MeasurementResultSnapshot remote=(MeasurementResultSnapshot){
+        .status=MEASUREMENT_VALID,.valid=true,.id=42U,.distance_mm=777,
+        .direction=SOUND_DIRECTION_B,.quality=90U,.sound_speed_mm_s=346000U,
+        .temperature_version=3U,.temperature_valid=true,.time_domain=1U};
+    assert(MeasurementResult_PublishRemote(&remote,700U));
+    assert(MeasurementResult_Get(700U,&out) && out.id==42U && out.distance_mm==777 &&
+           out.direction==SOUND_DIRECTION_B && out.quality==90U);
+    remote.time_domain=0U;assert(!MeasurementResult_PublishRemote(&remote,800U));
+    puts("PASS measurement result: id/age/temp version/direction/speed/range gating and remote ID");
     return 0;
 }

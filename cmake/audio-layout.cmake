@@ -33,7 +33,7 @@ if(_sbcg_audio_mode)
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE
             App/Detector/sound_event_time.c App/Detector/standard_sequence.c App/Detector/event_classifier.c App/Sync/time_domain.c
             App/Measure/sound_pair.c App/Measure/measurement_result.c
-            App/Network/sound_event_wire.c App/Network/udp_sound_event.c)
+            App/Network/sound_event_wire.c App/Network/measurement_wire.c App/Network/udp_sound_event.c)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_ANCHOR=1)
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Audio/audio_time_anchor.c)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_MAP=1)

@@ -341,9 +341,11 @@ static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 static void PublishMeasurement(const SoundPairResult *pair)
 {
+    const uint32_t now_ms=BSP_Console_GetTickMs();
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_A){return;}
     TemperatureSnapshot temperature;
     StandardSequenceSnapshot sequence;
-    const uint32_t now_ms=BSP_Console_GetTickMs();
     TemperatureService_GetSnapshot(now_ms,&temperature);
     StandardSequence_Get(&standard_sequence,&sequence);
     TimeDomainSnapshot domain;
@@ -352,7 +354,26 @@ static void PublishMeasurement(const SoundPairResult *pair)
         MeasurementResult_Invalidate(now_ms);
         return;
     }
-    (void)MeasurementResult_PublishPair(pair,&temperature,now_ms);
+    if(MeasurementResult_PublishPair(pair,&temperature,now_ms)){
+        MeasurementResultSnapshot result;
+        if(MeasurementResult_Get(now_ms,&result))
+        { (void)UDPSoundEvent_SendResult(now_ms,&result); }
+    }
+}
+/**
+ * @brief B板接收A板权威结果；共同域不匹配或非B角色时丢弃，不重算距离。
+ * @param result 非NULL线协议结果，仅本次调用有效。
+ * @return 无返回值；成功后B板UI显示与A相同的ID/距离。
+ */
+static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
+{
+    if(result==NULL){return;}
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_B){return;}
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(!domain.valid || domain.id!=result->time_domain){return;}
+    (void)MeasurementResult_PublishRemote(result,BSP_Console_GetTickMs());
 }
 #endif
 
@@ -478,7 +499,10 @@ void App_Init(void)
         static const char error[] = "$SOUND_EVENT_INIT,RESULT=INIT_ERROR\r\n";
         SendLine(error, (int)(sizeof(error) - 1U));
     }
-    else { UDPSoundEvent_SetResultSink(PublishMeasurement); }
+    else {
+        UDPSoundEvent_SetResultSink(PublishMeasurement);
+        UDPSoundEvent_SetMeasurementSink(PublishRemoteMeasurement);
+    }
 #endif
 #endif
 #endif

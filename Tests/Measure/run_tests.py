@@ -15,7 +15,9 @@ for option in ('-O0','-O2'):
         ('test_sound_event_wire','Tests/Measure/test_sound_event_wire.c',
          ['App/Measure/sound_pair.c','App/Network/sound_event_wire.c']),
         ('test_measurement_result','Tests/Measure/test_measurement_result.c',
-         ['App/Measure/sound_pair.c','App/Measure/measurement_result.c'])):
+         ['App/Measure/sound_pair.c','App/Measure/measurement_result.c']),
+        ('test_measurement_wire','Tests/Measure/test_measurement_wire.c',
+         ['App/Measure/sound_pair.c','App/Network/measurement_wire.c'])):
         exe=out/(name+'_'+option[1:]+'.exe')
         command=[compiler,'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
                  '-I',str(ROOT/'App'),str(ROOT/test),*[str(ROOT/s) for s in sources],
