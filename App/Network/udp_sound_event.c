@@ -140,7 +140,7 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             emit(line,snprintf(line,sizeof line,
                 "$SOUND_PAIR,STATUS=OK,DELTA_NS=%s,DIST_MM=%" PRIu32 ",DIR=%s,"
                 "A_SEQ=%" PRIu32 ",B_SEQ=%" PRIu32 ",DOMAIN=%" PRIu32 ",QUALITY=%u,"
-                "SPEED_MM_S=%" PRIu32 ",LOCAL=1,SYNC=0\r\n",delta,result.distance_mm,
+                "SPEED_MM_S=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",delta,result.distance_mm,
                 dir,result.a_sequence,result.b_sequence,result.time_domain,
                 result.quality,result.sound_speed_mm_s));
         }
@@ -148,7 +148,7 @@ void UDPSoundEvent_Process(uint32_t now_ms)
         {
             emit(line,snprintf(line,sizeof line,
                 "$SOUND_PAIR,STATUS=%s,CORE=%u,A_SEQ=%" PRIu32 ",B_SEQ=%" PRIu32
-                ",LOCAL=1,SYNC=0\r\n",result.status==SOUND_PAIR_AMBIGUOUS?"AMBIGUOUS":
+                ",DIAG=1,LOCAL=1,SYNC=0\r\n",result.status==SOUND_PAIR_AMBIGUOUS?"AMBIGUOUS":
                 (result.status==SOUND_PAIR_DISTANCE_RANGE?"DIST_RANGE":
                  (result.status==SOUND_PAIR_TDOA_RANGE?"TDOA_RANGE":"REJECT")),
                 (unsigned)result.status,result.a_sequence,result.b_sequence));
