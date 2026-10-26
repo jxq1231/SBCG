@@ -2,7 +2,7 @@
 
 > 计划：[2026-10-26_PCM_Event_Replay_Plan.md](../Plans/2026-10-26_PCM_Event_Replay_Plan.md)
 > 执行日期：2026-10-26 · 状态：已完成，停止在本增量
-> 运行产物：`Logs/Detector/TOA_Replay/20261026T091225/`（manifest/ledger/replay/summary/synthetic，含快照与窗口）
+> 运行产物：原始记录 `Logs/Detector/TOA_Replay/20261026T091225/`；P0当前证据：默认两版 `20261026T104613/`、三版 `20261026T105129/`（manifest/ledger/replay/summary/synthetic，含快照与窗口）；独立复核 `Logs/Detector/TOA_Replay/P0_review/review.json`。
 
 ## 1. 目标与边界
 
@@ -19,7 +19,7 @@
 
 ## 3. 事件账本（任务2）
 
-守恒链：原文行 8181 → 识别事件 437 → SOUND 候选 102 → 关联到 PCM 窗口 99 → 完整 256 点窗口 99；3 个无 PCM 候选（toaB-07 SEQ5、toaB-08 SEQ19、toaC-02 SEQ25，见 replay.jsonl `no_pcm`；`toa-04` 无孤儿）。所有 SEARCH/CAPTURE/PCM 按域内 ID 精确关联并对字段核对（含 FRAMES、HINT/BEST↔hint_frame/raw_first_frame）；SOUND↔PCM 按帧包含建立候选边，多解保留 AMBIGUOUS；跨轮/域冲突显式记录（本轮 0 冲突）。账本测试 17 项全过（跨trial独立、BOOT/$BOOT分域、日志序帧/序号回归断联、SEQ≠ID保留关联、双PCM歧义、孤儿/坏JSON/非对象JSON/非数字文件名保留、FRAMES与hint/raw 冲突标记、PCM 按域不串边）。
+守恒链：串口总行 8181 中的 437 条受跟踪记录（102 SOUND_CAND + 105 SOUND_TIME + 115 SEARCH + 115 CAPTURE）→ SOUND 候选 102 → 关联到 PCM 窗口 99 → 完整 256 点窗口 99；3 个无 PCM 候选（toaB-07 SEQ5、toaB-08 SEQ19、toaC-02 SEQ25，见 replay.jsonl `no_pcm`；`toa-04` 无孤儿）。所有 SEARCH/CAPTURE/PCM 按域内 ID 精确关联并对字段核对（含 FRAMES、HINT/BEST↔hint_frame/raw_first_frame）；SOUND↔PCM 按帧包含建立候选边，多解保留 AMBIGUOUS；跨轮/域冲突显式记录（本轮 0 冲突）。账本测试 17 项全过（跨trial独立、BOOT/$BOOT分域、日志序帧/序号回归断联、SEQ≠ID保留关联、双PCM歧义、孤儿/坏JSON/非对象JSON/非数字文件名保留、FRAMES与hint/raw 冲突标记、PCM 按域不串边）。
 
 ## 4. 真实C回放（任务3）
 
@@ -71,7 +71,7 @@ B 组槽 5/6/9 在两版算法下均超差（σ≈1.3–1.5ms）。对冻结窗�
 
 ## 离线三版对拍（同一批冻结 B/C 窗口）
 
-| B 组槽 | peak_backtrack σ | original_envelope σ | **corrected σ** |
+| B 组槽 | peak_backtrack(c79bf25) σ | db441e0(leftmost) σ | current(5471919) σ |
 | --- | --- | --- | --- |
 | 1 | 1282.92 | 3.68 | **3.68** |
 | 2 | 1282.03 | 0.42 | **0.42** |
@@ -82,6 +82,8 @@ B 组槽 5/6/9 在两版算法下均超差（σ≈1.3–1.5ms）。对冻结窗�
 | 9 | 1501.02 | 3.03 | **3.03** |
 
 B 组可判槽（槽 3/7 因候选缺 PCM、B07/B08 各缺一轮 → 无完整三轮，不可判）修正版 σ≤3.68μs；重复 18102/18102、O0=O2、TOOL_CHECK=PASS；合成 2918 窗全部正常（含 36 个标准 chirp 噪声/回声切片与相关峰参照 lag0/corr1.0）。对拍工具 `toa_replay.py --prior-envelope` 三版回放已入库。
+
+> **P0标签修正**：上表原“original_envelope”列实际冻结的是`db441e0`（最左能量段修正）快照；真正的修正前包络`48aec5…`只存在于旧`091225/092458`运行快照，未提交为git对象，其B组槽5/6/9约为1299.56/1299.19/1299.21µs。三版证据上`original_envelope`→`current_envelope`的fraction差为0，但`toaC-02 SEQ21`（PEAK=1975弱候选）出现一次valid→invalid（valid 98/99→97/99），不能把该表当成“原始包络 vs 修正”的before/after。
 
 ## 在线受控采集（烧录修正版，toaD/toaD2/toaD3 各 3 轮，卷 100、标准 10×20s）
 
@@ -99,7 +101,14 @@ B 组可判槽（槽 3/7 因候选缺 PCM、B07/B08 各缺一轮 → 无完整�
 
 - **P1 估算器尖峰回归**：`EstimateBackward` 的 run_samples 由"跨峰跨度计数"改为**真实连续过阈样本计数**；两孤立尖峰窗现在正确拒绝（新增单测）。
 - **P1 账本结构**：识别固件真实输出的 `$BOOT`；回归检查改按**日志顺序**（CAPTURE ID/FIRST、SOUND SEQ/FIRST）；事件键含**域+FIRST**（跨域不串边、窗口文件名不冲突）；PCM 关联保留**各域候选**（不再被后域覆盖，多解标 AMBIGUOUS）；补齐 FRAMES、SEARCH HINT/BEST↔hint_frame/raw_first_frame 交叉核对；坏 JSON、非对象 JSON、非数字 PCM 文件名容错入账。
-- **P1 回放门控/输出**：`ledger.json` 现序列化**全事件/边/域/孤立项**；新增 `records.jsonl`/`ledger.csv`；`ledger.problems` 入汇总；**格式错误使 TOOL_CHECK=FAIL 并返回非零**（合法覆盖缺口不误判）；槽一致性门控要求**每轮各贡献唯一值**；AMBIGUOUS/无效 PCM 不再计入 unique_windows；`trial_summary.json` 从正确目录冻结。
+- **P1 回放门控/输出**：`ledger.json` 现序列化**全事件/边/域/孤立项**；新增 `records.jsonl`/`ledger.csv`；`ledger.problems` 已序列化但**尚未并入summary/TOOL_CHECK**（P0-F1，待修）；parse/scan级格式错误使TOOL_CHECK=FAIL并返回非零（合法覆盖缺口不误判）；槽一致性门控要求**每轮各贡献唯一值**；AMBIGUOUS/无效 PCM 不再计入 unique_windows；`trial_summary.json` 从正确目录冻结。
 - **P2**：`git show` 子进程 UTF-8；CLI `FILE=` 移行尾（空格路径安全）+ `isnan` 拒绝 NaN；合成补齐标准 chirp 的幅度跨阈/噪声/回声切片、`norm_peak` 相关峰参照与条件级偏置/跳峰统计，并纳入重复/O0-O2 确定门控。
 - **文档纠正**：撤销"所有 10 槽 σ≤3.7μs/3 孤儿=背景/toa-04 有孤儿/summary 已冻结"等过度声明；B 组改为"可判槽 σ≤3.68μs、槽 3/7 无完整三轮不可判、全 10 槽 INSUFFICIENT"；3 个无 PCM 候选按定时对齐响应保留。
-- 修复后重跑（run `20261026T102536`）：TOOL_CHECK=PASS、format_errors=[]、重复 18102 窗 0 失配、O0=O2 零失配、B 组修正版可判槽 σ≤3.68μs、守恒 437/102/99/16（16 = 未参与 SOUND 回放的 PCM）。
+- 修复后重跑（run `20261026T102536`）：TOOL_CHECK=PASS、format_errors=[]、重复 18102 窗 0 失配、O0=O2 零失配、B 组修正版可判槽 σ≤3.68μs、守恒 437/102/99/16（16 = 未参与 SOUND 回放的 PCM）。P0当前证据改用`20261026T104613`（默认两版）/`20261026T105129`（三版），见下。
+
+## P0证据收口（2026-10-26）
+
+- 默认两版当前代码基线：`Logs/Detector/TOA_Replay/20261026T104613/`（manifest HEAD=`74e563e`，Analysis无未提交修改）；三版：`20261026T105129/`（HEAD=`b3f98ff`，相对`74e563e`仅Docs提交，算法/工具相同；`--prior-envelope 20261026T094022`）。
+- 两run均 `TOOL_CHECK=PASS`、`format_errors=[]`、`hard_failures=[]`；守恒 8181/437/102/99/115/16；重复 12068/18102 行、0失配、O0/O2零失配；合成2918窗。
+- 独立复核报告：`Logs/Detector/TOA_Replay/P0_review/review.json`，verdict=**PASS_WITH_RESERVATIONS**（1×P1、3×P2、4×P3）；当前两次run数值、守恒、窗口切片与跨run复现可核实；保留项为TOOL_CHECK未合并ledger.problems、三版标签/validity、missing_slots键类型、文档指针、assets门控及措辞等。
+- 该review报告为只读复核，不修改代码；P0结束不自动修算法，后续按审计文档P1/P2处理。

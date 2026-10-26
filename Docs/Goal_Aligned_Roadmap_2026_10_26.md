@@ -33,7 +33,7 @@
 
 ## 其他修改和测试，哪些应复用
 
-当前审计基线HEAD为`74e563e`。M4.2.5诊断、M4.2.6候选PCM/UDP、M4.2.7-A/B TOA都已经推进；不再重复烧录旧c219af诊断版。能量段起跳修正`db441e0`、尖峰门控`5471919`和回放工具审查修复`74e563e`已入库；全事件回放审计见[审计与后续规划](Plans/2026-10-26_PCM_Event_Replay_Audit.md)。
+当前审计基线代码为`74e563e`（字面HEAD `b3f98ff`仅Docs）。独立P0复核`Logs/Detector/TOA_Replay/P0_review/review.json`=PASS_WITH_RESERVATIONS。M4.2.5诊断、M4.2.6候选PCM/UDP、M4.2.7-A/B TOA都已经推进；不再重复烧录旧c219af诊断版。能量段起跳修正`db441e0`、尖峰门控`5471919`和回放工具审查修复`74e563e`已入库；全事件回放审计见[审计与后续规划](Plans/2026-10-26_PCM_Event_Replay_Audit.md)。
 
 可以复用：DMA唯一Begin/End和连续帧编号、已有PTP锚点、优化后的有界搜索、真实PCM捕获/重组、温度服务、TouchGFX状态页。在线/离线对同一捕获的相关峰数值与位置一致，是捕获/评分一致性的有效证据，不必再反复证明数字模板相关1.0。
 
