@@ -25,8 +25,9 @@
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
 | [面向提高项的目标路线](Goal_Aligned_Roadmap_2026_10_26.md) | 当前任务书复核与优先级 | 最终几何、已完成/未完成、单A能做什么、每步帮助哪个指标 |
+| [全事件对账与TOA离线回放计划](Plans/2026-10-26_PCM_Event_Replay_Plan.md) | 下一独立目标·仅规划 | 九轮输入、版本未知、关联歧义、完整窗、真实C回放及分层通过条件；不需发声/烧录 |
 | [TOA可信边界修复](Milestones/TOA_Trusted_Boundaries_2026_10_26.md) | 软件验证通过·未烧录 | 完整窗/NA、21字节输出与数值转换安全，不代表前沿精度改善 |
-| [单板可信验证计划](Plans/2026-10-26_Goal_Aligned_Review/task_plan.md) | 当前增量 | TOA窗口护栏、已有实验纠偏及本次验证范围 |
+| [单板可信验证计划](Plans/2026-10-26_Goal_Aligned_Review/task_plan.md) | 已完成·复核与软件修复记录 | TOA窗口护栏、已有实验纠偏及验证范围，不重复实施 |
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [M4.2.6 PCM捕获](Milestones/M4_2_6_Candidate_PCM_Capture.md) | 已有实物数据·识别待改进 | 保留在线/离线一致性与旧同步采集缺口，勿按捕获文件数算识别率 |
 | [标准音真实播放](Milestones/M4_2_Active_Chirp_Trial_2026_10_26.md) | 识别未通过·资源范围通过 | 10次实际刺激、0匹配、完整性及下一诊断目标 |
