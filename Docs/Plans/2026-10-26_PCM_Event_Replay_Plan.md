@@ -195,6 +195,6 @@ python -B Analysis/toa_replay.py --trials toa-20261026-04 toa-20261026-05 toa-20
 
 若现有PCM不足以选择前沿/身份策略，下一轮才补受控采集：记录BOOT/UID、镜像SHA、声道、实际采样率、10次播放的参考与前后静默，修正跨session文件名及分片缺口记录；该捕获改动作为独立增量，不能默默纳入本轮。出现烧录或实物声音需求时，先给出具体镜像和操作范围，再通知用户。
 
-**P1实施结果（2026-10-26）**：新增受控元数据工具并完成vol100/80/60各5个有效trial；BOOT/UID、镜像SHA、CH0、RATE、WAV 10起点、前后静默均入manifest。全10槽共**12/15**（vol100 4/5、vol80 5/5、vol60 3/5）；回放run `20261026T115438` TOOL_CHECK PASS。缺槽/额外候选需逐trial核对；详见[P1记录](../Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。不先改0.80或算法。
+**P1实施结果（2026-10-26）**：新增受控元数据工具，完成音量（12/15全10槽）及距离/方向首批（D20失败、D40 3/5、D50 5/5、D±30各4/5）；BOOT/UID、镜像SHA、CH0、RATE、WAV 10起点、前后静默均入manifest；回放TOOL_CHECK PASS（D20除外）。全10槽不稳定，缺槽/额外候选需逐trial核对；不先改0.80或算法。详见[P1记录](../Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
 
 若已有数据足够定位，则下一轮只修一个前沿或身份问题，用本轮全量基准对比，再做一轮受控单板实测。事件身份与前沿可信后，才推进子帧→PTP；双板真实同步/方向/测距/两屏与提高项精度继续按[目标路线](../Goal_Aligned_Roadmap_2026_10_26.md)补验。
