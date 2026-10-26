@@ -27,6 +27,7 @@
 #include "Detector/event_classifier.h"
 #include "Measure/measurement_gate.h"
 #include "Calibration/calibration.h"
+#include "Measure/result_exchange_state.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -117,11 +118,8 @@
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 static StandardSequence standard_sequence;
 static bool standard_sequence_detected;
-static uint32_t last_result_id;
-static uint32_t last_result_tx_ms;
-static uint32_t acked_result_id;
+static ResultExchangeState result_exchange;
 static uint32_t last_audio_session;
-static uint32_t last_peer_domain_sequence;
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -360,7 +358,7 @@ static void HandleMeasurementAck(const MeasurementAck *ack)
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
     if(!domain.valid || domain.id!=ack->time_domain)return;
-    acked_result_id=ack->measurement_id;
+    ResultExchange_OnAck(&result_exchange,ack->measurement_id);
 }
 /**
  * @brief 处理对端域报文：B采用A令牌并回ACK；A只接受同令牌ACK。
@@ -383,13 +381,7 @@ static void HandleDomainMessage(const DomainMessage *message)
             message->role==BOARD_ROLE_B && message->state==DOMAIN_LOCAL_VALID)
     {
         /* B重启会把ACK序号重置为1；这时必须恢复当前结果重发。 */
-        if(last_peer_domain_sequence!=0U &&
-           (int32_t)(message->sequence-last_peer_domain_sequence)<=0)
-        {
-            acked_result_id=0U;
-            last_result_id=0U;
-        }
-        last_peer_domain_sequence=message->sequence;
+        ResultExchange_OnPeerAckSequence(&result_exchange,message->sequence);
         (void)TimeDomain_OnPeerAck(message->token,now);
     }
 }
@@ -415,7 +407,7 @@ static void ServiceDomain(uint32_t now_ms)
     {
         if(domain.valid){
             MeasurementGate_OnDomainValid(now_ms);
-            if(!last_domain_valid){acked_result_id=0U;last_result_id=0U;}
+            if(!last_domain_valid)ResultExchange_OnDomainRestored(&result_exchange);
         }
         else MeasurementGate_OnDomainInvalid(now_ms);
         last_domain_valid=domain.valid;
@@ -510,11 +502,9 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
         MeasurementResult_Invalidate(now_ms);
         return;
     }
-    if(result.id==acked_result_id){return;}
-    if(result.id==last_result_id &&
-       (uint32_t)(now_ms-last_result_tx_ms)<APP_RESULT_REFRESH_MS){return;}
+    if(!ResultExchange_ShouldSend(&result_exchange,now_ms,result.id)){return;}
     if(UDPSoundEvent_SendResult(now_ms,&result))
-    { last_result_id=result.id;last_result_tx_ms=now_ms; }
+    { ResultExchange_MarkSent(&result_exchange,now_ms,result.id); }
 }
 #endif
 
@@ -644,7 +634,8 @@ void App_Init(void)
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
         (void)StandardSequence_Init(&standard_sequence,&sequence_config);
         standard_sequence_detected=false;
-        last_result_id=0U;last_result_tx_ms=0U;acked_result_id=0U;last_audio_session=0U;last_peer_domain_sequence=0U;
+        ResultExchange_Init(&result_exchange);
+        last_audio_session=0U;
     }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))

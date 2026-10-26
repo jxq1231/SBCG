@@ -8,6 +8,7 @@
 #include "Measure/measurement_result.h"
 #include "Measure/measurement_gate.h"
 #include "Calibration/calibration.h"
+#include "Measure/result_exchange_state.h"
 #include "Detector/standard_sequence.h"
 #include "Sync/time_domain.h"
 #include "BSP/bsp_board_identity.h"
@@ -145,6 +146,21 @@ void Calibration_Init(void){}
 void Calibration_Get(CalibrationSnapshot *out){if(out)memset(out,0,sizeof *out);}
 /** @brief App测试桩：设置结果标定。 */
 void MeasurementResult_SetCalibration(int32_t offset,uint16_t version){(void)offset;(void)version;}
+
+/** @brief App测试桩：初始化结果重发状态。 */
+void ResultExchange_Init(ResultExchangeState *s){if(s)memset(s,0,sizeof *s);}
+/** @brief App测试桩：域恢复。 */
+void ResultExchange_OnDomainRestored(ResultExchangeState *s){(void)s;}
+/** @brief App测试桩：ACK序号。 */
+void ResultExchange_OnPeerAckSequence(ResultExchangeState *s,uint32_t q){(void)s;(void)q;}
+/** @brief App测试桩：成功ACK。 */
+void ResultExchange_OnAck(ResultExchangeState *s,uint32_t id){(void)s;(void)id;}
+/** @brief App测试桩：允许发送。 */
+bool ResultExchange_ShouldSend(const ResultExchangeState *s,uint32_t now,uint32_t id)
+{(void)s;(void)now;(void)id;return true;}
+/** @brief App测试桩：记录发送。 */
+void ResultExchange_MarkSent(ResultExchangeState *s,uint32_t now,uint32_t id)
+{(void)s;(void)now;(void)id;}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);
