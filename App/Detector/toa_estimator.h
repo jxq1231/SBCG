@@ -30,12 +30,40 @@ extern const ToaEstimatorConfig ToaEstimator_DefaultConfig;
  * @brief   估算候选窗前沿的过阈位置（相对samples[0]的子帧偏移）。
  * @param   config 非NULL有效配置，只读。
  * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本调用借用。
- * @param   out_fraction 非NULL输出；失败保留原值，成功为[0,window_frames-1)的double，
- *          i表示前沿位于样本i-1与i之间且插值系数∈[0,1)，越界/恒阈值时夹紧。
+ * @param   out_fraction 非NULL输出；成功为前沿插值位置，失败保持原值。
  * @return  true为找到前沿；false为参数非法、无过阈点或首个样本已过阈（前沿在窗外）。
  * @note    无硬件访问、无状态、可重入；纯前台，线性插值使用绝对幅值。
  */
 bool ToaEstimator_Estimate(const ToaEstimatorConfig *config,
                            const int16_t *samples, double *out_fraction);
+
+/**
+ * @brief 栅格无关的峰值回溯前沿配置。
+ * @note  搜索窗64..512点；从窗内峰值逐样本向左找最后一段连续阈值以上段的起点，
+ *        再用 lo/start 样本对线性插值出子帧前沿，输出相对samples[0]的位置。
+ *        run_samples为连续过阈样本数2..8，抑制单点尖峰误触；该位置与调用方
+ *        候选窗起点(如64帧门控栅格)无依赖，适合作为绝对前沿锚点。
+ */
+typedef struct {
+    uint16_t window_frames;
+    uint16_t threshold_pcm;
+    uint16_t relative_scale;
+    uint8_t run_samples;
+} ToaBackwardConfig;
+
+/** @brief 试验默认：256点窗、阈值128、相对峰值1/8、连续4样本过阈。 */
+extern const ToaBackwardConfig ToaBackward_DefaultConfig;
+
+/**
+ * @brief   从峰值向左回溯定位连续过阈前沿，返回相对samples[0]的子帧位置。
+ * @param   config 非NULL有效配置，只读。
+ * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本调用借用。
+ * @param   out_fraction 非NULL输出；成功为前沿插值位置，失败保持原值。
+ * @return  true为找到连续前沿；false为参数非法、无峰值、整窗已过阈或连续段不足。
+ * @note    与旧Estimate的正向线性插值不同，本接口基于峰回溯，不依赖候选窗栅格；
+ *          峰可出现在窗内任意位置，前沿为最后一段连续过阈的起点到其前一样本插值。
+ */
+bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
+                                   const int16_t *samples, double *out_fraction);
 
 #endif

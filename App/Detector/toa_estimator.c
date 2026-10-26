@@ -14,6 +14,7 @@
 #define TOA_MAX_PCM 32768U
 
 const ToaEstimatorConfig ToaEstimator_DefaultConfig={32U,128U,4U};
+const ToaBackwardConfig ToaBackward_DefaultConfig={256U,128U,8U,4U};
 
 /**
  * @brief   估算候选窗前沿的过阈位置（相对samples[0]的子帧偏移）。
@@ -57,4 +58,48 @@ bool ToaEstimator_Estimate(const ToaEstimatorConfig *config,
         return true;
     }
     return false;
+}
+/**
+ * @brief   从峰值向左回溯定位连续过阈前沿（栅格无关）。
+ * @param   config 非NULL有效配置，只读；window_frames 64..512，run_samples 2..8。
+ * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本调用借用。
+ * @param   out_fraction 非NULL输出；成功为前沿插值位置，失败保持原值。
+ * @return  true为找到连续前沿；false为参数非法、无峰值、整窗已过阈或连续段不足。
+ * @note    阈值=max(threshold_pcm, peak/relative_scale)；峰起向左的最后一段连续
+ *          过阈样本的起点与前一低于阈样本做线性插值，输出相对samples[0]的位置，
+ *          与门控候选窗的64帧栅格无关。
+ */
+bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
+                                   const int16_t *samples, double *out_fraction)
+{
+    if(config==NULL || out_fraction==NULL || samples==NULL ||
+       config->window_frames<32U || config->window_frames>TOA_MAX_FRAMES ||
+       config->threshold_pcm>TOA_MAX_PCM ||
+       config->run_samples<2U || config->run_samples>8U){return false;}
+    uint32_t peak=0U;uint16_t idx_peak=0U;
+    for(uint16_t i=0U;i<config->window_frames;++i){
+        const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+        if(magnitude>peak){peak=magnitude;idx_peak=i;}
+    }
+    if(peak==0U){return false;}
+    uint32_t limit=config->threshold_pcm;
+    if(config->relative_scale>0U && config->relative_scale<=32U){
+        const uint32_t relative=peak/config->relative_scale;
+        if(relative>limit){limit=relative;}
+    }
+    if(limit==0U){return false;}
+    int32_t below=-1;
+    for(int32_t i=(int32_t)idx_peak;i>=0;--i){
+        const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+        if(magnitude<limit){below=i;break;}
+    }
+    if(below<0){return false;}  /* 峰到窗首整段已过阈，前沿在窗外 */
+    const uint16_t start=(uint16_t)(below+1);
+    if((uint16_t)(idx_peak-start+1U)<config->run_samples){return false;}
+    const double hi=(double)(samples[start]<0 ? -(int32_t)samples[start]:samples[start]);
+    const double lo=(double)(samples[below]<0 ? -(int32_t)samples[below]:samples[below]);
+    if(hi<=lo){return false;}
+    const double fraction=(double)below+(double)((uint32_t)limit-lo)/(hi-lo);
+    *out_fraction=fraction;
+    return true;
 }

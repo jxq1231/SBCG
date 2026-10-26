@@ -147,18 +147,18 @@ static void TestStateLogging(void)
  SoundDetectorService_Process(3000U,&health);CHECK(state_logs==before+2U);
  puts("PASS state log: timing fields present and fault path keeps periodic $SOUND_STATE");
 }
-/** @brief 验证候选窗前沿子帧估算输出TOA_US及计数；无参数，无返回值。 */
+/** @brief 验证候选窗前沿栅格无关回溯估算输出TOA_US及计数；无参数，无返回值。 */
 static void TestToa(void)
 {
- /* 静默8帧后线性斜坡：前沿样本对在绝对帧11(8000)与12(10000)之间，阈值=峰值/4=8191，
-    插值位置=11.0955帧，TOA_US=round(11.0955*1000000/48000)=231。 */
+ /* 静默8帧后线性斜坡：峰回溯阈值=峰值/8=4095，前沿样本对在绝对帧9(4000)与10(6000)之间，
+    插值位置=9.0475帧，锚点=onset-64=0，TOA_US=round(9.0475*1000000/48000)=188。 */
  Setup(0U,0U);
  for(unsigned i=0U;i<8U;++i)pcm[2U*i]=0;
  for(unsigned i=8U;i<8192U;++i){const long value=(long)(i-8U+1U)*2000L;pcm[2U*i]=(int16_t)(value>32767L?32767L:value);}
  CHECK(Deliver(0,true));CHECK(Snap().toa_ok==1U && Snap().toa_miss==0U);
  SoundDetectorService_Process(250,&health);
- CHECK(candidate_logs==1U && strstr(last_candidate,",TOA_US=231\r\n")!=NULL);
- puts("PASS toa: sub-frame leading edge TOA_US in SOUND_CAND with counters");
+ CHECK(candidate_logs==1U && strstr(last_candidate,",TOA_US=188\r\n")!=NULL);
+ puts("PASS toa: grid-free backward leading edge TOA_US in SOUND_CAND with counters");
 }
 /** @brief 运行真实服务边界测试；无参数，成功0。 */
 int main(void){TestCommit();TestRejected();TestQueue();TestBoundaries();TestOther();TestTiming();TestStateLogging();TestToa();puts("PASS sound service: 8 groups + timing + toa");return 0;}

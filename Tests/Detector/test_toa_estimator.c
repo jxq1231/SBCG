@@ -9,6 +9,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /** @brief 条件求值一次，失败打印行号并结束；测试专用。 */
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);exit(1);}}while(0)
@@ -69,6 +70,33 @@ int main(void)
     CHECK(!ToaEstimator_Estimate(&(ToaEstimatorConfig){7U,128U,4U},samples,&fraction));
     CHECK(!ToaEstimator_Estimate(&(ToaEstimatorConfig){32U,0U,0U},samples,&fraction));
     CHECK(fraction==55.0);
-    printf("PASS toa estimator: integer/fractional leading edges, adaptive threshold, boundaries\n");
+    /* 栅格无关回溯估计：静默16帧后斜坡，峰在窗内，前沿在样本28(3900)与29(4200)之间。 */
+    {
+        int16_t back[256];
+        for(unsigned i=0U;i<16U;++i)back[i]=0;
+        for(unsigned i=16U;i<256U;++i){
+            const long value=(long)(i-15)*300L;
+            back[i]=(int16_t)(value>32767L?32767L:value);
+        }
+        fraction=0.0;
+        CHECK(ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,back,&fraction));
+        CHECK(fabs(fraction-28.65)<0.1);
+    }
+    /* 单点尖峰不足连续过阈段 -> 拒绝 */
+    {
+        int16_t back[256];memset(back,0,sizeof back);back[50]=30000;
+        fraction=99.0;
+        CHECK(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,back,&fraction));
+        CHECK(fraction==99.0);
+    }
+    /* 整窗已过阈（前沿在窗外）-> 拒绝 */
+    int16_t full[256];
+    for(unsigned i=0U;i<256U;++i)full[i]=10000;
+    CHECK(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,full,&fraction));
+    /* 参数非法全部拒绝 */
+    CHECK(!ToaEstimator_EstimateBackward(NULL,full,&fraction));
+    CHECK(!ToaEstimator_EstimateBackward(&(ToaBackwardConfig){16U,128U,8U,4U},full,&fraction));
+    CHECK(!ToaEstimator_EstimateBackward(&(ToaBackwardConfig){256U,128U,8U,9U},full,&fraction));
+    printf("PASS toa estimator: integer/fractional leading edges, adaptive threshold, boundaries, grid-free backward\n");
     return 0;
 }
