@@ -34,6 +34,7 @@
 | [单板可信验证计划](Plans/2026-10-26_Goal_Aligned_Review/task_plan.md) | 已完成·复核与软件修复记录 | TOA窗口护栏、已有实验纠偏及验证范围，不重复实施 |
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
+| [M4.3.5标准声周期序列监控](Milestones/M4_3_5_Standard_Sequence_Monitor.md) | 纯软件原型·未接线/未烧录 | 10次/2s周期、抖动/漏步/低质量/长静默测试；周期≠识别，模板MATCH0未解 |
 | [M4.3.4权威测量结果/状态页](Milestones/M4_3_4_Measurement_UI.md) | 软件路径完成·硬件/同步待验 | 配对→单一MeasurementResult→UI快照；距离/方向/质量/温度版本/2s有效期；诊断域/SYNC=0 |
 | [M4.3.3诊断型事件UDP](Milestones/M4_3_3_Diagnostic_Event_UDP.md) | 软件路径完成·两板/同步/烧录待验 | 5009事件线协议、成功TOA队列、A/B配对与$SOUND_PAIR；time_domain为诊断常量/SYNC=0 |
 | [M4.3.2事件配对/距离纯核心](Milestones/M4_3_2_Pair_Distance_Core.md) | 纯软件核心完成·网络/硬件待接 | 乱序/重复/歧义/质量/时间域门控，d=c|Δt|与A/B方向，36字节线协议；未接UDP/未烧录 |
