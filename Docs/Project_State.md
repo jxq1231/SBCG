@@ -20,7 +20,7 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
-**P1受控采集已完成首批音量扫描（2026-10-26）。** 工具记录BOOT/UID、`SBCG-M4.2-PCMCAP`本地ELF SHA `286940ae…`（flash verify exit0）、CH0、RATE、WAV 10起点及前后12秒静默；受控trial `p1-20261026-01`（vol100）与`03`（vol80）current_envelope出现slot0..9，但vol100重复`05`、vol60 `04`未得到与播放槽一致的10/10，说明全10槽尚不稳定；`02`因BOOT/UID缺失被工具FAIL排除。回放run `20261026T113112` TOOL_CHECK PASS、无格式/硬失败。下一步需同条件≥5次重复，再选最小修正；这不是物理TOA/PTP/双板/识别通过。详见[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
+**P1受控采集已完成5×3音量重复（2026-10-26）。** 每个音量（100/80/60）5个有效trial；全部记录BOOT/UID、`SBCG-M4.2-PCMCAP`镜像SHA `286940ae…`、CH0、实测RATE、WAV 10起点及前后12秒静默。现有账本/回放current_envelope全10槽 **12/15**（vol100 4/5、vol80 5/5、vol60 3/5）；回放run `20261026T115438` TOOL_CHECK PASS、无格式/硬失败。全10槽不稳定来自候选缺失/额外背景，不能据此改0.80或算法；下一步先做只读逐trial核对，距离/方向组需用户移动设备。这不是物理TOA/PTP/双板/识别通过。详见[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
 
 **M4.2.5失败搜索诊断已硬件复验；标准音仍0/10。** A板运行`SBCG-M4.2-SEARCHDIAG`（Debug `c219af98…`）：24个完整任务全部LOW_CORR，最高raw相关0.773821<0.80，RMS2265–2302、N=257/V=257、LR/Z/I=0，MATCH0；10个高能量候选、7个高相关任务；RPT24/RLOST0，资源/日志/UI错误全0。数字WAV与模板相关1.0。诊断链已实机工作，失败在门限前相关度，不是搜索预算/范围/低RMS；独立只读复核PASS_WITH_RESERVATIONS（无阻塞，低风险流程/测试项）。下一步保存PCM/受控声学实验，不盲目降门限，识别/PTP/测距仍未验收。[M4.2.5复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。
 

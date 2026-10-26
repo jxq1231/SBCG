@@ -8,7 +8,7 @@
 
 **最新先读[M4.2.5真实播放复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。** 用户已开放声音测试；`SBCG-M4.2-SEARCHDIAG` 镜像自动播放标准WAV 20秒/10次，24个完整任务全部`LOW_CORR`、MATCH0；最高raw相关0.773821<0.80、RMS≈2300、N=257/V=257、LR/Z/I=0，RPT24/RLOST0，资源/日志/UI错误0；10个高能量候选、7个高相关任务。数字WAV与模板相关1.0，诊断链已实机工作；失败在门限前相关度，不是搜索预算/范围/低RMS；独立复核PASS_WITH_RESERVATIONS（无阻塞）。下一步保存PCM/受控声学实验，不直接降低门限；识别/PTP/测距仍未验收。
 
-**最新P1受控采集（2026-10-26）：** 首批音量扫描记录BOOT/UID、`SBCG-M4.2-PCMCAP`镜像SHA、CH0、实测RATE、WAV 10起点与前后12秒静默；vol100/80两trial的current_envelope覆盖slot0..9，但vol100重复/vol60未得到10/10，需≥5次重复后再选修正。[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
+**最新P1受控采集（2026-10-26）：** 每个音量100/80/60各5个有效trial完成；current_envelope全10槽 **12/15**（vol100 4/5、vol80 5/5、vol60 3/5），回放run `20261026T115438` TOOL_CHECK PASS。缺槽/额外背景需先核对，不据单组数据改算法。[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
 
 此前最近记录为M4.2.4-A4优化镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug de212005…）：STAT_MS 15→8–9ms、AUDIO 27→18ms、LOOP 40→34ms；同轮OTHER/FLUSH≈15ms成为最大单项，UI1–2ms；业务错误0。对照镜像未发现A3诊断抬高最大值。C2评估测得UART占用约21.5%、23.7行/秒，建议集中quiet/full策略。[A4记录](Milestones/M4_2_4_A4_Control_Statistics.md) · [C2评估](Milestones/M4_2_4_C2_Log_Evaluation.md)。此前A/B/A2/A3耗时与批量Stage、M4.2.3-B扫描静默证据按各自范围保留；主动标准音频仍因环境不能发声未验收。历史DIAG窗口定位：扫描59ms、评分5ms、日志208次队满；历史证据保留。
 

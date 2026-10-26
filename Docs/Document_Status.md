@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | [面向提高项的目标路线](Goal_Aligned_Roadmap_2026_10_26.md) | 当前任务书复核与优先级 | 最终几何、已完成/未完成、单A能做什么、每步帮助哪个指标 |
 | [全事件对账与TOA离线回放计划](Plans/2026-10-26_PCM_Event_Replay_Plan.md) | 已完成+审查修复+审计 | 九轮输入、版本未知、关联歧义、完整窗、真实C回放及分层通过条件；审计与后续规划见[链接](Plans/2026-10-26_PCM_Event_Replay_Audit.md)；P0独立复核`Logs/Detector/TOA_Replay/P0_review/review.json`（PASS_WITH_RESERVATIONS，F1/F2/F3/F5已修，`c27e5e7`；修复后run `20261026T110943/111047`）；[里程碑](Milestones/PCM_Event_Replay_2026_10_26.md) |
-| [P1受控声学采集](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md) | 首批音量扫描·全10槽不稳定·物理精度未验 | BOOT/UID/镜像SHA/CH/RATE/WAV起点/前后静默；01/03全10槽，04/05未；需≥5次重复 |
+| [P1受控声学采集](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md) | 5×3音量重复·全10槽12/15·物理精度未验 | BOOT/UID/镜像SHA/CH/RATE/WAV起点/前后静默；vol80全5，vol100 4/5，vol60 3/5；候选结构需核对 |
 | [TOA可信边界修复](Milestones/TOA_Trusted_Boundaries_2026_10_26.md) | 软件验证通过·未烧录 | 完整窗/NA、21字节输出与数值转换安全，不代表前沿精度改善 |
 | [单板可信验证计划](Plans/2026-10-26_Goal_Aligned_Review/task_plan.md) | 已完成·复核与软件修复记录 | TOA窗口护栏、已有实验纠偏及验证范围，不重复实施 |
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
