@@ -1,6 +1,6 @@
 # 单板全事件对账与TOA离线回放执行计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. 使用下方复选框记录执行结果；本文件目前仅完成规划。
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. 使用下方复选框记录执行结果；本文件已于2026-10-26实施并完成独立审查修复，执行审计见[审计与后续规划](2026-10-26_PCM_Event_Replay_Audit.md)。
 
 **Goal:** 对已有单板实验建立不漏账、可追溯、可重复计算的事件基准，分清声音候选、标准声身份、可用PCM窗口和到达时间，给下一次前沿算法选择提供可靠输入。
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python标准库、已有NumPy分析函数、现有主机GCC测试模式、项目原TOA C接口；运行产物放在Logs，摘要放在Docs。
 
-<!-- doc-status: implemented-and-review-fixed; reviewed: 2026-10-26 -->
+<!-- doc-status: implemented-audited-next-planning; reviewed: 2026-10-26 -->
 
 ## 1. 当前目标与边界
 
@@ -162,7 +162,7 @@
 | 同输入、同源哈希、同配置重复运行 | 去除运行时间/路径后结果相同 |
 | 额外背景事件 | 仍在记录/汇总中，不随归槽失败消失 |
 
-计划实施后在项目根执行（这些新入口目前尚未创建）：
+计划实施后已在项目根执行（新入口已创建；以下命令保留用于复现）：
 
 ```powershell
 python -B -m unittest discover -s Analysis/tests -p test_pcm_event_ledger.py
