@@ -5,6 +5,7 @@ conservation with reserved background events, and input reproducibility.
 Real firmware files are not touched.
 """
 import json
+import copy
 import os
 import shutil
 import subprocess
@@ -241,6 +242,74 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(any("capture ids regress" in p
                             for p in summary["per_trial"][trial]["problems"]))
 
+    def test_frozen_metadata_own_receive_times_and_prelude_format_failure(self):
+        import hashlib
+        # A p1-04-like capture received near slot 0 does not contain SOUND 0.
+        # A D50-like prelude SEARCH defect remains a global tool failure.
+        trial = "t1"
+        make_fixture(self.root, trial,
+                     [(i + 1, 100000 + i * 96000, 1000) for i in range(10)],
+                     [(i + 1, 100000 + i * 96000 + (96 if i else -500))
+                      for i in range(10)])
+        log_path = self.root / "Logs" / "Chirp" / trial / "run.jsonl"
+        records = [json.loads(line) for line in log_path.read_text(
+            encoding="utf-8").splitlines()]
+        for i, record in enumerate(records):
+            record["t"] = 13 + (i % 10) * 2 + (.03 if i < 10 else 0)
+        records.insert(0, {"t": .1, "line": "$CHIRP_SEARCH,ID=999,SESSION=1,"
+                           "HINT=64,BEST=64"})
+        log_path.write_text("".join(json.dumps(r) + "\n" for r in records),
+                            encoding="utf-8")
+        pcm_dir = self.root / "Logs" / "Chirp" / "PCM" / trial
+        inputs = playback_input()
+        for name, content in (("trial_summary.json", inputs["summary"]["content"]),
+                              ("trial_manifest.json", inputs["trial_manifest"]["content"])):
+            (pcm_dir / name).write_text(json.dumps(content), encoding="utf-8")
+        result = self.pipeline()
+        self.assertNotEqual(result.returncode, 0)
+        run_dir = sorted((self.root / "Replay").iterdir())[-1]
+        summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["conclusions"]["TOOL_CHECK"], "FAIL")
+        self.assertTrue(any("without capture" in p for p in summary["format_errors"]))
+        report = summary["diagnostics"]["playback_window"]["by_trial"][trial]
+        self.assertTrue(report["capture_log"]["coverage_complete"])
+        self.assertEqual(report["linked_sound_pcm"]["missing_slots"], [0])
+        ledger = json.loads((run_dir / "ledger.json").read_text(
+            encoding="utf-8"))["ledgers"][trial]
+        search = ledger["events"][0]
+        self.assertEqual((search["host_sec"], search["time_phase"]), (.1, "prelude"))
+        capture = next(e for e in ledger["events"] if e["kind"] == "$CHIRP_CAPTURE")
+        self.assertEqual(capture["host_sec"], 13.03)
+        self.assertAlmostEqual(capture["slot_residual_s"], .03)
+        rows = [json.loads(line) for line in (run_dir / "replay.jsonl").read_text(
+            encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(rows[0]["kind"], "SOUND")
+        for i, row in enumerate(rows):
+            self.assertEqual(row["host_sec"], 13 + i * 2)
+            self.assertEqual(row["time_phase"], "playback")
+            self.assertEqual(row["expected_slot_id"], i)
+            self.assertEqual(row["slot_residual_s"], 0)
+        inventory = json.loads((run_dir / "manifest.json").read_text(
+            encoding="utf-8"))["inventory"][trial]
+        frozen = inventory["trial_manifest"]
+        self.assertEqual(frozen["content"], inputs["trial_manifest"]["content"])
+        self.assertEqual(frozen["sha256"], hashlib.sha256(
+            (pcm_dir / "trial_manifest.json").read_bytes()).hexdigest())
+        # With the first SOUND truly contained, the same prelude defect must
+        # still fail TOOL_CHECK while playback association covers all ten.
+        records[11]["line"] = records[11]["line"].replace(
+            "FIRST=99500,CONFIRMED=99627", "FIRST=100096,CONFIRMED=100223")
+        log_path.write_text("".join(json.dumps(r) + "\n" for r in records),
+                            encoding="utf-8")
+        self.assertNotEqual(self.pipeline().returncode, 0)
+        next_dir = sorted((self.root / "Replay").iterdir())[-1]
+        next_summary = json.loads((next_dir / "summary.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(next_summary["conclusions"]["TOOL_CHECK"], "FAIL")
+        next_report = next_summary["diagnostics"]["playback_window"]["by_trial"][trial]
+        self.assertTrue(next_report["linked_sound_pcm"]["unique_complete"])
+
 
 class CliSaferTest(unittest.TestCase):
     """Review-driven: space paths, NaN rejection, format-error gating."""
@@ -415,6 +484,230 @@ class SlotGateTest(unittest.TestCase):
         self.assertEqual(delta["both_valid"], 1)
         self.assertIn("toaB-20261026-07|lost", delta["valid_to_invalid"])
         self.assertIn("toaB-20261026-07|gained", delta["invalid_to_valid"])
+
+
+def playback_input(start=12.0, duration=20.0, onsets=None):
+    """Controlled-trial metadata with independently frozen references."""
+    onsets = list(range(1, 20, 2)) if onsets is None else onsets
+    metadata = {"wav": {"duration_s": duration,
+                        "expected_onsets_s": onsets, "sha256": "a" * 64},
+                "playback": {"play_span_api_s": [start, start + 0.01]}}
+    return {"summary": {"content": {"play_span": [start, start + 0.01],
+                                     "metadata": copy.deepcopy(metadata)}},
+            "trial_manifest": {"content": copy.deepcopy(metadata)}}
+
+
+class PlaybackContextTest(unittest.TestCase):
+    def context(self, **kwargs):
+        import toa_replay
+        self.assertTrue(hasattr(toa_replay, "playback_context"),
+                        "a pure metadata-based playback context is required")
+        return toa_replay.playback_context(playback_input(**kwargs))
+
+    def test_async_return_is_not_wav_end_and_raw_seconds_are_preserved(self):
+        ctx = self.context(start=12.008123456)
+        self.assertEqual(ctx["status"], "OK")
+        self.assertEqual(ctx["api_start_s"], 12.008123456)
+        self.assertEqual(ctx["api_return_s"], 12.018123456)
+        self.assertEqual(ctx["wav_end_s"], 32.008123456)
+        self.assertEqual(ctx["analysis_end_s"], 34.008123456)
+        self.assertEqual(ctx["receive_guard_s"], 2.0)
+        self.assertEqual(ctx["slot_tolerance_s"], 0.95)
+        self.assertEqual(ctx["basis"], "host_serial_receive_approx")
+
+    def test_bad_missing_or_conflicting_references_are_unknown(self):
+        import toa_replay
+        self.assertTrue(hasattr(toa_replay, "playback_context"),
+                        "reference validation is missing")
+        cases = [{}, playback_input(), playback_input(), playback_input(),
+                 playback_input(), playback_input(), playback_input(),
+                 playback_input(), playback_input(), playback_input()]
+        cases[1]["summary"]["content"]["play_span"][0] = float("nan")
+        cases[2]["summary"]["content"]["play_span"][0] = "12"
+        cases[3]["trial_manifest"]["content"]["wav"]["duration_s"] = 21
+        cases[4]["trial_manifest"]["content"]["wav"]["sha256"] = "b" * 64
+        cases[5]["trial_manifest"]["content"]["wav"]["expected_onsets_s"][0] = 0
+        cases[6]["summary"]["content"]["metadata"]["wav"]["duration_s"] = float("inf")
+        cases[7]["trial_manifest"]["content"]["playback"]["play_span_api_s"][0] = 13
+        del cases[8]["trial_manifest"]
+        cases[9]["summary"]["content"]["metadata"]["wav"]["expected_onsets_s"] = []
+        for item in cases:
+            with self.subTest(item=item):
+                self.assertEqual(toa_replay.playback_context(item)["status"],
+                                 "UNKNOWN")
+
+    def test_receive_boundaries_tolerance_and_invalid_event_times(self):
+        from toa_replay import classify_playback_time
+        ctx = self.context()
+        expected = [(11.999, "prelude", None), (12.0, "playback", None),
+                    (13 - .95, "playback", 0), (13 + .95, "playback", 0),
+                    (13 + .95001, "playback", None),
+                    (32.001, "playback", None), (34.0, "postlude", None)]
+        for host_sec, phase, slot in expected:
+            row = classify_playback_time(host_sec, ctx)
+            self.assertEqual((row["time_phase"], row["expected_slot_id"]),
+                             (phase, slot))
+        for host_sec in (None, "13", True, -1, float("nan"), float("inf"), 10**400):
+            self.assertEqual(classify_playback_time(host_sec, ctx)["time_phase"],
+                             "unknown")
+        self.assertEqual(classify_playback_time(13, {"status": "UNKNOWN"})[
+            "time_phase"], "unknown")
+
+    def test_overlapping_onset_tolerance_is_explicitly_ambiguous(self):
+        from toa_replay import classify_playback_time
+        row = classify_playback_time(13.5, self.context(onsets=[1, 2]))
+        self.assertEqual(row["slot_status"], "ambiguous")
+        self.assertIsNone(row["expected_slot_id"])
+        self.assertEqual(row["slot_candidates"], [0, 1])
+
+
+class PlaybackCoverageTest(unittest.TestCase):
+    versions = ["peak_backtrack", "current_envelope"]
+
+    def fixture(self, slots=range(10), missing_pcm=(), extras=()):
+        from toa_replay import playback_context, classify_playback_time
+        ctx = playback_context(playback_input())
+        events, edges, rows = [], [], []
+        for index, slot in enumerate(list(slots) + list(extras), start=1):
+            host = 13 + slot * 2
+            key = f"sound:{index}"
+            capkey = f"capture:{index}"
+            classification = classify_playback_time(host, ctx)
+            sound = {"kind": "$SOUND_CAND", "key": key, "trial": "t1",
+                     "line_no": index * 2, "host_sec": host,
+                     "fields": {"SEQ": str(index)}, **classification}
+            capture = {"kind": "$CHIRP_CAPTURE", "key": capkey,
+                       "trial": "t1", "line_no": index * 2 + 1,
+                       "host_sec": host + .03, "fields": {"ID": str(index)},
+                       **classify_playback_time(host + .03, ctx)}
+            events += [sound, capture]
+            if slot in missing_pcm:
+                rows.append({"trial": "t1", "kind": "SOUND", "sound_key": key,
+                             "host_sec": host, "offline_window_status": "no_pcm",
+                             "replays": [], **classification})
+                continue
+            edges += [{"source": key, "target": capkey,
+                       "kind": "sound-capture", "status": "UNIQUE"},
+                      {"source": f"pcm:t1:{index}", "target": capkey,
+                       "kind": "pcm-capture", "status": "LINKED"}]
+            rows.append({"trial": "t1", "kind": "WINDOW", "sound_key": key,
+                         "host_sec": host, "anchor": index * 96000,
+                         "pcm_id": index, "edge_status": "UNIQUE",
+                         "offline_window_status": "OK", **classification,
+                         "replays": [{"version": v, "opt": "-O0", "runs": [
+                             {"valid": True, "fraction_frames": 1.0}]}
+                                     for v in self.versions]})
+        return ctx, {"events": events, "edges": edges}, rows
+
+    def diagnostics(self, ctx, ledger, rows):
+        from toa_replay import aggregate_diagnostics
+        return aggregate_diagnostics(rows, self.versions,
+                                     playback_contexts={"t1": ctx},
+                                     ledgers={"t1": ledger})
+
+    def test_background_preserved_but_not_in_playback_coverage_or_delta(self):
+        ctx, ledger, rows = self.fixture(extras=[-1, 11])
+        rows[0]["replays"][1]["runs"][0]["valid"] = False
+        # Keep a background-only validity loss separate from playback loss.
+        rows[-2]["replays"][1]["runs"][0]["valid"] = False
+        diag = self.diagnostics(ctx, ledger, rows)
+        report = diag["playback_window"]["by_trial"]["t1"]
+        self.assertEqual(report["phase_counts"]["$SOUND_CAND"],
+                         {"prelude": 1, "playback": 10, "postlude": 1,
+                          "unknown": 0})
+        self.assertTrue(report["capture_log"]["unique_complete"])
+        self.assertTrue(report["linked_sound_pcm"]["unique_complete"])
+        self.assertEqual(report["by_version"]["current_envelope"][
+            "missing_slots"], [0])
+        self.assertEqual(len(rows), 12)
+        name = "peak_backtrack_to_current_envelope"
+        self.assertEqual(len(diag["version_validity_delta"][name][
+            "valid_to_invalid"]), 2)
+        self.assertEqual(len(diag["playback_window"]["version_validity_delta"][
+            name]["valid_to_invalid"]), 1)
+        self.assertEqual(diag["population"], "legacy_all_events")
+
+    def test_missing_first_and_middle_slots_do_not_shift(self):
+        for absent in ([0], [5, 6]):
+            ctx, ledger, rows = self.fixture(
+                slots=[i for i in range(10) if i not in absent])
+            report = self.diagnostics(ctx, ledger, rows)["playback_window"][
+                "by_trial"]["t1"]
+            for key in ("capture_log", "linked_sound_pcm"):
+                self.assertEqual(report[key]["missing_slots"], absent)
+                self.assertFalse(report[key]["coverage_complete"])
+            self.assertEqual(report["by_version"]["current_envelope"][
+                "missing_slots"], absent)
+
+    def test_duplicates_and_extra_are_retained_and_block_unique_complete(self):
+        ctx, ledger, rows = self.fixture(extras=[2, 9.7])
+        report = self.diagnostics(ctx, ledger, rows)["playback_window"][
+            "by_trial"]["t1"]
+        for key in ("capture_log", "linked_sound_pcm"):
+            self.assertTrue(report[key]["coverage_complete"])
+            self.assertFalse(report[key]["unique_complete"])
+            self.assertEqual(len(report[key]["duplicates"]["2"]), 2)
+            self.assertEqual(len(report[key]["extra"]), 1)
+            self.assertEqual(len(report[key]["source_events"]), 12)
+
+    def test_coarse_capture_cannot_promote_missing_sound_pcm_or_valid_toa(self):
+        ctx, ledger, rows = self.fixture(missing_pcm=[0, 5, 6])
+        report = self.diagnostics(ctx, ledger, rows)["playback_window"][
+            "by_trial"]["t1"]
+        self.assertTrue(report["capture_log"]["coverage_complete"])
+        self.assertEqual(report["linked_sound_pcm"]["missing_slots"], [0, 5, 6])
+        self.assertEqual(len(report["linked_sound_pcm"]["orphan"]), 3)
+        self.assertEqual(report["by_version"]["current_envelope"][
+            "missing_slots"], [0, 5, 6])
+
+    def test_no_events_and_unknown_context_never_pass_coverage(self):
+        ctx, ledger, rows = self.fixture(slots=[])
+        for context in (ctx, {"status": "UNKNOWN", "problems": ["missing"]}):
+            report = self.diagnostics(context, ledger, rows)["playback_window"][
+                "by_trial"]["t1"]
+            self.assertFalse(report["capture_log"]["coverage_complete"])
+            self.assertFalse(report["linked_sound_pcm"]["unique_complete"])
+
+    def test_ten_sounds_eight_captures_keep_slots_five_and_six_missing(self):
+        ctx, ledger, rows = self.fixture()
+        absent_keys = {"capture:6", "capture:7"}
+        ledger["events"] = [e for e in ledger["events"] if e["key"] not in absent_keys]
+        ledger["edges"] = [e for e in ledger["edges"] if e["target"] not in absent_keys]
+        report = self.diagnostics(ctx, ledger, rows)["playback_window"][
+            "by_trial"]["t1"]
+        self.assertEqual(report["phase_counts"]["$SOUND_CAND"]["playback"], 10)
+        for layer in (report["capture_log"], report["linked_sound_pcm"],
+                      report["by_version"]["current_envelope"]):
+            self.assertEqual(layer["missing_slots"], [5, 6])
+            self.assertFalse(layer["coverage_complete"])
+
+    def test_unknown_time_and_slot_ambiguity_remain_traceable(self):
+        from toa_replay import playback_context
+        ctx, ledger, rows = self.fixture()
+        ledger["events"][0]["host_sec"] = None
+        report = self.diagnostics(ctx, ledger, rows)["playback_window"][
+            "by_trial"]["t1"]
+        self.assertEqual(len(report["linked_sound_pcm"]["unknown"]), 1)
+        self.assertEqual(report["linked_sound_pcm"]["missing_slots"], [0])
+        overlap = playback_context(playback_input(onsets=[1, 2]))
+        ledger["events"][0]["host_sec"] = 13.5
+        report = self.diagnostics(overlap, ledger, rows)["playback_window"][
+            "by_trial"]["t1"]
+        self.assertTrue(any(e["key"] == "sound:1" for e in report[
+            "linked_sound_pcm"]["ambiguous"]))
+        self.assertFalse(report["linked_sound_pcm"]["unique_complete"])
+
+    def test_ambiguous_associations_never_select_nearest_pcm(self):
+        ctx, ledger, rows = self.fixture()
+        ledger["edges"][0]["status"] = "AMBIGUOUS"
+        ledger["edges"].append({"source": "sound:1", "target": "other",
+                                "kind": "sound-capture", "status": "AMBIGUOUS"})
+        report = self.diagnostics(ctx, ledger, rows)["playback_window"][
+            "by_trial"]["t1"]
+        self.assertEqual(report["linked_sound_pcm"]["missing_slots"], [0])
+        self.assertEqual(len(report["linked_sound_pcm"]["ambiguous"]), 1)
+        self.assertFalse(report["by_version"]["current_envelope"][
+            "coverage_complete"])
 
 
 if __name__ == "__main__":

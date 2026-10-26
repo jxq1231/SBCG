@@ -12,6 +12,7 @@ directory under --output-root; never overwrites. No firmware change.
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -39,6 +40,129 @@ FORMAT_MARKERS = ("bad json", "odd byte", "frames*2", "non-numeric",
                   "bad json shape", "regress", "metadata",
                   "without capture", "no capture domain",
                   "HINT ", "BEST ", "not object")
+
+RECEIVE_GUARD_S = 2.0
+SLOT_TOLERANCE_S = 0.95
+PLAYBACK_BASIS = "host_serial_receive_approx"
+
+
+def finite_number(value):
+    """Accept actual finite JSON numbers; booleans/strings are not times."""
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) \
+            and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def playback_context(trial_input):
+    """Validate frozen trial references without I/O or a TOA-based fallback.
+
+    play_span[1] records the asynchronous playback API return. The receive
+    analysis window ends at start + WAV duration + receive guard, not there.
+    """
+    out = {"status": "UNKNOWN", "basis": PLAYBACK_BASIS,
+           "source": "trial_summary.json + trial_manifest.json",
+           "receive_guard_s": RECEIVE_GUARD_S,
+           "slot_tolerance_s": SLOT_TOLERANCE_S, "problems": []}
+    try:
+        summary = trial_input["summary"]["content"]
+        metadata = summary["metadata"]
+        manifest = trial_input["trial_manifest"]["content"]
+        spans = [summary["play_span"],
+                 metadata["playback"]["play_span_api_s"],
+                 manifest["playback"]["play_span_api_s"]]
+        for span in spans:
+            if not isinstance(span, list) or len(span) != 2 or \
+                    not all(finite_number(v) and v >= 0 for v in span) or \
+                    span[1] < span[0]:
+                raise ValueError("invalid playback API span")
+        if not all(span == spans[0] for span in spans):
+            raise ValueError("conflicting playback API spans")
+        wavs = [metadata["wav"], manifest["wav"]]
+        for wav in wavs:
+            duration = wav["duration_s"]
+            onsets = wav["expected_onsets_s"]
+            digest = wav["sha256"]
+            if not finite_number(duration) or duration <= 0:
+                raise ValueError("invalid WAV duration")
+            if not isinstance(onsets, list) or not onsets or \
+                    not all(finite_number(v) and 0 <= v < duration
+                            for v in onsets) or \
+                    any(b <= a for a, b in zip(onsets, onsets[1:])):
+                raise ValueError("invalid WAV expected onsets")
+            if not isinstance(digest, str) or len(digest) != 64 or \
+                    any(c not in "0123456789abcdefABCDEF" for c in digest):
+                raise ValueError("invalid WAV sha256")
+            entry = wav.get("manifest_entry", {})
+            for field in ("duration_s", "sha256"):
+                if field in entry and entry[field] != wav[field]:
+                    raise ValueError(f"conflicting WAV manifest_entry {field}")
+        for field in ("duration_s", "expected_onsets_s", "sha256"):
+            if wavs[0][field] != wavs[1][field]:
+                raise ValueError(f"conflicting WAV {field}")
+        start, returned = spans[0]
+        end = start + wavs[0]["duration_s"]
+        if not finite_number(end + RECEIVE_GUARD_S):
+            raise ValueError("nonfinite analysis window")
+        out.update({"status": "OK", "api_start_s": start,
+                    "api_return_s": returned, "wav_duration_s": wavs[0]["duration_s"],
+                    "wav_end_s": end, "analysis_start_s": start,
+                    "analysis_end_s": end + RECEIVE_GUARD_S,
+                    "analysis_interval": "[start,end)",
+                    "expected_onsets_s": list(wavs[0]["expected_onsets_s"]),
+                    "wav_sha256": wavs[0]["sha256"]})
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        out["problems"].append(str(exc))
+    return out
+
+
+def classify_playback_time(host_sec, context):
+    """Classify one record's own receive time against immutable WAV slots."""
+    row = {"host_sec": host_sec, "time_phase": "unknown",
+           "playback_relative_s": None, "expected_slot_id": None,
+           "slot_residual_s": None, "slot_status": "unknown",
+           "slot_candidates": [], "phase_basis": PLAYBACK_BASIS,
+           "phase_source": context.get("source", "unavailable")}
+    if context.get("status") != "OK" or not finite_number(host_sec) or host_sec < 0:
+        return row
+    start = context["api_start_s"]
+    relative = host_sec - start
+    row["playback_relative_s"] = relative
+    row["slot_status"] = "not_playback"
+    if host_sec < start:
+        row["time_phase"] = "prelude"
+    elif host_sec >= context["analysis_end_s"]:
+        row["time_phase"] = "postlude"
+    else:
+        row["time_phase"] = "playback"
+        matches = []
+        for slot, onset in enumerate(context["expected_onsets_s"]):
+            residual = host_sec - (start + onset)
+            if abs(residual) <= context["slot_tolerance_s"] or math.isclose(
+                    abs(residual), context["slot_tolerance_s"],
+                    rel_tol=0, abs_tol=1e-12):
+                matches.append((slot, residual))
+        row["slot_candidates"] = [slot for slot, _ in matches]
+        row["slot_status"] = "ambiguous" if len(matches) > 1 else "extra"
+        if len(matches) == 1:
+            row.update({"expected_slot_id": matches[0][0],
+                        "slot_residual_s": matches[0][1],
+                        "slot_status": "matched"})
+    return row
+
+
+def frozen_json_input(path):
+    """Freeze metadata bytes/hash even when JSON cannot provide a reference."""
+    if not path.exists():
+        return None
+    raw = path.read_bytes()
+    result = {"bytes": len(raw), "sha256": sha256_bytes(raw)}
+    try:
+        result["content"] = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        result.update({"content": None, "read_error": str(exc)})
+    return result
 
 
 def format_error(problem: str) -> bool:
@@ -253,20 +377,15 @@ def main():
     for trial in args.trials:
         serial_path = args.root / trial / "run.jsonl"
         pcm_dir = args.root / "PCM" / trial
-        trial_input = {"serial": None, "summary": None, "pcm": {}, "pairs": 0}
+        trial_input = {"serial": None, "summary": frozen_json_input(
+            pcm_dir / "trial_summary.json"), "trial_manifest": frozen_json_input(
+            pcm_dir / "trial_manifest.json"), "pcm": {}, "pairs": 0}
         if not serial_path.exists():
             missing.append(f"{trial}: run.jsonl missing")
             inventory[trial] = trial_input
             continue
         trial_input["serial"] = {"bytes": serial_path.stat().st_size,
                                  "sha256": sha256_path(serial_path)}
-        summary_path = args.root / "PCM" / trial / "trial_summary.json"
-        if summary_path.exists():
-            trial_input["summary"] = {"bytes": summary_path.stat().st_size,
-                                      "sha256": sha256_path(summary_path),
-                                      "content": json.loads(
-                                          summary_path.read_text(
-                                              encoding="utf-8"))}
         stems = sorted({p.stem for p in pcm_dir.glob("id*.pcm")} |
                        {j.stem for j in pcm_dir.glob("id*.json")}) \
             if pcm_dir.exists() else []
@@ -286,6 +405,8 @@ def main():
         inventory[trial] = trial_input
     if missing:
         status["hard_failures"].extend(missing)
+    playback_contexts = {trial: playback_context(inputs)
+                         for trial, inputs in inventory.items()}
 
     # ---- ledger + window extraction + replay ----
     assets = asset_check(args.assets_dir)
@@ -342,6 +463,8 @@ def main():
             conservation["sound_total"] += 1
             first = first_int(event.fields, "FIRST")
             serial_toa = event.fields.get("TOA_US")
+            time_fields = classify_playback_time(event.host_sec,
+                                                 playback_contexts[trial])
             edges = [e for e in ledger.edges
                      if e.source == event.key and e.kind == "sound-capture"]
             if not edges:
@@ -352,11 +475,13 @@ def main():
                     "serial_toa_us": serial_toa, "edges": 0,
                     "offline_window_status": "no_pcm",
                     "online_window_status": "UNKNOWN",
-                    "firmware_binding": "UNKNOWN", "replays": []})
+                    "firmware_binding": "UNKNOWN", "replays": [],
+                    **time_fields})
                 continue
             ambiguous = any(e.status == "AMBIGUOUS" for e in edges)
             if ambiguous:
                 trial_detail["ambiguous"] += 1
+            prior_rows = len(replay_rows)
             for edge in edges:
                 target = edge.target  # capture:<domain>:<id>
                 ident = target.rsplit(":", 1)[-1]
@@ -384,7 +509,7 @@ def main():
                        "firmware_binding": "UNKNOWN",
                        "firmware_note": "no BOOT/image sha captured; "
                                         "on-device version not provable",
-                       "replays": []}
+                       "replays": [], **time_fields}
                 if win_status == "OK":
                     if not ambiguous:
                         conservation["windows_ok"] += 1
@@ -414,11 +539,22 @@ def main():
                     replay_rows.append(row)
                 else:
                     replay_rows.append(row)
+            if len(replay_rows) == prior_rows:
+                replay_rows.append({
+                    "trial": trial, "kind": "SOUND", "sound_key": event.key,
+                    "seq": event.fields.get("SEQ"), "first_frame": first,
+                    "serial_toa_us": serial_toa, "edges": len(edges),
+                    "offline_window_status": "no_pcm",
+                    "online_window_status": "UNKNOWN",
+                    "firmware_binding": "UNKNOWN", "replays": [],
+                    **time_fields})
         ledgers[trial] = {
             "events": [{"kind": e.kind, "trial": e.trial, "line_no": e.line_no,
                         "host_sec": e.host_sec, "domain": e.domain,
                         "key": e.key, "fields": e.fields,
-                        "parse_problem": e.parse_problem}
+                        "parse_problem": e.parse_problem,
+                        **classify_playback_time(e.host_sec,
+                                                 playback_contexts[trial])}
                        for e in ledger.events],
             "edges": [{"source": e.source, "target": e.target,
                        "kind": e.kind, "status": e.status, "detail": e.detail}
@@ -484,7 +620,8 @@ def main():
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     # ---- summary ----
-    diagnostics = aggregate_diagnostics(replay_rows, versions)
+    diagnostics = aggregate_diagnostics(replay_rows, versions,
+                                        playback_contexts, ledgers)
     synthetic_results, corr_ref = [], {}
     if not args.skip_synthetic:
         synthetic_results, corr_ref = run_synthetic(
@@ -793,8 +930,159 @@ def slot_diagnostics(values_us):
             "verdict_possible": complete}
 
 
+def fixed_slot_coverage(sources, context):
+    """Count every source; duplicates and rejected links remain inspectable."""
+    slots = {}
+    extra, ambiguous, unknown, orphan, invalid = [], [], [], [], []
+    for source in sources:
+        phase = source["time_phase"]
+        if phase == "unknown":
+            unknown.append(source)
+        if source.get("link_status") == "orphan":
+            orphan.append(source)
+        if phase != "playback":
+            continue
+        if source["slot_status"] == "extra":
+            extra.append(source)
+        if source["slot_status"] == "ambiguous" or \
+                source.get("link_status") == "ambiguous":
+            ambiguous.append(source)
+        if source.get("version_valid") is False:
+            invalid.append(source)
+        if source.get("eligible", True) and source["expected_slot_id"] is not None:
+            slots.setdefault(str(source["expected_slot_id"]), []).append(source)
+    expected = list(range(len(context.get("expected_onsets_s", []))))
+    missing = [slot for slot in expected if str(slot) not in slots]
+    duplicates = {slot: values for slot, values in slots.items() if len(values) > 1}
+    complete = context.get("status") == "OK" and bool(expected) and not missing
+    rejected = any(source["time_phase"] == "playback" and
+                   not source.get("eligible", True) for source in sources)
+    return {"expected_slots": expected, "slots": slots,
+            "covered_slots": sorted(int(slot) for slot in slots),
+            "missing_slots": missing, "coverage_complete": complete,
+            "unique_complete": complete and not any((duplicates, extra,
+                                                       ambiguous, unknown,
+                                                       rejected)),
+            "duplicates": duplicates, "extra": extra,
+            "ambiguous": ambiguous, "unknown": unknown, "orphan": orphan,
+            "invalid": invalid, "source_events": sources}
+
+
+def version_validity_delta(replay_rows, versions):
+    """Compare validity without filtering away either side of a transition."""
+    per_window = {}
+    for row in replay_rows:
+        if row["offline_window_status"] != "OK":
+            continue
+        for rw in row.get("replays", []):
+            per_window.setdefault((row["trial"], row["sound_key"]),
+                                  {})[rw["version"]] = rw["runs"][0]
+    result = {}
+    for a, b in zip(versions, versions[1:]):
+        item = {"both_valid": 0, "valid_to_invalid": [],
+                "invalid_to_valid": [], "both_invalid": 0}
+        for key, runs in per_window.items():
+            ra, rb = runs.get(a), runs.get(b)
+            if not ra or not rb:
+                continue
+            if ra["valid"] and rb["valid"]:
+                item["both_valid"] += 1
+            elif ra["valid"]:
+                item["valid_to_invalid"].append("|".join(key))
+            elif rb["valid"]:
+                item["invalid_to_valid"].append("|".join(key))
+            else:
+                item["both_invalid"] += 1
+        result[f"{a}_to_{b}"] = item
+    return result
+
+
+def playback_diagnostics(replay_rows, versions, contexts, ledgers):
+    """Separate coarse capture, unique SOUND/PCM and valid-TOA populations.
+
+    Capture receive times never substitute for SOUND receive times. Full
+    ledger edges, including ambiguities, determine association eligibility.
+    """
+    by_trial = {}
+    playback_rows = []
+    for trial in sorted(set(contexts) | set(ledgers)):
+        context = contexts.get(trial, {"status": "UNKNOWN"})
+        ledger = ledgers.get(trial, {"events": [], "edges": []})
+        events = []
+        phase_counts = {}
+        for event in ledger["events"]:
+            source = {**event, **classify_playback_time(event.get("host_sec"),
+                                                       context)}
+            events.append(source)
+            counts = phase_counts.setdefault(source["kind"], {
+                "prelude": 0, "playback": 0, "postlude": 0, "unknown": 0})
+            counts[source["time_phase"]] += 1
+        captures = [event for event in events if event["kind"] == "$CHIRP_CAPTURE"]
+        sounds = [event for event in events if event["kind"] == "$SOUND_CAND"]
+        trial_rows = [row for row in replay_rows if row["trial"] == trial]
+        linked_sources, by_version = [], {v: [] for v in versions}
+        for sound in sounds:
+            source = dict(sound)
+            edges = [edge for edge in ledger["edges"]
+                     if edge["kind"] == "sound-capture" and
+                     edge["source"] == sound["key"]]
+            pcm_edges = [edge for edge in ledger["edges"]
+                         if edge["kind"] == "pcm-capture" and
+                         any(edge["target"] == cap["target"] for cap in edges)]
+            rows = [row for row in trial_rows if row["sound_key"] == sound["key"]]
+            ambiguous = len(edges) > 1 or len(pcm_edges) > 1 or len(rows) > 1 or \
+                any(edge["status"] == "AMBIGUOUS" for edge in edges + pcm_edges)
+            eligible = not ambiguous and len(edges) == 1 and \
+                edges[0]["status"] == "UNIQUE" and len(pcm_edges) == 1 and \
+                pcm_edges[0]["status"] == "LINKED" and len(rows) == 1 and \
+                rows[0]["kind"] == "WINDOW" and \
+                rows[0]["offline_window_status"] == "OK" and \
+                rows[0].get("edge_status") == "UNIQUE" and \
+                pcm_edges[0]["source"] == f"pcm:{trial}:{rows[0].get('pcm_id')}"
+            source.update({"eligible": eligible,
+                           "link_status": "linked" if eligible else
+                           ("ambiguous" if ambiguous else "orphan"),
+                           "sound_capture_edges": edges,
+                           "pcm_capture_edges": pcm_edges,
+                           "replay_windows": [{k: row.get(k) for k in (
+                               "kind", "pcm_id", "edge_status",
+                               "offline_window_status")} for row in rows]})
+            linked_sources.append(source)
+            for version in versions:
+                version_source = dict(source)
+                run = next((rw["runs"][0] for row in rows
+                            for rw in row.get("replays", [])
+                            if rw["version"] == version and rw["opt"] == "-O0"),
+                           None)
+                valid = bool(run and run["valid"])
+                version_source.update({"version_valid": valid,
+                                       "eligible": eligible and valid})
+                by_version[version].append(version_source)
+        phase_counts.setdefault("$SOUND_CAND", {
+            "prelude": 0, "playback": 0, "postlude": 0, "unknown": 0})
+        phase_counts.setdefault("$CHIRP_CAPTURE", {
+            "prelude": 0, "playback": 0, "postlude": 0, "unknown": 0})
+        scoped_rows = [row for row in trial_rows if classify_playback_time(
+            row.get("host_sec"), context)["time_phase"] == "playback"]
+        playback_rows.extend(scoped_rows)
+        by_trial[trial] = {
+            "context": context, "phase_counts": phase_counts,
+            "capture_log": {"population": "capture_log_coarse_receive_time",
+                            **fixed_slot_coverage(captures, context)},
+            "linked_sound_pcm": {"population": "unique_sound_capture_pcm",
+                                 **fixed_slot_coverage(linked_sources, context)},
+            "by_version": {version: {"population": "valid_toa_unique_sound_pcm",
+                                     **fixed_slot_coverage(sources, context)}
+                           for version, sources in by_version.items()},
+            "version_validity_delta": version_validity_delta(scoped_rows, versions)}
+    return {"population": "playback_receive_window", "basis": PLAYBACK_BASIS,
+            "by_trial": by_trial,
+            "version_validity_delta": version_validity_delta(playback_rows, versions)}
+
+
 def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
-                                                 "current_envelope")):
+                                                 "current_envelope"),
+                          playback_contexts=None, ledgers=None):
     """Per-version per-trial slot stats plus version cross-reference."""
     by_trial_version = {}
     for row in replay_rows:
@@ -810,7 +1098,7 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
             key = (row["trial"], rw["version"])
             by_trial_version.setdefault(key, []).append(
                 nominal_us(anchor, run0["fraction_frames"]))
-    diagnostics = {"by_trial_version": {}}
+    diagnostics = {"by_trial_version": {}, "population": "legacy_all_events"}
     per_window = {}
     for row in replay_rows:
         if row["offline_window_status"] != "OK":
@@ -916,6 +1204,8 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
                 "min_frames": round(min(values), 4),
                 "max_frames": round(max(values), 4),
                 "mean_us": round(statistics.mean(values) * 1e6 / SAMPLE_HZ, 2)}
+    diagnostics["playback_window"] = playback_diagnostics(
+        replay_rows, versions, playback_contexts or {}, ledgers or {})
     return diagnostics
 
 

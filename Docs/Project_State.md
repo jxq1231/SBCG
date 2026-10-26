@@ -6,9 +6,11 @@
 
 ## 当前工作
 
-**最新目标复核：单A已推进到PCM捕获、TOA离线回放与最左能量段起跳修正，但整体声学精度、标准声识别与双板测距未通过。** 语法基线为c79bf25；代码基线`c27e5e7`（P0修复提交）含[全事件账本与TOA回放](Milestones/PCM_Event_Replay_2026_10_26.md)系列提交（`2d9a605`工具、`297ef65`三版对拍、`db441e0`估算器修正、`5471919`尖峰门控、`74e563e`审查修复）；修复后重跑默认两版`Logs/Detector/TOA_Replay/20261026T110943/`与三版`20261026T111047/`（HEAD `c27e5e7`），均TOOL_CHECK=PASS、0格式/硬失败、重复12068/18102行0失配；账本problems门控、missing_slots、version_meta/validity已修。九轮共102条SOUND候选、115份PCM；账本与真实C回放已入库；parse/scan级格式错误与账本内部problems均已并入TOOL_CHECK（P0-F1已修，`c27e5e7`）。B组可判槽修正版σ≤3.68μs、在线槽5/6σ≤5μs、67窗板端↔离线亚微秒一致；全10槽一致性与物理精度 INSUFFICIENT/NOT_VERIFIED（房间噪声+候选缺口，BOOT/镜像SHA等受控采集项待做）。下一步：按计划§6补受控采集（BOOT/镜像SHA/声道/播放参考）净化候选结构，再推进子帧→PTP、双板配对/距离（路线见[面向提高项的路线](Goal_Aligned_Roadmap_2026_10_26.md)）。审计与后续规划见[全事件回放审计](Plans/2026-10-26_PCM_Event_Replay_Audit.md)；独立复核报告固定在`Logs/Detector/TOA_Replay/P0_review/review.json`（PASS_WITH_RESERVATIONS；其F1/F2/F3/F5/F6/F7/F8已由`c27e5e7`修复并重跑，测试见`P0_review/fix-tests.log`）。不重复旧镜像。
+**当前已完成P1播放阶段分类与固定参考分槽的软件验证。** 基于ad8ef66增加主机分析口径，保留旧全量诊断为`legacy_all_events`，另列播放窗的捕获日志覆盖、唯一SOUND→capture→PCM覆盖和各版本数值TOA覆盖；不以最小TOA重锚。53项相关主机测试通过，五个原cohort旧诊断/TOA数值逐项兼容；两个扩展trial的四条prelude格式错误仍严格FAIL。五个旧run、原始采集、估算器、采集工具及51条用户改动均保留，本轮无硬件操作。验证及新run位置见[P1工具实施记录](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)。
 
-**下一独立目标已完成（规划+实施+审查修复）：**见[全事件对账与TOA离线回放计划](Plans/2026-10-26_PCM_Event_Replay_Plan.md)（checklist已打勾）与[里程碑](Milestones/PCM_Event_Replay_2026_10_26.md)。九轮共102条SOUND候选、115份PCM；执行时保留全部额外/缺失/歧义事件；不做发声、网线或烧录，不凭工具通过宣布±100μs通过。
+播放窗捕获日志十槽覆盖为音量15/15、D40 4/5、D50 6/6、D+30 6/6、D−30 5/5；但唯一关联覆盖分别为14/15、4/5、6/6、4/6、4/5，不能混为声源识别或精度通过。D40-01有10条SOUND但缺capture槽5/6；p1-04第一声无相容PCM，D−30-01仍缺关联槽2。D20的17次仅1次粗覆盖且有重复，继续不足。下一步只规划依据这些保留缺口定位捕获/任务链，不自动修改算法或0.80。
+
+单A已有[原TOA与回放基线](Milestones/PCM_Event_Replay_2026_10_26.md)、[P1受控采集](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)、温度和显示基础；标准声识别、物理TOA/PTP精度、双板配对/距离仍未通过。本轮只处理主机接收近似时间：20s WAV加2s接收保护，不是实际发声参考。后续目标仍按[任务书路线](Goal_Aligned_Roadmap_2026_10_26.md)分层推进。
 
 ### 历史窗口摘要（按需追溯，不作为当前下一步指令）
 
@@ -20,7 +22,7 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
-**P1受控采集已完成音量与距离/方向首批实验（2026-10-26）。** 每个音量（100/80/60）5个有效trial；距离组D20失败（SOUND有响应但CHIRP任务不足）、D40严格口径3/5、D50 5/5；方向组D+30 4/5、D−30 4/5。全部记录BOOT/UID、镜像SHA、CH0、RATE、WAV 10起点及前后静默。严格工具口径全10槽：音量12/15、D40 3/5、D+30 4/5、D−30 4/5；[只读复核](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)发现播放前/后背景污染槽基址，按播放窗重算为音量15/15、D40 4/5、D50 6/6、D+30 6/6、D−30 5/5；D20与D40-01仍有真实候选缺失。下一步先修工具事件分类/槽锚定，不改0.80或算法；不是物理TOA/PTP/双板/识别通过。详见[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
+**P1受控采集的历史结果（2026-10-26）。** 原严格全10槽为音量12/15、D40 3/5、D50 5/5、D±30各4/5；随后复核发现全事件槽基址受背景捕获影响。播放窗粗覆盖及关联覆盖现在分别由工具输出，不能跨口径计算成功率。D20仍不足，D40-01缺capture而非SOUND候选；本轮工具修正已完成，无需重复旧采集或烧录。详见[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)及[新工具记录](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)。
 
 **M4.2.5失败搜索诊断已硬件复验；标准音仍0/10。** A板运行`SBCG-M4.2-SEARCHDIAG`（Debug `c219af98…`）：24个完整任务全部LOW_CORR，最高raw相关0.773821<0.80，RMS2265–2302、N=257/V=257、LR/Z/I=0，MATCH0；10个高能量候选、7个高相关任务；RPT24/RLOST0，资源/日志/UI错误全0。数字WAV与模板相关1.0。诊断链已实机工作，失败在门限前相关度，不是搜索预算/范围/低RMS；独立只读复核PASS_WITH_RESERVATIONS（无阻塞，低风险流程/测试项）。下一步保存PCM/受控声学实验，不盲目降门限，识别/PTP/测距仍未验收。[M4.2.5复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。
 
