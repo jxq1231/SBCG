@@ -12,6 +12,8 @@
 
 **最新M4.3.13结果MACK（2026-10-27）：** B接受权威MRES后回16字节MACK；A收到同令牌成功ACK才停止该ID刷新，ACK丢失继续500ms刷新；新增ACK计数。主机测试PASS，未烧录/未两板实测。[M4.3.13记录](Milestones/M4_3_13_Result_Ack.md)。
 
+**最新M4.3.19 app_main结果接线测试（2026-10-27）：** 真实app_main+结果状态模块，UDP发送边界打桩；覆盖ACK停止/序号回退恢复/失败退避/域撤销；非真实UDP/未烧录。[M4.3.19记录](Milestones/M4_3_19_App_UDP_Integration.md)。
+
 **最新M4.3.18结果P2修复（2026-10-27）：** 发送失败按500ms退避；重复ACK不再清ACK；MRES标定版本/偏移一致性校验。app_main+UDP端到端测试仍缺，未烧录。[M4.3.18记录](Milestones/M4_3_18_Result_P2_Fixes.md)。
 
 **最新M4.3.17结果重发状态模块（2026-10-27）：** 抽出`result_exchange_state`，覆盖ACK停止/500ms刷新/B ACK序号回退/域恢复恢复重发。主机测试PASS，未烧录/未双板。[M4.3.17记录](Milestones/M4_3_17_Result_Exchange_State.md)。

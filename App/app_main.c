@@ -508,6 +508,17 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
     (void)UDPSoundEvent_SendResult(now_ms,&result);
     ResultExchange_MarkSent(&result_exchange,now_ms,result.id);
 }
+#ifdef SBCG_HOST_TEST
+/** @brief 主机集成测试钩子：驱动A结果刷新路径。 */
+void App_Test_ServiceAuthoritativeResult(uint32_t now_ms)
+{ ServiceAuthoritativeResult(now_ms); }
+/** @brief 主机集成测试钩子：注入MACK。 */
+void App_Test_HandleMeasurementAck(const MeasurementAck *ack)
+{ HandleMeasurementAck(ack); }
+/** @brief 主机集成测试钩子：注入DOMN ACK。 */
+void App_Test_HandleDomainMessage(const DomainMessage *message)
+{ HandleDomainMessage(message); }
+#endif
 #endif
 
 void App_Init(void)
