@@ -486,7 +486,7 @@ $CHIRP_SEARCH,ID=20,SESSION=1,HINT=3000000,LO=2999808,HI=3000064,BEST=2999900,CO
 - MATCH为整个任务是否存在通过现有RMS及相关门限的窗口；WHY是raw峰窗口的状态LOW_RMS/LOW_CORR/MATCH。两者独立：最高raw峰可能低RMS而另一个窗口通过，不得用raw峰代替原有效匹配best。
 - N/V/LR/Z/I为uint16窗口计数：总次数/正方差可评分次数/低RMS次数/零方差次数/非法次数；N=V+Z+I，LR<=V。当前每任务最多257窗、每次调用最多8窗；V包含低RMS窗口，相关恰为0仍可评分。
 - V=0时WHY=NO_VALID，BEST/CORR_PPM/RMS/CLIP/INV/EDGE为NA，不能当作相关0或有效帧0；Z/I区分无方差与非法输入。
-- 原CHIRP事件优先，同一调用最多输出一行，成功任务诊断在后续前台调用发送；不在ISR或Stage/Complete发送。CHIRP_DIAG追加RPT/RLOST两个uint32饱和计数：交给原日志回调的报告次数/流失效或防御性覆盖丢弃的待发报告数。RPT不是电脑已收到，应用队满仍查HEARTBEAT日志计数。
+- 原CHIRP事件优先，同一调用最多输出一行，成功任务诊断在后续前台调用发送；不在ISR或Stage/Complete发送。CHIRP_DIAG追加RPT/RLOST两个uint32饱和计数：交给原日志回调的报告次数/流或报告交接失效（历史清理、防御性覆盖及无法交给回头的格式化拒绝；当前配置下最后一项不可达）丢弃的待发报告数。RPT不是电脑已收到，应用队满仍查HEARTBEAT日志计数。
 - 搜索诊断最坏247B、CHIRP_DIAG追加后最坏252B（含CRLF），均小于256B；不新增PCM缓冲、DMA或硬件配置。新增格式化与UART排空有成本，需要独立实物复验，评分次数不变不能证明毫秒耗时不变。
 
 此接口仅用于定位本次真实音频0/10匹配，不提供PTP时间、物理到达精度或距离；不会将低于门限的raw峰作为有效CHIRP发布。
