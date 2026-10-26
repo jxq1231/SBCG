@@ -29,6 +29,10 @@ int main(void)
     assert(MeasurementWire_Encode(&result,data,sizeof data)==MEASUREMENT_WIRE_INVALID_FIELD);
     result=Result();result.direction=SOUND_DIRECTION_UNKNOWN;
     assert(MeasurementWire_Encode(&result,data,sizeof data)==MEASUREMENT_WIRE_INVALID_FIELD);
+    result=Result();result.calibration_offset_mm=1001;
+    assert(MeasurementWire_Encode(&result,data,sizeof data)==MEASUREMENT_WIRE_INVALID_FIELD);
+    result=Result();result.calibration_offset_mm=-1001;
+    assert(MeasurementWire_Encode(&result,data,sizeof data)==MEASUREMENT_WIRE_INVALID_FIELD);
     result=Result();assert(MeasurementWire_Encode(&result,data,sizeof data)==MEASUREMENT_WIRE_OK);
     data[6]=0U;assert(MeasurementWire_Decode(data,sizeof data,&decoded)==MEASUREMENT_WIRE_INVALID_FIELD);
     puts("PASS measurement wire: A/B ID/distance/direction/quality/speed/temp/domain roundtrip and gates");

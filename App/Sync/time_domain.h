@@ -13,7 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TIME_DOMAIN_PEER_TIMEOUT_MS 1500U
+#define TIME_DOMAIN_PEER_TIMEOUT_MS 3000U
 
 /** @brief 门控快照；valid才允许事件UDP/测量，id为A派生会话令牌。 */
 typedef struct

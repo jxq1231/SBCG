@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#define MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM 1000
+
 static void PutU32(uint8_t *p,uint32_t value)
 {
     p[0]=(uint8_t)(value>>24);p[1]=(uint8_t)(value>>16);
@@ -30,7 +32,9 @@ MeasurementWireStatus MeasurementWire_Encode(const MeasurementResultSnapshot *re
        result->distance_mm<0 || result->distance_mm>10000 ||
        result->quality>100U || result->sound_speed_mm_s==0U ||
        result->time_domain==0U ||
-       (result->direction!=SOUND_DIRECTION_A && result->direction!=SOUND_DIRECTION_B))
+       (result->direction!=SOUND_DIRECTION_A && result->direction!=SOUND_DIRECTION_B) ||
+       (result->calibration_offset_mm>MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM ||
+        result->calibration_offset_mm< -MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM))
         return MEASUREMENT_WIRE_INVALID_FIELD;
     data[0]='M';data[1]='R';data[2]='E';data[3]='S';
     data[4]=MEASUREMENT_WIRE_VERSION;data[5]=1U;
@@ -79,5 +83,8 @@ MeasurementWireStatus MeasurementWire_Decode(const uint8_t *data, uint16_t lengt
     result->time_domain=domain;
     result->calibration_version=(uint16_t)(((uint16_t)data[28]<<8)|data[29]);
     result->calibration_offset_mm=(int16_t)(((uint16_t)data[30]<<8)|data[31]);
+    if(result->calibration_offset_mm>MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM ||
+       result->calibration_offset_mm< -MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM)
+        return MEASUREMENT_WIRE_INVALID_FIELD;
     return MEASUREMENT_WIRE_OK;
 }

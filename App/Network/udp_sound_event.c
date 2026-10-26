@@ -158,7 +158,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     local_profile=*profile;read_tick=tick;emit=log;
     IP_ADDR4(&peer,profile->peer_ip[0],profile->peer_ip[1],
              profile->peer_ip[2],profile->peer_ip[3]);
-    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,100U};
+    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,250U};
     if(!SoundPair_Init(&pair_manager,&pair_config))return false;
     last_bind_ms=now_ms-1000U;last_state_ms=now_ms;
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;

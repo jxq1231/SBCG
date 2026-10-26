@@ -121,6 +121,7 @@ static uint32_t last_result_id;
 static uint32_t last_result_tx_ms;
 static uint32_t acked_result_id;
 static uint32_t last_audio_session;
+static uint32_t last_peer_domain_sequence;
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -381,6 +382,14 @@ static void HandleDomainMessage(const DomainMessage *message)
     else if(profile->role==BOARD_ROLE_A && message->type==DOMAIN_MESSAGE_ACK &&
             message->role==BOARD_ROLE_B && message->state==DOMAIN_LOCAL_VALID)
     {
+        /* B重启会把ACK序号重置为1；这时必须恢复当前结果重发。 */
+        if(last_peer_domain_sequence!=0U &&
+           (int32_t)(message->sequence-last_peer_domain_sequence)<=0)
+        {
+            acked_result_id=0U;
+            last_result_id=0U;
+        }
+        last_peer_domain_sequence=message->sequence;
         (void)TimeDomain_OnPeerAck(message->token,now);
     }
 }
@@ -404,7 +413,10 @@ static void ServiceDomain(uint32_t now_ms)
     static bool last_domain_valid;
     if(profile->role==BOARD_ROLE_A && domain.valid!=last_domain_valid)
     {
-        if(domain.valid)MeasurementGate_OnDomainValid(now_ms);
+        if(domain.valid){
+            MeasurementGate_OnDomainValid(now_ms);
+            if(!last_domain_valid){acked_result_id=0U;last_result_id=0U;}
+        }
         else MeasurementGate_OnDomainInvalid(now_ms);
         last_domain_valid=domain.valid;
     }
@@ -632,7 +644,7 @@ void App_Init(void)
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
         (void)StandardSequence_Init(&standard_sequence,&sequence_config);
         standard_sequence_detected=false;
-        last_result_id=0U;last_result_tx_ms=0U;acked_result_id=0U;last_audio_session=0U;
+        last_result_id=0U;last_result_tx_ms=0U;acked_result_id=0U;last_audio_session=0U;last_peer_domain_sequence=0U;
     }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))

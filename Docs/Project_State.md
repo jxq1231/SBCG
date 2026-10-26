@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.16 c24b5ba review修复（2026-10-27）。** A跟踪B ACK序号/域恢复，B重启后恢复当前结果重发；域超时1500→3000ms；MRES标定偏移±1000校验；配对窗口100→250ms。P2 boot_nonce/state/Apply未修；未烧录。见[M4.3.16记录](Milestones/M4_3_16_Review_Fixes.md)。
+
 **M4.3.15 0.5m标定/温补结果版本（软件完成，2026-10-27）。** `calibration`模块提供500mm参考偏移/版本；A发布前应用，MRES扩为32字节携带标定版本/偏移；温度声速继续参与距离。标定触发未接板端按键/界面，0.5m/±2mm未实测；未烧录。见[M4.3.15记录](Milestones/M4_3_15_Calibration_Temperature.md)。
 
 **M4.3.14静默/瞬态测量门控（软件完成，2026-10-27）。** `measurement_gate`状态机：1s预热、标准序列才开测量、3s无新序列撤销、失域/音频会话变化FAULT；单CHIRP/击掌不打开门控。主机测试PASS，未烧录/未60s实测。见[M4.3.14记录](Milestones/M4_3_14_Quiet_Transient_Gate.md)。
