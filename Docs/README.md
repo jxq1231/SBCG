@@ -8,6 +8,8 @@
 
 **最新先读[M4.2.5真实播放复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。** 用户已开放声音测试；`SBCG-M4.2-SEARCHDIAG` 镜像自动播放标准WAV 20秒/10次，24个完整任务全部`LOW_CORR`、MATCH0；最高raw相关0.773821<0.80、RMS≈2300、N=257/V=257、LR/Z/I=0，RPT24/RLOST0，资源/日志/UI错误0；10个高能量候选、7个高相关任务。数字WAV与模板相关1.0，诊断链已实机工作；失败在门限前相关度，不是搜索预算/范围/低RMS；独立复核PASS_WITH_RESERVATIONS（无阻塞）。下一步保存PCM/受控声学实验，不直接降低门限；识别/PTP/测距仍未验收。
 
+**最新M4.3.10 PPS共同域门控（未验证，2026-10-27）：** PPS只读快照+共同域门控已提交；PPS QUALIFIED/RATE_REQUALIFY才放行事件/测量（A/B另有TimeSync条件）。主机测试通过，但未烧录/未示波器±10µs/冷启动验收，**不得当同步通过**。[M4.3.10未验证记录](Milestones/M4_3_10_PPS_Domain_Unverified.md)。
+
 **最新M4.3.9结果周期刷新（2026-10-27）：** A每500ms重发同ID权威结果，B刷新2s有效期；新增`$MEASURE_RESULT_STATE`计数。无ACK/序列号、未烧录/未两板实测。[M4.3.9记录](Milestones/M4_3_9_Result_Refresh.md)。
 
 **最新M4.3.8两屏权威结果交换（2026-10-27）：** A板发布唯一结果并用28字节MRES报文发给B，B校共同域/来源后显示A的同一ID/距离、不重算；无重传/ACK、未烧录、未两板实测。[M4.3.8记录](Milestones/M4_3_8_Authoritative_Result_Exchange.md)。

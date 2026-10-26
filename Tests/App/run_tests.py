@@ -17,6 +17,7 @@ def main():
     cases = [("test_app_main", []),
              ("test_app_identity", ["-DSBCG_USE_BOARD_IDENTITY=1"]),
              ("test_app_sync", ["-DSBCG_USE_BOARD_IDENTITY=1", "-DSBCG_USE_BOARD_SYNC=1"])]
+    cases.append(("test_app_sync", ["-DSBCG_USE_BOARD_IDENTITY=1", "-DSBCG_USE_BOARD_SYNC=1", "-DSBCG_USE_PPS=1"]))
     for name, flags in cases:
         output = output_dir / (name + ".exe")
         sources = [root / "Tests/App" / (name + ".c"), root / "App/app_main.c"]

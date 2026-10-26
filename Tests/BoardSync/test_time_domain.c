@@ -27,6 +27,23 @@ int main(void)
     s=Sync(BOARD_ROLE_B,true,false,true,true);TimeDomain_Update(&s);
     TimeDomain_Invalidate();TimeDomain_Get(&out);assert(!out.valid && out.id==0U);
     TimeDomain_Get(NULL);
-    puts("PASS time domain: A reference/B internal-lock gating, fault/invalid and no cross-epoch claim");
+    TimeSyncSnapshot a=Sync(BOARD_ROLE_A,true,false,false,false);
+    PpsServiceSnapshot pps={0};
+    pps.configured=true;pps.qualified=true;pps.state=PPS_SERVICE_QUALIFIED;
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);assert(out.valid);
+    pps.qualified=false;pps.state=PPS_SERVICE_UNQUALIFIED;
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);assert(!out.valid);
+    pps.qualified=true;pps.state=PPS_SERVICE_QUALIFIED;pps.faulted=true;
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);assert(!out.valid);
+    pps.faulted=false;pps.configured=false;
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);assert(!out.valid);
+    TimeSyncSnapshot b=Sync(BOARD_ROLE_B,true,false,true,true);
+    pps.configured=true;pps.qualified=true;pps.faulted=false;pps.state=PPS_SERVICE_QUALIFIED;
+    TimeDomain_UpdateWithPps(&b,&pps);TimeDomain_Get(&out);assert(out.valid);
+    pps.state=PPS_SERVICE_RATE_REQUALIFY;TimeDomain_UpdateWithPps(&b,&pps);
+    TimeDomain_Get(&out);assert(out.valid);
+    TimeDomain_UpdateWithPps(&b,NULL);TimeDomain_Get(&out);assert(out.valid);
+    TimeDomain_UpdateWithPps(NULL,&pps);TimeDomain_Get(&out);assert(!out.valid);
+    puts("PASS time domain: A/B sync+PPS gating, fault/unqualified and fallback");
     return 0;
 }

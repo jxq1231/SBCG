@@ -10,6 +10,7 @@
 #define SBCG_TIME_DOMAIN_H
 
 #include "Sync/time_sync.h"
+#include "Sync/pps_service.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -22,8 +23,16 @@ typedef struct
 /** @brief 清空域；上电/重初始化调用。 */
 void TimeDomain_Init(void);
 
-/** @brief 由同步快照更新域；A要求配置且未FAULT，B还要求offset_valid/internal_locked。 */
+/** @brief 仅按同步快照更新域（无PPS输入时的兼容路径）。 */
 void TimeDomain_Update(const TimeSyncSnapshot *sync);
+
+/**
+ * @brief 同步+PPS资格共同更新域；pps==NULL时退化为TimeDomain_Update。
+ * @param sync TimeSync快照；A/B角色及offset/internal lock参与判定。
+ * @param pps PPS只读快照；非NULL时要求已配置、未FAULT且QUALIFIED/RATE_REQUALIFY。
+ * @note PPS资格仍是内部证据，不是示波器±10µs验收。
+ */
+void TimeDomain_UpdateWithPps(const TimeSyncSnapshot *sync,const PpsServiceSnapshot *pps);
 
 /** @brief 显式撤销域；校时/频率/断链边界使用。 */
 void TimeDomain_Invalidate(void);

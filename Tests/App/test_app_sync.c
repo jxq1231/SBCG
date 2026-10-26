@@ -13,6 +13,13 @@ static BoardIdentityProfile identity;
 static const BoardIdentityProfile *current_identity;
 static unsigned sync_deinits,sync_inits,sync_loops,sync_allowed;
 static bool sync_deinit_ok=true,sync_init_ok=true;
+#ifdef SBCG_USE_PPS
+#include "Sync/pps_service.h"
+static bool pps_due;
+/** @brief 验证DHT低态也逐轮调用PPS安全处理；now_ms为当前毫秒，allowed仅限制新排程，无返回值。 */
+void PpsService_Process(uint32_t now_ms,bool allowed)
+{ assert(pps_due && now_ms==tick_ms && allowed==!temperature_low);pps_due=false; }
+#endif
 /** @brief 返回用例准备的只读身份；无硬件读取。 @return 静态profile或NULL。 */
 const BoardIdentityProfile *BSP_BoardIdentity_Get(void) { return current_identity; }
 /** @brief 模拟最外层钩子的安全卸载。 @return 用例选定的成功标志，失败不碰内层。 */
@@ -39,6 +46,9 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,uint32_t(
  */
 void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
 {
+#ifdef SBCG_USE_PPS
+ assert(!pps_due);pps_due=true;
+#endif
  assert(now_ms==tick_ms && temperature_calls==lwip_calls && console_calls==temperature_calls);
  assert(processing_allowed==!temperature_low);++sync_loops;if(processing_allowed)++sync_allowed;
 }

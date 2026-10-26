@@ -29,8 +29,8 @@ void TimeSync_GetSnapshot(uint32_t now_ms, TimeSyncSnapshot *out);
 
 /**
  * @brief   核对并卸载最外层板间同步协议，停用协调器。
- * @return  true表示安全卸载；false表示网络回调/包装所有权不符，原协调状态保持。
- * @note    须先于UDPTimeExchange及旧PTP观察器卸载；不改硬件或已应用频率。
+ * @return  true表示协议和PPS均停用；所有权拒绝保留原协调状态，PPS停止失败返回false且协调器停用。
+ * @note    须先于UDPTimeExchange及旧PTP观察器卸载；启用PPS时同步取消输出，不改已应用频率。
  */
 bool TimeSync_Deinit(void);
 /**

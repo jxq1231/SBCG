@@ -49,14 +49,23 @@ extern "C" {
 
 /* USER CODE END EM */
 
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+
 /* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
+void MX_LTDC_Init(void);
 
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define PPS_OUT_Pin GPIO_PIN_15
+#define PPS_OUT_GPIO_Port GPIOA
+#define LCD_BL_CTRL_Pin GPIO_PIN_3
+#define LCD_BL_CTRL_GPIO_Port GPIOK
+#define LCD_DISP_Pin GPIO_PIN_12
+#define LCD_DISP_GPIO_Port GPIOI
 #define DHT11_DATA_Pin GPIO_PIN_7
 #define DHT11_DATA_GPIO_Port GPIOG
 

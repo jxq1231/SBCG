@@ -607,14 +607,22 @@ void App_Process(void)
 #ifdef SBCG_USE_BOARD_SYNC
     /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
     TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#ifdef SBCG_USE_PPS
+    /* DHT拉低只禁止新目标排程；安全截止及已到达目标的消费每轮仍须执行。 */
+    PpsService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    {
+        TimeSyncSnapshot sync_snapshot;PpsServiceSnapshot pps_snapshot;
+        TimeSync_GetSnapshot(BSP_Console_GetTickMs(), &sync_snapshot);
+        if(PpsService_GetSnapshot(BSP_Console_GetTickMs(), &pps_snapshot))
+            TimeDomain_UpdateWithPps(&sync_snapshot,&pps_snapshot);
+        else TimeDomain_Invalidate();
+    }
+#else
     {
         TimeSyncSnapshot sync_snapshot;
         TimeSync_GetSnapshot(BSP_Console_GetTickMs(), &sync_snapshot);
         TimeDomain_Update(&sync_snapshot);
     }
-#ifdef SBCG_USE_PPS
-    /* DHT拉低只禁止新目标排程；安全截止及已到达目标的消费每轮仍须执行。 */
-    PpsService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
 #endif
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());

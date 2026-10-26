@@ -16,7 +16,7 @@ void TimeDomain_Init(void)
     memset(&domain, 0, sizeof domain);
 }
 
-void TimeDomain_Update(const TimeSyncSnapshot *sync)
+static void UpdateCore(const TimeSyncSnapshot *sync,const PpsServiceSnapshot *pps)
 {
     if (sync == NULL || !sync->configured || sync->faulted ||
         (sync->role != BOARD_ROLE_A && sync->role != BOARD_ROLE_B))
@@ -29,8 +29,22 @@ void TimeDomain_Update(const TimeSyncSnapshot *sync)
     {
         valid = sync->offset_valid && sync->internal_locked;
     }
+    if (pps != NULL)
+    {
+        valid = valid && pps->configured && !pps->faulted && pps->qualified;
+    }
     domain.valid = valid;
     domain.id = valid ? TIME_DOMAIN_DIAGNOSTIC_ID : 0U;
+}
+
+void TimeDomain_Update(const TimeSyncSnapshot *sync)
+{
+    UpdateCore(sync,NULL);
+}
+
+void TimeDomain_UpdateWithPps(const TimeSyncSnapshot *sync,const PpsServiceSnapshot *pps)
+{
+    UpdateCore(sync,pps);
 }
 
 void TimeDomain_Invalidate(void)

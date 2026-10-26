@@ -10,6 +10,9 @@
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
 #endif
+#ifdef SBCG_USE_PPS
+#include "Sync/pps_service.h"
+#endif
 #include "Sync/clock_servo.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/sync_observation.h"
@@ -124,6 +127,9 @@ static void Fault(uint32_t now_ms)
 {
     if (faulted) { return; }
     faulted=true; Increment(&errors);
+#ifdef SBCG_USE_PPS
+    (void)PpsService_Invalidate(now_ms);
+#endif
     if (board_role==BOARD_ROLE_B)
     {
         const ClockServoAction none={CLOCK_SERVO_NONE,0,0};
@@ -174,16 +180,36 @@ static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
 {
     BSP_PtpStatus status=BSP_PTP_TxClean();
     bool issued=false;
+#ifdef SBCG_USE_PPS
+    bool frequency_prepared=false;
+#endif
     if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
     if (status==BSP_PTP_OK)
     {
         if (action->kind==CLOCK_SERVO_STEP)
-        { issued=true; status=BSP_PTP_Step(action->phase_ns); }
+        {
+#ifdef SBCG_USE_PPS
+            if (!PpsService_Invalidate(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
+            else
+#endif
+            { issued=true; status=BSP_PTP_Step(action->phase_ns); }
+        }
         else if (action->kind==CLOCK_SERVO_FREQUENCY)
-        { issued=true; status=BSP_PTP_SetFrequencyPpb(action->frequency_ppb); }
+        {
+#ifdef SBCG_USE_PPS
+            frequency_prepared=PpsService_BeforeFrequency(now_ms,servo.frequency_ppb,action->frequency_ppb);
+            if (!frequency_prepared) { status=BSP_PTP_BAD_CONFIG; }
+            else
+#endif
+            { issued=true; status=BSP_PTP_SetFrequencyPpb(action->frequency_ppb); }
+        }
         else { status=BSP_PTP_BAD_CONFIG; }
     }
     ClockServo_Commit(&servo,now_ms,action,status==BSP_PTP_OK);
+#ifdef SBCG_USE_PPS
+    if (frequency_prepared) { PpsService_AfterFrequency(now_ms,status==BSP_PTP_OK); }
+    if (status!=BSP_PTP_OK) { (void)PpsService_Invalidate(now_ms); }
+#endif
     if (status!=BSP_PTP_OK) { faulted=true; Increment(&errors); }
     if (issued) { PublishClockGeneration(); }
     if (BSP_PTP_GetFrequencyPpb()!=servo.frequency_ppb) { Fault(now_ms); }
@@ -209,6 +235,9 @@ static void CheckClockGeneration(uint32_t now_ms)
 #ifdef SBCG_USE_SOUND_TIME
         /* 外部代际已改变；即使PPS撤资格失败，旧模型也绝不能继续有效。 */
         SoundEventTime_Invalidate(SOUND_TIME_CLOCK);
+#endif
+#ifdef SBCG_USE_PPS
+        if (!PpsService_Invalidate(now_ms)) { Fault(now_ms); return; }
 #endif
         if (!InvalidateConsumers(now_ms)) { Fault(now_ms); return; }
         cached_epoch=epoch; cached_revision=revision;
@@ -256,18 +285,25 @@ static void RejectMeasurement(uint32_t now_ms)
 {
     Increment(&rejected_samples);
     ClockServo_RejectMeasurement(&servo,now_ms);
+#ifdef SBCG_USE_PPS
+    if (!PpsService_Invalidate(now_ms)) { Fault(now_ms); }
+#endif
 }
 
 /**
  * @brief   安全卸载板间最外层包装后停用本协调器。
- * @return  true表示卸载成功；false保持原协调状态与回调指针不变。
+ * @return  true表示协议与PPS均已停用；协议所有权拒绝时保留原状态，PPS停止失败则返回false且协调器停用。
  * @note    不重启或校正硬件；必须先于旧UDPTimeExchange卸载。
  */
 bool TimeSync_Deinit(void)
 {
     if (!PtpBoardSync_Deinit()) { return false; }
+    bool stopped=true;
+#ifdef SBCG_USE_PPS
+    stopped=PpsService_Deinit();
+#endif
     configured=false; read_tick=NULL; emit_line=NULL; board_role=BOARD_ROLE_UNCONFIGURED;
-    return true;
+    return stopped;
 }
 
 /**
@@ -290,6 +326,10 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     if (profile->role==BOARD_ROLE_B &&
         !ClockServo_InitKnown(&servo,now_ms,BSP_PTP_GetFrequencyPpb())) { return false; }
     if (!PtpBoardSync_Init(now_ms,profile,tick,log)) { return false; }
+#ifdef SBCG_USE_PPS
+    if (!PpsService_Init(now_ms,profile->role,log))
+    { (void)PtpBoardSync_Deinit(); return false; }
+#endif
     board_role=profile->role; read_tick=tick; emit_line=log;
     cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
     last_log_ms=now_ms; rejected_samples=errors=0U; faulted=false; configured=true;
@@ -314,6 +354,10 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
     const bool peer_changed=PtpBoardSync_TakePeerReset();
     if (peer_changed)
     {
+#ifdef SBCG_USE_PPS
+        /* 对端重启撤销B的同步资格；A本地参考时间未改变，参考PPS保持。 */
+        if (board_role==BOARD_ROLE_B && !PpsService_Invalidate(now_ms)) { Fault(now_ms); }
+#endif
         if (!InvalidateConsumers(now_ms)) { Fault(now_ms); }
         if (board_role==BOARD_ROLE_B) { ClockServo_Invalidate(&servo,now_ms); }
     }
@@ -334,8 +378,21 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
                     ClockServoAction action;
                     if (!ClockServo_Observe(&servo,now_ms,exchange.t1_a_tx_ns,
                         estimate.offset_x2_ns,estimate.mean_path_delay_x2_ns,&action))
-                    { Increment(&rejected_samples); }
-                    else if (action.kind!=CLOCK_SERVO_NONE) { ApplyAction(now_ms,&action); }
+                    {
+                        Increment(&rejected_samples);
+#ifdef SBCG_USE_PPS
+                        if (!PpsService_Invalidate(now_ms)) { Fault(now_ms); }
+#endif
+                    }
+                    else
+                    {
+#ifdef SBCG_USE_PPS
+                        /* Commit会清除变频前的瞬时锁证据；必须先转交本次观测。 */
+                        PpsService_Observe(now_ms,captured_ms,servo.internal_locked,servo.drift_valid,
+                            estimate.offset_x2_ns,estimate.mean_path_delay_x2_ns,servo.drift_ppb);
+#endif
+                        if (action.kind!=CLOCK_SERVO_NONE) { ApplyAction(now_ms,&action); }
+                    }
                 }
             }
         }

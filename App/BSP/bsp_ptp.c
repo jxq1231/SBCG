@@ -8,6 +8,9 @@
  */
 
 #include "bsp_ptp.h"
+#ifdef SBCG_USE_PPS
+#include "bsp_pps.h"
+#endif
 #include "main.h"
 
 #ifndef HAL_ETH_USE_PTP
@@ -41,6 +44,9 @@ static int32_t applied_frequency_ppb;
  */
 static BSP_PtpStatus DisableClock(BSP_PtpStatus status)
 {
+#ifdef SBCG_USE_PPS
+    if (BSP_PPS_Stop()!=BSP_PPS_OK) { status=BSP_PTP_BAD_CONFIG; }
+#endif
     ready = 0U;
     if (clock_epoch != UINT32_MAX) { ++clock_epoch; }
     if (rate_revision != UINT32_MAX) { ++rate_revision; }
@@ -126,6 +132,9 @@ static BSP_PtpStatus CheckFineUpdate(void)
  */
 BSP_PtpStatus BSP_PTP_Init(void)
 {
+#ifdef SBCG_USE_PPS
+    if (BSP_PPS_Stop()!=BSP_PPS_OK) { return BSP_PTP_BAD_CONFIG; }
+#endif
     ready = 0U;
     if ((heth.Instance != ETH) ||
         ((heth.gState != HAL_ETH_STATE_READY) && (heth.gState != HAL_ETH_STATE_STARTED)))
@@ -190,6 +199,9 @@ BSP_PtpStatus BSP_PTP_Init(void)
  */
 BSP_PtpStatus BSP_PTP_InitFine(void)
 {
+#ifdef SBCG_USE_PPS
+    if (BSP_PPS_Stop()!=BSP_PPS_OK) { return BSP_PTP_BAD_CONFIG; }
+#endif
     if (heth.Instance != ETH || ready || heth.IsPtpConfigured == HAL_ETH_PTP_CONFIGURED ||
         (heth.gState != HAL_ETH_STATE_READY && heth.gState != HAL_ETH_STATE_STARTED))
     { return BSP_PTP_NOT_READY; }
@@ -277,6 +289,10 @@ BSP_PtpStatus BSP_PTP_Step(int64_t correction_ns)
         if ((uint64_t)correction_ns > PTP_MAX_TIME_NS - now_ns) { return BSP_PTP_OUT_OF_RANGE; }
         target_ns = now_ns + (uint64_t)correction_ns;
     }
+#ifdef SBCG_USE_PPS
+    /* 绝对覆盖可能跨过已装载目标；必须在写TSSTI之前同步停通道并取消目标。 */
+    if (BSP_PPS_Stop()!=BSP_PPS_OK) { return BSP_PTP_BAD_CONFIG; }
+#endif
     status = ReserveGeneration(1U);
     if (status != BSP_PTP_OK) { return status; }
     WRITE_REG(heth.Instance->PTPTSHUR, (uint32_t)(target_ns / UINT64_C(1000000000)));

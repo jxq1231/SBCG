@@ -13,6 +13,7 @@ def main():
         return 1
     for name, source in [("bsp_ptp", "App/BSP/bsp_ptp.c"),
                          ("bsp_ptp_fine", None),
+                         ("bsp_ptp_pps", None),
                          ("ptp_clock", "App/Sync/ptp_clock.c"),
                          ("ptp_rx", "App/Sync/ptp_rx.c"),
                          ("bsp_ptp_tx", "App/BSP/bsp_ptp_tx.c"),
@@ -30,8 +31,10 @@ def main():
             command += ["-Wl,--wrap=__mingw_snprintf", "-Wl,--wrap=snprintf"]
         if name == "bsp_ptp_tx":
             command += ["-DSBCG_TEST_PTP_TX"]
-        if name == "bsp_ptp_fine":
+        if name in ("bsp_ptp_fine", "bsp_ptp_pps"):
             command += ["-DSBCG_TEST_PTP_FINE"]
+        if name == "bsp_ptp_pps":
+            command += ["-DSBCG_USE_PPS=1"]
         if name in ("ptp_rx", "ptp_tx"):
             for directory in ["LWIP/Target", "Middlewares/Third_Party/LwIP/src/include",
                               "Middlewares/Third_Party/LwIP/system"]:
