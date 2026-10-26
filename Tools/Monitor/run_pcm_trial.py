@@ -169,6 +169,8 @@ def main():
         expected_channel=0)
     if args.controlled:
         failures.extend(f"metadata:{error}" for error in metadata_errors)
+        if assembly.completed < 1:
+            failures.append("capture: no PCM completed")
     summary = {"status": "COMPLETED", "trial": args.trial, "tag": args.tag,
                "received": assembly.received, "completed": assembly.completed,
                "duplicates": assembly.duplicates, "play_span": play_span,
@@ -179,7 +181,7 @@ def main():
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "trial_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    print(json.dumps(summary, ensure_ascii=True), flush=True)
     if failures:
         print("TRIAL_FAILURES", failures, flush=True)
         return 1
