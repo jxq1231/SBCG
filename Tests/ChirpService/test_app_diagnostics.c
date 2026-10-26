@@ -9,6 +9,7 @@
 #undef main
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
+#include "Measure/measurement_result.h"
 /** @brief 空锚点源，out借用不写，返回false。 */
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){(void)out;return false;}
 /** @brief 未投递锚点的桩，参数借用不保存，无返回值。 */
@@ -31,8 +32,18 @@ bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *profile,
 void UDPSoundEvent_Process(uint32_t now){(void)now;}
 /** @brief App测试桩：不发送UDP事件。 */
 bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+/** @brief App测试桩：清空权威测量缓存。 */
+void MeasurementResult_Init(uint32_t now){(void)now;}
+/** @brief App测试桩：不生成权威测量。 */
+bool MeasurementResult_PublishPair(const SoundPairResult *pair,const TemperatureSnapshot *temperature,uint32_t now){(void)pair;(void)temperature;(void)now;return false;}
+/** @brief App测试桩：不安装结果消费者。 */
+void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink){(void)sink;}
+
 
 /** @brief 验证诊断字段及原有排队语义，成功返回0。 */
+
+/** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
+void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
 int main(void)
 {
  Reset(0U,true);temperature_low=true;

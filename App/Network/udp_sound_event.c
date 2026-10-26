@@ -20,6 +20,7 @@ static BoardIdentityProfile local_profile;
 static ip_addr_t peer;
 static uint32_t (*read_tick)(void);
 static UDPSoundEvent_Log emit;
+static UDPSoundEvent_ResultSink result_sink;
 static SoundPairManager pair_manager;
 static uint32_t last_bind_ms, last_state_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
@@ -104,6 +105,11 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;
     configured=true;return true;
 }
+/** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
+void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)
+{
+    result_sink=sink;
+}
 /** @brief 发布本板事件；未绑定/编码失败返回false并计数。 */
 bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
 {
@@ -153,6 +159,7 @@ void UDPSoundEvent_Process(uint32_t now_ms)
                  (result.status==SOUND_PAIR_TDOA_RANGE?"TDOA_RANGE":"REJECT")),
                 (unsigned)result.status,result.a_sequence,result.b_sequence));
         }
+        if(result_sink!=NULL){result_sink(&result);}
     }
     if((uint32_t)(now_ms-last_state_ms)>=1000U)
     {

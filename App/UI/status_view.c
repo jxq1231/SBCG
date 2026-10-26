@@ -58,6 +58,11 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
  (void)snprintf(out->distance,sizeof out->distance,"-- M");
  if(fresh && s->measurement_valid && s->distance_mm>=0)(void)snprintf(out->distance,sizeof out->distance,"%" PRId32 ".%03" PRId32 " M",s->distance_mm/1000,s->distance_mm%1000);
  (void)snprintf(out->direction,sizeof out->direction,"SIDE --");
+ if(fresh && s->measurement_valid)
+  (void)snprintf(out->direction,sizeof out->direction,"%s",
+   s->measurement_direction==1?"SIDE A":s->measurement_direction==2?"SIDE B":"SIDE --");
  (void)snprintf(out->quality,sizeof out->quality,"QUALITY --");
+ if(fresh && s->measurement_valid)
+  (void)snprintf(out->quality,sizeof out->quality,"QUALITY %u",(unsigned)s->measurement_quality);
  return true;
 }

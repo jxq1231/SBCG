@@ -13,6 +13,10 @@
 #include <stdint.h>
 
 typedef void (*UDPSoundEvent_Log)(const char *line, int length);
+/** @brief 配对结果回调；仅前台Process调用，不保留指针。 */
+typedef void (*UDPSoundEvent_ResultSink)(const SoundPairResult *result);
+/** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
+void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink);
 
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,

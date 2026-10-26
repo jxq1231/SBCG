@@ -5,6 +5,7 @@
 #include "BSP/bsp_sdram.h"
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
+#include "Measure/measurement_result.h"
 #include "BSP/bsp_board_identity.h"
 #include "Sync/time_sync.h"
 static BoardIdentityProfile identity;
@@ -29,6 +30,13 @@ bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *profile,
 void UDPSoundEvent_Process(uint32_t now){(void)now;}
 /** @brief App测试桩：不发送UDP事件。 */
 bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+/** @brief App测试桩：清空权威测量缓存。 */
+void MeasurementResult_Init(uint32_t now){(void)now;}
+/** @brief App测试桩：不生成权威测量。 */
+bool MeasurementResult_PublishPair(const SoundPairResult *pair,const TemperatureSnapshot *temperature,uint32_t now){(void)pair;(void)temperature;(void)now;return false;}
+/** @brief App测试桩：不安装结果消费者。 */
+void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink){(void)sink;}
+
 
 static unsigned sdram_init_calls,sdram_steps,sdram_enabled;
 static BSP_SdramSnapshot sdram;
@@ -37,6 +45,9 @@ bool BSP_SDRAM_Init(void)
 void BSP_SDRAM_Process(uint32_t now,bool allowed)
 {assert(now==tick_ms&&allowed==!temperature_low);++sdram_steps;if(allowed)++sdram_enabled;}
 void BSP_SDRAM_GetSnapshot(BSP_SdramSnapshot*out){*out=sdram;}
+
+/** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
+void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);

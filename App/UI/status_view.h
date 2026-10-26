@@ -25,6 +25,9 @@ typedef struct {
  uint32_t sound_speed_mm_s,audio_dropped,audio_errors;
  uint64_t candidates;
  bool audio_running,temperature_manual;
+ uint8_t measurement_direction; /* 0 unknown, 1 A side, 2 B side. */
+ uint8_t measurement_quality;   /* 0..100 when measurement_valid. */
+ uint32_t measurement_id;
 } UI_StatusSnapshot;
 /** @brief 由调用方拥有的NUL结尾ASCII文本；后续中文字体由TouchGFX视图负责。 */
 typedef struct {

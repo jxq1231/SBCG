@@ -18,6 +18,10 @@ int main(int argc,char **argv){
  s=(UI_StatusSnapshot){.captured_ms=100,.temperature_manual=true};
  CHECK(UI_StatusFormat(&s,100,&text));CHECK(strcmp(text.temperature_source,"MANUAL")==0);
  CHECK(strcmp(text.direction,"SIDE --")==0 && strcmp(text.quality,"QUALITY --")==0);
+ s.measurement_valid=true;s.distance_mm=1234;s.measurement_direction=2U;s.measurement_quality=87U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.direction,"SIDE B")==0 &&
+       strcmp(text.quality,"QUALITY 87")==0);
+ s.measurement_direction=1U;CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.direction,"SIDE A")==0);
  s.audio_dropped=3;s.audio_errors=2;
  CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.audio_detail,"DROP 3 ERR 2")==0);
  s.measurement_valid=true;s.distance_mm=1234;

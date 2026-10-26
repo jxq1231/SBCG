@@ -22,6 +22,7 @@
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
+#include "Measure/measurement_result.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -325,6 +326,21 @@ static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
  * @note 依赖生成初始化；先拆最外层PTP再拆UDPTimeExchange，所有权失败则返回。
  *       前台队列每轮至多发送一行，避免周期突发阻塞PCM归还；不自行触发复位。
  */
+/**
+ * @brief 配对结果→唯一测量结果；无有效温度/声速时明确拒绝，不显示距离。
+ * @param pair 非NULL只读配对结果，仅本次调用有效。
+ * @return 无返回值；不读PCM，不修改网络/配对状态。
+ */
+#if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
+static void PublishMeasurement(const SoundPairResult *pair)
+{
+    TemperatureSnapshot temperature;
+    const uint32_t now_ms=BSP_Console_GetTickMs();
+    TemperatureService_GetSnapshot(now_ms,&temperature);
+    (void)MeasurementResult_PublishPair(pair,&temperature,now_ms);
+}
+#endif
+
 void App_Init(void)
 {
 #ifdef SBCG_USE_BOARD_SYNC
@@ -433,12 +449,14 @@ void App_Init(void)
 #ifdef SBCG_USE_SOUND_TIME
     SoundEventTime_Init(SendLine);
 #ifdef SBCG_USE_BOARD_IDENTITY
+    MeasurementResult_Init(BSP_Console_GetTickMs());
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))
     {
         static const char error[] = "$SOUND_EVENT_INIT,RESULT=INIT_ERROR\r\n";
         SendLine(error, (int)(sizeof(error) - 1U));
     }
+    else { UDPSoundEvent_SetResultSink(PublishMeasurement); }
 #endif
 #endif
 #endif

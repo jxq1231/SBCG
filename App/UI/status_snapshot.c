@@ -11,6 +11,7 @@
 #include "Network/ethernet_monitor.h"
 #include "Sync/time_sync.h"
 #include "Temperature/temperature_service.h"
+#include "Measure/measurement_result.h"
 #include "Detector/sound_detector_service.h"
 #include <stddef.h>
 
@@ -60,6 +61,14 @@ void UI_StatusSnapshot_Read(uint32_t now_ms, UI_StatusSnapshot *out)
         audio.hal_error==0U && audio.dma_error==0U && audio.dropped_blocks==0U;
     SoundDetectorServiceSnapshot detector; SoundDetectorService_GetSnapshot(&detector);
     if (detector.configured) { out->candidates=detector.candidates; }
-    /* 尚无双板声学测距结果：measurement_valid保持false，方向和质量由文本层占位。 */
+    MeasurementResultSnapshot measurement;
+    if(MeasurementResult_Get(now_ms,&measurement) && measurement.valid){
+        out->measurement_valid=true;
+        out->distance_mm=measurement.distance_mm;
+        out->measurement_direction=measurement.direction==SOUND_DIRECTION_A?1U:
+            measurement.direction==SOUND_DIRECTION_B?2U:0U;
+        out->measurement_quality=measurement.quality;
+        out->measurement_id=measurement.id;
+    }
 }
 
