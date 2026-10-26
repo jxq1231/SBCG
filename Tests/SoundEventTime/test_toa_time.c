@@ -27,6 +27,11 @@ int main(void)
     assert(Has("$SOUND_TOA_TIME,SEQ=1,SESSION=1,FRAME=72000,Q16=0,STATUS=OK"));
     assert(Has("EST_NS=1499989583,LO_NS=1499979166,HI_NS=1500000000"));
     assert(Has("$SOUND_TOA_STATE,") && Has("OK=1"));
+    SoundEventTimeEvent event;
+    assert(SoundEventTime_TakeEvent(&event));
+    assert(event.sequence==1U && event.session==1U && event.frame==72000U &&
+           event.fraction_q16==0U && event.time_ns==1499989583U);
+    assert(!SoundEventTime_TakeEvent(&event) && event.time_ns==0U);
 
     /* Fractional Q16 coordinate is mapped by the real core, not by a double absolute frame. */
     Init();Pair();p=Position(71999U,16384U);
@@ -54,6 +59,7 @@ int main(void)
     SoundEventTime_Invalidate(SOUND_TIME_CLOCK);Process(2250);
     assert(Has("$SOUND_TIME,SEQ=1") && Has("STATUS=CLOCK"));
     assert(Has("$SOUND_TOA_TIME,SEQ=1") && Has("STATUS=CLOCK") && !Has("EST_NS="));
+    assert(!SoundEventTime_TakeEvent(&event));
 
     /* Queue capacity and null position remain explicit errors. */
     Init();Pair();for(uint32_t i=1U;i<=4U;++i)assert(SoundEventTime_SubmitToa(2000,i,&c,&p));

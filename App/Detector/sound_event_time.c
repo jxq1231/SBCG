@@ -31,6 +31,8 @@ static bool have_anchor_sequence, have_event_sequence, have_stream;
 static uint32_t last_anchor_sequence, last_event_sequence, last_result_ms, last_state_ms;
 static uint32_t last_dropped, stream_session;
 static SoundEventTimeSnapshot stats;
+static SoundEventTimeEvent toa_events[SOUND_TIME_EVENT_CAPACITY];
+static uint8_t toa_event_count;
 static void (*logger)(const char *, int);
 _Static_assert(sizeof("$SOUND_TIME,SEQ=4294967295,SESSION=4294967295,FIRST=18446744073709551615,"
     "STATUS=OK,L=4294967295,R=4294967295,EST_NS=18446744073709551615,LO_NS=18446744073709551615,"
@@ -79,12 +81,16 @@ void SoundEventTime_Init(void (*log)(const char *, int))
     last_anchor_sequence = last_event_sequence = last_result_ms = last_state_ms = 0U;
     last_dropped = stream_session = 0U;
     stats = (SoundEventTimeSnapshot){0};
+    toa_event_count = 0U;
     memset(anchors, 0, sizeof anchors);
     memset(pending, 0, sizeof pending);
+    memset(toa_events, 0, sizeof toa_events);
 }
 /** @brief 按公开reason撤销旧模型；无返回值，不输出日志，队列中的身份保留供失败报告。 */
 void SoundEventTime_Invalidate(SoundTimeReset reason)
 {
+    toa_event_count = 0U;
+    memset(toa_events, 0, sizeof toa_events);
     Invalidate(reason == SOUND_TIME_CLOCK ? "CLOCK" : "STREAM");
 }
 /** @brief 校验公共候选字段和序号；不访问PCM，成功返回true。 */
@@ -271,6 +277,15 @@ static void EmitLegacy(const Pending *item, const char *status,
             status, (unsigned)core));
     }
 }
+/** @brief 保存成功TOA标量副本；满队列丢弃事件副本但不改变已发布日志/模型。 */
+static void PushEvent(const Pending *item, const AudioTimeMapResult *result)
+{
+    if (toa_event_count >= SOUND_TIME_EVENT_CAPACITY) { return; }
+    toa_events[toa_event_count++] = (SoundEventTimeEvent){
+        item->sequence, item->candidate.session, result->estimate_ns,
+        item->toa.frame + 1U, item->toa.fraction_q16,
+        item->candidate.mean_square_ac, item->candidate.peak_abs};
+}
 /** @brief 发送Q16窗口TOA结果或明确失败；缺失/非法不输出模型字段。 */
 static void EmitToa(const Pending *item, const char *status,
                     const AudioTimeMapResult *result, uint32_t left,
@@ -292,6 +307,7 @@ static void EmitToa(const Pending *item, const char *status,
             "STATUS=OK,CORE=0,L=%" PRIu32 ",R=%" PRIu32 ",EST_NS=%s,LO_NS=%s,HI_NS=%s,"
             "LOCAL=1,SYNC=0\r\n", item->sequence, item->candidate.session, frame,
             (unsigned)item->toa.fraction_q16, left, right, estimate, lower, upper));
+        PushEvent(item, result);
     }
     else
     {
@@ -366,4 +382,13 @@ void SoundEventTime_Process(uint32_t now_ms, const BSP_AudioSnapshot *snapshot)
 void SoundEventTime_GetSnapshot(SoundEventTimeSnapshot *out)
 {
     if (out != NULL) { *out = stats; out->pending = count; }
+}
+/** @brief 取走一个成功TOA事件副本；无事件时清零输出，返回false。 */
+bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event)
+{
+    if (event == NULL || toa_event_count == 0U) { if (event != NULL) { memset(event, 0, sizeof *event); } return false; }
+    *event = toa_events[0];
+    memmove(toa_events, toa_events + 1U, (toa_event_count - 1U) * sizeof toa_events[0]);
+    --toa_event_count;
+    return true;
 }
