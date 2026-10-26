@@ -3,6 +3,7 @@
 #include "../App/test_app_main.c"
 #undef main
 #include "Detector/sound_event_time.h"
+#include "Network/udp_sound_event.h"
 #include "BSP/bsp_board_identity.h"
 #include "Sync/time_sync.h"
 static BoardIdentityProfile identity;
@@ -25,6 +26,14 @@ void SoundEventTime_Observe(uint32_t now,const AudioTimeAnchorObservation *out){
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out){*out=(BSP_AudioSnapshot){.session=1,.running=true,.last_callback_ms=++tick_ms};}
 /** @brief now必须在快照后读取，snapshot为最新副本；无返回值。 */
 void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot *snapshot){assert(!temperature_low && now==tick_ms && snapshot->last_callback_ms==now && takes==event_receives);++event_processes;}
+/** @brief App测试桩：无待取成功TOA事件，返回false。 */
+bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event){if(event)memset(event,0,sizeof *event);return false;}
+/** @brief App测试桩：初始化事件UDP不访问网络。 */
+bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *p,uint32_t(*tick)(void),UDPSoundEvent_Log log){(void)now;(void)p;(void)tick;(void)log;return true;}
+/** @brief App测试桩：不推进事件UDP。 */
+void UDPSoundEvent_Process(uint32_t now){(void)now;}
+/** @brief App测试桩：不发送事件UDP。 */
+bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
 int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
  Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
  start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);
