@@ -10,6 +10,7 @@
 #include "Measure/sound_pair.h"
 #include "Measure/measurement_result.h"
 #include "Network/domain_wire.h"
+#include "Network/measurement_ack.h"
 #include "BSP/board_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -27,6 +28,13 @@ void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink);
 typedef void (*UDPSoundEvent_DomainSink)(const DomainMessage *message);
 /** @brief 安装共同域报文消费者。 */
 void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink sink);
+/** @brief MACK确认消费者。 */
+typedef void (*UDPSoundEvent_AckSink)(const MeasurementAck *ack);
+/** @brief 安装MACK消费者。 */
+void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink);
+/** @brief B向A发送MACK；非B/未配置/链路不可用返回false。 */
+bool UDPSoundEvent_SendMeasurementAck(uint32_t now_ms,uint32_t measurement_id,
+                                      uint32_t time_domain);
 /** @brief A发送DOMAIN_REQ；非A/未配置/链路不可用返回false。 */
 bool UDPSoundEvent_SendDomainRequest(uint32_t now_ms,uint32_t token);
 /** @brief B发送DOMAIN_ACK；非B/未配置/链路不可用返回false。 */

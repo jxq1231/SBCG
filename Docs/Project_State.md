@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.13权威结果MACK确认（软件完成，2026-10-27）。** B接受MRES后回16字节MACK；A收到同令牌成功ACK后停止该ID刷新，ACK丢失仍500ms重发；结果状态增加ACK_TX/RX/BAD。未烧录/未两板实测。见[M4.3.13记录](Milestones/M4_3_13_Result_Ack.md)。
+
 **M4.3.12共同域双向握手（软件完成，2026-10-27）。** 新增`DOMN` 24字节REQ/ACK：A每500ms发REQ，B仅本地严格合格才回ACK，A收到同令牌有效ACK才放行；B收到REQ且本地合格才可发事件；超时/FAULT撤域。未烧录/未示波器验收。见[M4.3.12记录](Milestones/M4_3_12_Domain_Handshake.md)。
 
 **M4.3.11配对P0/结果边界修复（2026-10-27）。** `UDPSoundEvent_Send`现在把本端事件提交配对器，修复真实双板永不成对的结构P0；新增本端发送+对端接收配对集成测试。同时域失效立即清A/B结果、拒绝乱序旧ID、MRES拒绝UNKNOWN方向。P1域令牌已部分修复：A用UID+启动时刻派生令牌，B收到A事件后采用，不再固定常量1；但无双向握手/PTP epoch证据，仍不能当外部同步验收。未烧录。见[M4.3.11记录](Milestones/M4_3_11_Pairing_Review_Fixes.md)。

@@ -24,12 +24,14 @@ static UDPSoundEvent_Log emit;
 static UDPSoundEvent_ResultSink result_sink;
 static UDPSoundEvent_EventSink event_sink;
 static UDPSoundEvent_DomainSink domain_sink;
+static UDPSoundEvent_AckSink ack_sink;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
 static uint32_t last_bind_ms, last_state_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
 static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
+static uint32_t ack_tx_ok, ack_tx_err, ack_rx_ok, ack_rx_bad;
 static bool configured;
 static SoundPairConfig pair_config;
 
@@ -64,6 +66,21 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet==NULL)return;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_SOUND_EVENT_BOARD_PORT)
     {Increment(&foreign);pbuf_free(packet);return;}
+    if(packet->tot_len==MEASUREMENT_ACK_BYTES)
+    {
+        uint8_t ack_data[MEASUREMENT_ACK_BYTES];
+        if(pbuf_copy_partial(packet,ack_data,sizeof ack_data,0)!=sizeof ack_data)
+        {Increment(&rx_bad);Increment(&ack_rx_bad);pbuf_free(packet);return;}
+        pbuf_free(packet);
+        if(local_profile.role!=BOARD_ROLE_A)
+        {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
+        MeasurementAck ack;
+        if(MeasurementAck_Decode(ack_data,sizeof ack_data,&ack)!=MEASUREMENT_ACK_WIRE_OK)
+        {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
+        if(ack_sink!=NULL){ack_sink(&ack);}
+        Increment(&rx_ok);Increment(&ack_rx_ok);
+        return;
+    }
     if(packet->tot_len==DOMAIN_WIRE_BYTES)
     {
         uint8_t domain_data[DOMAIN_WIRE_BYTES];
@@ -147,6 +164,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;
     result_tx_ok=result_tx_err=result_rx_ok=result_rx_bad=0U;
     domain_sequence=0U;
+    ack_tx_ok=ack_tx_err=ack_rx_ok=ack_rx_bad=0U;
     configured=true;return true;
 }
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
@@ -240,6 +258,31 @@ bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
     if(err!=ERR_OK){Increment(&tx_err);return false;}
     Increment(&tx_ok);return true;
 }
+/** @brief 安装MACK消费者；NULL不回调。 */
+void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink)
+{
+    ack_sink=sink;
+}
+/** @brief B发送MACK；非B/未配置/链路不可用返回false。 */
+bool UDPSoundEvent_SendMeasurementAck(uint32_t now_ms,uint32_t measurement_id,
+                                      uint32_t time_domain)
+{
+    (void)now_ms;
+    if(!configured || service_pcb==NULL || local_profile.role!=BOARD_ROLE_B ||
+       !netif_is_link_up(&gnetif) || measurement_id==0U || time_domain==0U)
+    {Increment(&ack_tx_err);return false;}
+    MeasurementAck ack={MEASUREMENT_ACK_OK,measurement_id,time_domain};
+    uint8_t data[MEASUREMENT_ACK_BYTES];
+    if(MeasurementAck_Encode(&ack,data,sizeof data)!=MEASUREMENT_ACK_WIRE_OK)
+    {Increment(&ack_tx_err);return false;}
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&ack_tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&ack_tx_err);return false;}
+    Increment(&ack_tx_ok);return true;
+}
 /** @brief 推进绑定、配对和1Hz状态/结果输出；无返回值。 */
 void UDPSoundEvent_Process(uint32_t now_ms)
 {
@@ -286,8 +329,10 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             snap.paired,snap.ambiguous,snap.expired,snap.pending_a,snap.pending_b));
         emit(line,snprintf(line,sizeof line,
             "$MEASURE_RESULT_STATE,TX_OK=%" PRIu32 ",TX_ERR=%" PRIu32
-            ",RX_OK=%" PRIu32 ",RX_BAD=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",
-            result_tx_ok,result_tx_err,result_rx_ok,result_rx_bad));
+            ",RX_OK=%" PRIu32 ",RX_BAD=%" PRIu32 ",ACK_TX=%" PRIu32
+            ",ACK_RX=%" PRIu32 ",ACK_BAD=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",
+            result_tx_ok,result_tx_err,result_rx_ok,result_rx_bad,
+            ack_tx_ok,ack_rx_ok,ack_rx_bad));
     }
 }
 /** @brief 复制统计；NULL参数不操作。 */

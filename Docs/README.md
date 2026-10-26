@@ -10,6 +10,8 @@
 
 **最新M4.3.10 PPS共同域门控（未验证，2026-10-27）：** PPS只读快照+共同域门控已提交；PPS QUALIFIED/RATE_REQUALIFY才放行事件/测量（A/B另有TimeSync条件）。主机测试通过，但未烧录/未示波器±10µs/冷启动验收，**不得当同步通过**。[M4.3.10未验证记录](Milestones/M4_3_10_PPS_Domain_Unverified.md)。
 
+**最新M4.3.13结果MACK（2026-10-27）：** B接受权威MRES后回16字节MACK；A收到同令牌成功ACK才停止该ID刷新，ACK丢失继续500ms刷新；新增ACK计数。主机测试PASS，未烧录/未两板实测。[M4.3.13记录](Milestones/M4_3_13_Result_Ack.md)。
+
 **最新M4.3.12共同域双向握手（2026-10-27）：** 新增DOMN REQ/ACK，A收到B有效ACK才确认域，B未收到A REQ不发事件；超时/FAULT撤域。主机测试PASS，未烧录/未示波器验收。[M4.3.12记录](Milestones/M4_3_12_Domain_Handshake.md)。
 
 **最新M4.3.9结果周期刷新（2026-10-27）：** A每500ms重发同ID权威结果，B刷新2s有效期；新增`$MEASURE_RESULT_STATE`计数。无ACK/序列号、未烧录/未两板实测。[M4.3.9记录](Milestones/M4_3_9_Result_Refresh.md)。

@@ -20,6 +20,7 @@ static SoundPairResult paired;
 static unsigned pair_count;
 static uint32_t adopted_domain;
 static DomainMessage received_domain;
+static MeasurementAck received_ack;
 static uint32_t tick_ms;
 
 struct udp_pcb *udp_new(void) { return &fake_pcb; }
@@ -45,6 +46,8 @@ static void EventSink(const SoundEventRecord *event)
 { adopted_domain=event->time_domain; }
 static void DomainSink(const DomainMessage *message)
 { received_domain=*message; }
+static void AckSink(const MeasurementAck *ack)
+{ received_ack=*ack; }
 static uint32_t Tick(void) { return tick_ms; }
 
 static void ReceiveBytes(const uint8_t *wire,uint16_t length)
@@ -71,6 +74,7 @@ int main(void)
     UDPSoundEvent_SetResultSink(Result);
     UDPSoundEvent_SetEventSink(EventSink);
     UDPSoundEvent_SetDomainSink(DomainSink);
+    UDPSoundEvent_SetAckSink(AckSink);
     UDPSoundEvent_Process(100U); /* lazy bind before send */
     SoundEventRecord local={0};
     local.valid=true;local.type=SOUND_EVENT_CHIRP;local.quality=80U;
@@ -112,6 +116,15 @@ int main(void)
     ReceiveBytes(domain_wire,DOMAIN_WIRE_BYTES);
     assert(received_domain.type==DOMAIN_MESSAGE_ACK && received_domain.role==BOARD_ROLE_B &&
            received_domain.token==0x12345678U);
-    puts("PASS udp sound event: local+peer pairing, DOMN send/receive");
+    assert(!UDPSoundEvent_SendMeasurementAck(202U,7U,0x12345678U));
+    MeasurementAck ack_out={MEASUREMENT_ACK_OK,7U,0x12345678U};
+    uint8_t ack_wire[MEASUREMENT_ACK_BYTES];
+    assert(MeasurementAck_Encode(&ack_out,ack_wire,sizeof ack_wire)==MEASUREMENT_ACK_WIRE_OK);
+    ReceiveBytes(ack_wire,MEASUREMENT_ACK_BYTES);
+    assert(received_ack.status==MEASUREMENT_ACK_OK && received_ack.measurement_id==7U &&
+           received_ack.time_domain==0x12345678U);
+    ack_wire[0]='X';
+    assert(MeasurementAck_Decode(ack_wire,sizeof ack_wire,&received_ack)==MEASUREMENT_ACK_WIRE_INVALID_MAGIC);
+    puts("PASS udp sound event: local+peer pairing, DOMN and MACK paths");
     return 0;
 }

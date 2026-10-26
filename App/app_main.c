@@ -117,6 +117,7 @@ static StandardSequence standard_sequence;
 static bool standard_sequence_detected;
 static uint32_t last_result_id;
 static uint32_t last_result_tx_ms;
+static uint32_t acked_result_id;
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -343,6 +344,21 @@ static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
  */
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 /**
+ * @brief A处理B的MACK：只接受同共同域令牌的成功确认，停止该ID刷新。
+ * @param ack 非NULL已通过UDP来源/长度/Role校验的确认，仅本次有效。
+ * @return 无返回值；不改变测量距离或PPS/TimeSync资格。
+ */
+static void HandleMeasurementAck(const MeasurementAck *ack)
+{
+    if(ack==NULL || ack->status!=MEASUREMENT_ACK_OK)return;
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(!domain.valid || domain.id!=ack->time_domain)return;
+    acked_result_id=ack->measurement_id;
+}
+/**
  * @brief 处理对端域报文：B采用A令牌并回ACK；A只接受同令牌ACK。
  * @param message 非NULL已通过UDP来源/长度/角色校验的域消息，仅本次有效。
  * @return 无返回值；不修改PPS/TimeSync资格。
@@ -436,7 +452,11 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
         MeasurementResult_Invalidate(BSP_Console_GetTickMs());
         return;
     }
-    (void)MeasurementResult_PublishRemote(result,BSP_Console_GetTickMs());
+    const uint32_t now=BSP_Console_GetTickMs();
+    if(MeasurementResult_PublishRemote(result,now))
+    {
+        (void)UDPSoundEvent_SendMeasurementAck(now,result->id,result->time_domain);
+    }
 }
 /**
  * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
@@ -456,6 +476,7 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
         MeasurementResult_Invalidate(now_ms);
         return;
     }
+    if(result.id==acked_result_id){return;}
     if(result.id==last_result_id &&
        (uint32_t)(now_ms-last_result_tx_ms)<APP_RESULT_REFRESH_MS){return;}
     if(UDPSoundEvent_SendResult(now_ms,&result))
@@ -587,7 +608,7 @@ void App_Init(void)
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
         (void)StandardSequence_Init(&standard_sequence,&sequence_config);
         standard_sequence_detected=false;
-        last_result_id=0U;last_result_tx_ms=0U;
+        last_result_id=0U;last_result_tx_ms=0U;acked_result_id=0U;
     }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))
@@ -599,6 +620,7 @@ void App_Init(void)
         UDPSoundEvent_SetResultSink(PublishMeasurement);
         UDPSoundEvent_SetMeasurementSink(PublishRemoteMeasurement);
         UDPSoundEvent_SetDomainSink(HandleDomainMessage);
+        UDPSoundEvent_SetAckSink(HandleMeasurementAck);
     }
 #endif
 #endif

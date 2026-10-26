@@ -98,6 +98,12 @@ bool TimeDomain_OnPeerRequest(uint32_t token,uint32_t now){(void)token;(void)now
 bool TimeDomain_OnPeerAck(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
 /** @brief App测试桩：域超时检查。 */
 void TimeDomain_Tick(uint32_t now){(void)now;}
+
+/** @brief App测试桩：安装MACK消费者。 */
+void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink){(void)sink;}
+/** @brief App测试桩：B发送MACK。 */
+bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
+{(void)now;(void)id;(void)domain;return true;}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);
