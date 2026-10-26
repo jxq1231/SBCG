@@ -26,6 +26,7 @@ static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
 static uint32_t last_bind_ms, last_state_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
+static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
 static bool configured;
 static SoundPairConfig pair_config;
 
@@ -65,16 +66,16 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         uint8_t measurement_data[MEASUREMENT_WIRE_BYTES];
         if(pbuf_copy_partial(packet,measurement_data,sizeof measurement_data,0)!=
            sizeof measurement_data)
-        {Increment(&rx_bad);pbuf_free(packet);return;}
+        {Increment(&rx_bad);Increment(&result_rx_bad);pbuf_free(packet);return;}
         pbuf_free(packet);
-        if(local_profile.role!=BOARD_ROLE_B){Increment(&rx_bad);return;}
+        if(local_profile.role!=BOARD_ROLE_B){Increment(&rx_bad);Increment(&result_rx_bad);return;}
         MeasurementResultSnapshot result;
         if(MeasurementWire_Decode(measurement_data,sizeof measurement_data,&result)!=
            MEASUREMENT_WIRE_OK)
-        {Increment(&rx_bad);return;}
+        {Increment(&rx_bad);Increment(&result_rx_bad);return;}
         result.captured_ms=read_tick!=NULL?read_tick():0U;
         if(measurement_sink!=NULL){measurement_sink(&result);}
-        Increment(&rx_ok);
+        Increment(&rx_ok);Increment(&result_rx_ok);
         return;
     }
     if(packet->tot_len!=SOUND_EVENT_WIRE_BYTES)
@@ -122,6 +123,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     if(!SoundPair_Init(&pair_manager,&pair_config))return false;
     last_bind_ms=now_ms-1000U;last_state_ms=now_ms;
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;
+    result_tx_ok=result_tx_err=result_rx_ok=result_rx_bad=0U;
     configured=true;return true;
 }
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
@@ -140,17 +142,17 @@ bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *r
     (void)now_ms;
     if(!configured || service_pcb==NULL || result==NULL ||
        local_profile.role!=BOARD_ROLE_A || !netif_is_link_up(&gnetif))
-    {Increment(&tx_err);return false;}
+    {Increment(&result_tx_err);return false;}
     uint8_t data[MEASUREMENT_WIRE_BYTES];
     if(MeasurementWire_Encode(result,data,sizeof data)!=MEASUREMENT_WIRE_OK)
-    {Increment(&tx_err);return false;}
+    {Increment(&result_tx_err);return false;}
     struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
-    if(packet==NULL){Increment(&tx_err);return false;}
+    if(packet==NULL){Increment(&result_tx_err);return false;}
     err_t err=pbuf_take(packet,data,sizeof data);
     if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
     pbuf_free(packet);
-    if(err!=ERR_OK){Increment(&tx_err);return false;}
-    Increment(&tx_ok);return true;
+    if(err!=ERR_OK){Increment(&result_tx_err);return false;}
+    Increment(&result_tx_ok);return true;
 }
 /** @brief 发布本板事件；未绑定/编码失败返回false并计数。 */
 bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
@@ -213,6 +215,10 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             ",PAIRED=%" PRIu32 ",AMBIG=%" PRIu32 ",EXPIRED=%" PRIu32 ",PENDING=%u/%u,"
             "LOCAL=1,SYNC=0\r\n",tx_ok,tx_err,rx_ok,rx_bad,foreign,init_errors,
             snap.paired,snap.ambiguous,snap.expired,snap.pending_a,snap.pending_b));
+        emit(line,snprintf(line,sizeof line,
+            "$MEASURE_RESULT_STATE,TX_OK=%" PRIu32 ",TX_ERR=%" PRIu32
+            ",RX_OK=%" PRIu32 ",RX_BAD=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",
+            result_tx_ok,result_tx_err,result_rx_ok,result_rx_bad));
     }
 }
 /** @brief 复制统计；NULL参数不操作。 */
@@ -226,4 +232,14 @@ void UDPSoundEvent_GetSnapshot(SoundPairSnapshot *pair,uint32_t *out_tx_ok,
     if(out_rx_ok!=NULL)*out_rx_ok=rx_ok;
     if(out_rx_bad!=NULL)*out_rx_bad=rx_bad;
     if(out_foreign!=NULL)*out_foreign=foreign;
+}
+
+/** @brief 复制权威结果报文计数；NULL参数不操作。 */
+void UDPSoundEvent_GetResultCounters(uint32_t *out_tx_ok,uint32_t *out_tx_err,
+                                     uint32_t *out_rx_ok,uint32_t *out_rx_bad)
+{
+    if(out_tx_ok!=NULL)*out_tx_ok=result_tx_ok;
+    if(out_tx_err!=NULL)*out_tx_err=result_tx_err;
+    if(out_rx_ok!=NULL)*out_rx_ok=result_rx_ok;
+    if(out_rx_bad!=NULL)*out_rx_bad=result_rx_bad;
 }

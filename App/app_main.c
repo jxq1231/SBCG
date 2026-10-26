@@ -111,9 +111,12 @@
 /* Diagnostic-only common event domain until the synchronized time-domain service exists.
    Both boards use the same constant, so this is NOT a claim of PTP synchronization. */
 #define APP_SOUND_EVENT_DIAGNOSTIC_DOMAIN 1U
+#define APP_RESULT_REFRESH_MS 500U
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 static StandardSequence standard_sequence;
 static bool standard_sequence_detected;
+static uint32_t last_result_id;
+static uint32_t last_result_tx_ms;
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -354,11 +357,7 @@ static void PublishMeasurement(const SoundPairResult *pair)
         MeasurementResult_Invalidate(now_ms);
         return;
     }
-    if(MeasurementResult_PublishPair(pair,&temperature,now_ms)){
-        MeasurementResultSnapshot result;
-        if(MeasurementResult_Get(now_ms,&result))
-        { (void)UDPSoundEvent_SendResult(now_ms,&result); }
-    }
+    (void)MeasurementResult_PublishPair(pair,&temperature,now_ms);
 }
 /**
  * @brief B板接收A板权威结果；共同域不匹配或非B角色时丢弃，不重算距离。
@@ -374,6 +373,22 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
     TimeDomain_Get(&domain);
     if(!domain.valid || domain.id!=result->time_domain){return;}
     (void)MeasurementResult_PublishRemote(result,BSP_Console_GetTickMs());
+}
+/**
+ * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
+ * @param now_ms 当前HAL毫秒，无符号差支持回绕。
+ * @return 无返回值；同ID最多每500ms重发，ID变化立即发送。
+ */
+static void ServiceAuthoritativeResult(uint32_t now_ms)
+{
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_A){return;}
+    MeasurementResultSnapshot result;
+    if(!MeasurementResult_Get(now_ms,&result)){return;}
+    if(result.id==last_result_id &&
+       (uint32_t)(now_ms-last_result_tx_ms)<APP_RESULT_REFRESH_MS){return;}
+    if(UDPSoundEvent_SendResult(now_ms,&result))
+    { last_result_id=result.id;last_result_tx_ms=now_ms; }
 }
 #endif
 
@@ -492,6 +507,7 @@ void App_Init(void)
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
         (void)StandardSequence_Init(&standard_sequence,&sequence_config);
         standard_sequence_detected=false;
+        last_result_id=0U;last_result_tx_ms=0U;
     }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))
@@ -671,6 +687,9 @@ void App_Process(void)
 #endif
         }
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
+#ifdef SBCG_USE_BOARD_IDENTITY
+        ServiceAuthoritativeResult(BSP_Console_GetTickMs());
+#endif
     }
 #elif defined(SBCG_USE_AUDIO_MAP)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());

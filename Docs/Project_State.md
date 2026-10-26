@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.9权威结果周期刷新（2026-10-27）。** A板每500ms重发当前有效结果（ID变化立即发），B按同ID刷新2s有效期；新增`$MEASURE_RESULT_STATE`TX/RX/BAD计数。无ACK/可靠传输、无结果序列号；未烧录/未两板实测。见[M4.3.9记录](Milestones/M4_3_9_Result_Refresh.md)。
+
 **M4.3.8两屏权威结果交换软件完成（2026-10-27）。** A板发布唯一MeasurementResult并通过5009端口28字节MRES报文发给B；B校验角色/共同域后按A的原ID/距离显示，不重算。无重传/ACK、未烧录/未两板实测；B单包丢失会显示旧值至2s超龄。见[M4.3.8记录](Milestones/M4_3_8_Authoritative_Result_Exchange.md)。
 
 **M4.3.7标准chirp/击掌波形分类接入（2026-10-27）。** `event_classifier`从候选窗口提取包络长度/前后过零率趋势/差分能量比，输出CHIRP/CLAP/UNKNOWN和quality；SoundDetectorService→SoundEventTimeEvent→App，非CHIRP不进标准序列/UDP/配对，事件quality不再固定100。仅合成测试/未真实标准声验证，未烧录。见[M4.3.7记录](Milestones/M4_3_7_Chirp_Clap_Classifier.md)。

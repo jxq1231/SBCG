@@ -38,5 +38,8 @@ bool UDPSoundEvent_Send(uint32_t now_ms, const SoundEventRecord *event);
 /** @brief 复制发送/接收/配对计数；NULL不操作。 */
 void UDPSoundEvent_GetSnapshot(SoundPairSnapshot *pair, uint32_t *tx_ok, uint32_t *tx_err,
                                uint32_t *rx_ok, uint32_t *rx_bad, uint32_t *foreign);
+/** @brief 复制权威结果报文计数；NULL参数不操作。 */
+void UDPSoundEvent_GetResultCounters(uint32_t *tx_ok, uint32_t *tx_err,
+                                     uint32_t *rx_ok, uint32_t *rx_bad);
 
 #endif
