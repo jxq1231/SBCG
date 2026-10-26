@@ -113,6 +113,14 @@ int main(void)
         CHECK(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,back,&fraction));
         CHECK(fraction==99.0);
     }
+    /* 两处相隔若干帧的孤立尖峰：左段起跳后不得把它们算作连续过阈段 -> 拒绝 */
+    {
+        int16_t back[256];memset(back,0,sizeof back);
+        back[50]=20000;back[100]=30000;
+        fraction=77.0;
+        CHECK(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,back,&fraction));
+        CHECK(fraction==77.0);
+    }
     /* 整窗已过阈（前沿在窗外）-> 拒绝 */
     int16_t full[256];
     for(unsigned i=0U;i<256U;++i)full[i]=10000;

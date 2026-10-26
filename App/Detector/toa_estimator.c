@@ -91,10 +91,10 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
        config->window_frames<32U || config->window_frames>TOA_MAX_FRAMES ||
        config->threshold_pcm>TOA_MAX_PCM ||
        config->run_samples<2U || config->run_samples>8U){return false;}
-    uint32_t peak=0U;uint16_t idx_peak=0U;
+    uint32_t peak=0U;
     for(uint16_t i=0U;i<config->window_frames;++i){
         const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
-        if(magnitude>peak){peak=magnitude;idx_peak=i;}
+        if(magnitude>peak){peak=magnitude;}
     }
     if(peak==0U){return false;}
     uint32_t limit=config->threshold_pcm;
@@ -124,9 +124,7 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
         if(magnitude<limit){below=i;break;}
     }
     if(below<0){return false;}  /* 段起点到窗首整段已过阈，前沿在窗外 */
-    const uint16_t start=(uint16_t)(below+1);
-    if((int32_t)idx_peak-(int32_t)start+1<config->run_samples){return false;}
-    int32_t cross=(int32_t)start;
+    int32_t cross=(int32_t)below+1;
     while((int32_t)cross<frames)
     {
         const uint32_t magnitude=(uint32_t)(samples[cross]<0 ? -(int32_t)samples[cross]:samples[cross]);
@@ -134,6 +132,18 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
         ++cross;
     }
     if((int32_t)cross>=frames){return false;}  /* 起跳段内无可跨阈样本 */
+    /* run_samples 校验：跨阈点之后必须存在连续 run_samples 个过阈样本。
+       早期实现用 "idx_peak-start+1" 计数，最左段起跳后该跨度可从回波峰值跨到
+       窗尾，两个相隔数十帧的孤立尖峰会被误判为满足连续过阈；改为向前数真正
+       连续过阈样本，孤立瞬态在此处即失败。 */
+    uint16_t run=0U;
+    for(int32_t i=(int32_t)cross;i<(int32_t)frames;++i){
+        const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+        if(magnitude<limit){break;}
+        ++run;
+        if(run>=config->run_samples){break;}
+    }
+    if(run<config->run_samples){return false;}
     const double hi=(double)(samples[cross]<0 ? -(int32_t)samples[cross]:samples[cross]);
     const double lo=(double)(samples[cross-1]<0 ? -(int32_t)samples[cross-1]:samples[cross-1]);
     if(hi<=lo){return false;}
