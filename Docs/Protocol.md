@@ -2,9 +2,21 @@
 
 <!-- doc-status: current-interface; reviewed: 2026-10-23 -->
 
-更新：2026-10-23。当前A/B板网络基线为 **SBCG-M2.3-ROLE**；**SBCG-M2.3-SYNC**已由用户手动烧录并通过1分钟运行内部观测。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
+更新：2026-10-23。新增SBCG-M2.3-PPS尚未烧录/实物验收，PPS行定义见下；当前已验收A/B板网络基线为 **SBCG-M2.3-ROLE**；**SBCG-M2.3-SYNC**已由用户手动烧录并通过1分钟运行内部观测。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。
 
 M3.2.3当时完成纯算法与离线回放验证；M3.2.4已将原内核接入板端并以SBCG-M3.2-MAP实测；其后M2.3.1以SBCG-M2.3-ROLE复验原业务并验收A身份。当前状态见[Project_State](Project_State.md)。
+
+## M2.3.3 PPS串口（软件接口，实物未验收）
+
+本版FW为`SBCG-M2.3-PPS`，保留原UDP和串口接口；新增ASCII/CRLF日志，每至少1000ms一行，使用原DHT安全发送队列。示例仅为格式，非实测数据：
+
+```text
+$PPS,ROLE=A,STATE=QUALIFIED,QUALIFIED=1,ARMED=1,TARGET_SEC=12,EMITTED=10,MISSED=0,ERRORS=0,SYNC=0
+```
+
+ROLE为A/B；STATE为UNQUALIFIED/QUALIFIED/RATE_REQUALIFY/FAULT；QUALIFIED及ARMED为0/1。TARGET_SEC为uint32本地PTP目标秒；EMITTED/MISSED/ERRORS为饱和uint32软件诊断计数。EMITTED只表示前台观察到TIM2.TIF、ETH.MACSR.TSTS、自清TSITE、目标及epoch一致，不代表探头测到的边沿个数或精度。MISSED为取消已装载目标次数，不能直接当作实物丢脉冲率。SYNC固定0，独立精度尚未验证。
+
+A本地PTP健康时输出参考脉冲；B需|offset_x2_ns|≤20000、delay_x2_ns在0..4000000、|drift_ppb|≤500且首次内部锁定。样本年龄<2000ms；一次≤1125ppb纯变频允许<4000ms重新资格，仍受样本年龄约束，第二次变频撤资格。FAULT需显式初始化或复位恢复；未知本地时钟代际后A须重新初始化。A的对端重置不改变本地参考时钟，不撤其参考PPS。当前只有A时B输出及两板精度不在验收范围。
 
 ## M2.3.1 UID角色与网络身份（A联合实测、双板网络已通过）
 
@@ -305,6 +317,7 @@ $AUDIO_MAP_CHECK,SEQ=1,OBS_NS=2000005000,RES_NS=5000,SYNC=0
 
 服务是前台三点自检观测，不是声音事件查询接口。模型继承M3.2.3，未校准codec/SAI/FIFO/DMA物理延迟；新区间不代表声学误差界。`Analysis/audio_time_map_board_analysis.py --serial <从新BOOT开始的JSONL> --output-dir <新目录>`核对≥90原音频位置/锚点、≥30组MAP/CHECK，并与真实C及Fraction逐项比较。工具恒hardware_verified=false；本轮120秒实物采集结合UID/固件、原网络及温度联合验收通过，40组全部一致、最大绝对残差14.884us，仍LOCAL/SYNC=0。详见[M3.2.4验收记录](Milestones/M3_2_4_Audio_Time_Map_Board.md)。
 
+
 ## M4.1.2 本地声音候选（实验能量检测）
 
 固件SBCG-M4.1-CAND-R1。沿用ASCII/CRLF，每行<256字节；无新UDP端口。
@@ -314,6 +327,7 @@ $AUDIO_MAP_CHECK,SEQ=1,OBS_NS=2000005000,RES_NS=5000,SYNC=0
 - `SOUND_STATE`：VALID_BLOCKS、REJECTED、RESETS、CANDIDATES、DROPPED、ERRORS为uint32饱和计数；PENDING为0..4队列长度，ARMED为0/1，CH为声道，SYNC=0。候选序号缺口可能来自有记录的队列丢弃；不可当作跨启动唯一键。
 
 唯一的Audio Begin/End内暂算，真实End通过才提交；失败/断流清除确认历史与旧队列。候选至多每250ms发送一条，状态至多每1000ms一条；队列超龄1000ms丢弃计数，不补发。只能表明实验能量候选及其采样帧，不能当作标准音频识别、物理声到达时间或同步精度证明。字段与实测范围见[M4.1.2记录](Milestones/M4_1_2_Sound_Candidate_Integration.md)。
+
 
 ## M4.1.3 本地传输模型时间
 
@@ -471,6 +485,7 @@ $AUDIO_PROFILE,TOTAL_MS=28,STAT_MS=15,SD_STAGE_MS=6,SD_PROC_MS=0,CH_STAGE_MS=1,C
 - **口径**：`OTHER_MS`仍包含`FLUSH_MS`（`LOOP=AUDIO+UI+OTHER`，不能再用OTHER加FLUSH）；`$PROFILE`的最大循环与`$AUDIO_PROFILE`的最大AudioCapture轮是两次独立最大值，不能互相求和。A2无A3诊断时实测LOOP38/42、AUDIO21/25、OTHER16；A3为LOOP40、AUDIO27、OTHER13/FLUSH12，A3未抬高最慢LOOP，但AUDIO增量可能含插桩开销，FLUSH12与诊断行发送时长一致，不能完全排除A3诊断自扰动；A4前应做关闭诊断的对照采集。
 - 正式口径：`OTHER_MS`/`FLUSH_MS`不能当纯CPU；`STAT_MS`等分段是墙钟差，不是指令周期或最坏时间；不得用单次最大值直接改动日志/业务策略。
 
+
 ## M4.2.5 失败搜索诊断（SBCG-M4.2-SEARCHDIAG）
 
 本节为新增软件接口；旧BATCH固件不输出，当前实物状态以Project_State及本轮报告为准。门限、搜索范围、有效匹配CHIRP行保持原含义；CHIRP_INIT中DIAG=2标记此接口。只为完整搜索完成的任务增加一行，示例不是实测：
@@ -490,3 +505,18 @@ $CHIRP_SEARCH,ID=20,SESSION=1,HINT=3000000,LO=2999808,HI=3000064,BEST=2999900,CO
 - 搜索诊断最坏247B、CHIRP_DIAG追加后最坏252B（含CRLF），均小于256B；不新增PCM缓冲、DMA或硬件配置。新增格式化与UART排空有成本，需要独立实物复验，评分次数不变不能证明毫秒耗时不变。
 
 此接口仅用于定位本次真实音频0/10匹配，不提供PTP时间、物理到达精度或距离；不会将低于门限的raw峰作为有效CHIRP发布。
+
+## M4.2.6 候选附近PCM捕获（SBCG-M4.2-PCMCAP）
+
+本节为新增软件接口，供候选附近End验证PCM下传与离线宽带相关分析；不改变M4.2.5门限、搜索范围或匹配行。CHIRP_INIT第3行DIAG=3标记本版并携带定界容量：`DIAG=3,CAPT=8544,L=2048,R=2048`。每个完整搜索任务在完成时把候选附近有界PCM快照经UDP 5008→PC 6008（目标192.168.10.100）分片下传，并输出一行元数据，示例不是实测：
+
+```text
+$CHIRP_CAPTURE,ID=24,SESSION=1,FIRST=3500000,FRAMES=6496,CLAMP=0,TAIL=1,PKTS=13,TOTAL=13,RESULT=OK
+```
+
+- ID/SESSION与CHIRP_SEARCH同源；FIRST为该切片首样本的绝对PCM帧（uint64），FRAMES为实际复制双声道帧数，范围0..8544，不承诺6496点的名义跨度。
+- CLAMP为0/1，表示左或右端至少一端被裁剪到已验证范围；TAIL为0/1，表示任务完成时用新到验证块补充过右尾；PKTS为实际成功提交的数据报数，TOTAL为该切片期望分片数，RESULT=OK/LINK_DOWN/PCB_ERROR/BIND_ERROR/NO_PBUF/SEND_ERROR。RESULT只表示LwIP栈接受状态。
+- UDP负载为56字节网络大端头+小端int16 PCM：`PCM1`魔数、version=1、kind=1、flags（bit0左裁剪/bit1右裁剪/bit2补过右尾）、保留字节、u32分片序号、u32总分片数、u32本片样本数、u32保留、u32 ID、u32 SESSION、u64本片首帧、u64 HINT帧、u64 raw峰帧；随后最多512个int16样本。PC按键(session,id)重组，缺片不产未完成文件。
+- 捕获内容为选中声道、经End验证的CPU副本，在任务缓存时刻复制（左2048起点/hint+6496右端，按已验范围两端裁剪），完成时仅右尾按新到块补丁；不读取DMA、不影响搜索/匹配结果与耗时语义。仅在任务完成时产生，与匹配与否无关。
+
+此接口仅用于区分“声学失真/多径”与“门限/模板/对齐”（离线宽带相关+带限变体+静音负样本分布），不提供PTP时间或到达精度，也不能直接据此下调0.80门限。

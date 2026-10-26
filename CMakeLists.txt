@@ -79,6 +79,10 @@ if(TARGET LwIP)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_LWIP=1)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_BOARD_IDENTITY=1)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_BOARD_SYNC=1)
+    # User-owned PPS integration; HAL TIM sources remain owned by CubeMX.
+    # bsp_pps validates the generated TIM2/PA15 mapping at runtime before start.
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_PPS=1)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/BSP/bsp_pps.c App/Sync/pps_service.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/Network/ptp_wire.c App/Network/ptp_board_sync.c
         App/Sync/clock_servo.c App/Sync/time_sync.c)
@@ -86,6 +90,7 @@ if(TARGET LwIP)
         App/BSP/board_identity.c App/BSP/bsp_board_identity.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_heartbeat.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_probe.c)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_chirp_capture.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_time_exchange.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/BSP/bsp_ptp.c App/Sync/ptp_clock.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Sync/ptp_rx.c)

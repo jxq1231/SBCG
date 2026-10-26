@@ -27,7 +27,7 @@ static uint64_t Field(const char *line,const char *key)
 static void Reset(void)
 {
  events=lines=reports=process_calls=0U;search_line[0]=0;signal_kind=0U;input_channel=0U;
- CHECK(ChirpService_Init(tick_ms,0U,SearchLog));CHECK(strstr(last_any,",DIAG=2\r\n")!=NULL);
+ CHECK(ChirpService_Init(tick_ms,0U,SearchLog));CHECK(strstr(last_any,",DIAG=3,")!=NULL);
 }
 /** @brief 处理一次真实服务，校验每轮最多一行和8窗评分，无参数，无返回值。 */
 static void Step(void)
@@ -85,7 +85,7 @@ static void StageMono(const int16_t *mono)
 /** @brief 执行新增搜索诊断合同；成功返回0，失败由CHECK终止。 */
 int main(void)
 {
- CHECK(ChirpService_Init(0U,0U,SearchLog));CHECK(strstr(last_any,",DIAG=2\r\n")!=NULL);
+ CHECK(ChirpService_Init(0U,0U,SearchLog));CHECK(strstr(last_any,",DIAG=3,")!=NULL);
 #ifndef SEARCH_DIAGNOSTICS_RED
  ChirpServiceSnapshot s;
  Reset();Block(0U,2000U,true);Finish();CHECK(events==1U && reports==0U);

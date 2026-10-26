@@ -88,7 +88,10 @@ void ChirpService_GetSnapshot(ChirpServiceSnapshot*s){if(s)*s=(ChirpServiceSnaps
                 (output/f'capture-{option[1:]}-{calls}.txt').write_text(report,encoding='utf-8')
                 print(report,flush=True)
                 if run.returncode:return run.returncode
-    return subprocess.run([sys.executable,'-B',str(ROOT/'Tests/ChirpService/run_diagnostics_tests.py')],
+    diagnostics=subprocess.run([sys.executable,'-B',str(ROOT/'Tests/ChirpService/run_diagnostics_tests.py')],
+                          cwd=ROOT,check=False).returncode
+    if diagnostics:return diagnostics
+    return subprocess.run([sys.executable,'-B',str(ROOT/'Tests/ChirpService/run_pcm_capture_tests.py')],
                           cwd=ROOT,check=False).returncode
 
 

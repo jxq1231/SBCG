@@ -15,6 +15,30 @@
 #define CHIRP_SERVICE_SEARCH_AFTER 64U
 /** @brief 活动搜索的样本缓存点数：2400点模板加256点搜索跨度，仅CPU访问。 */
 #define CHIRP_SERVICE_JOB_SAMPLES 2656U
+/**
+ * @brief 候选附近PCM捕获的定界容量与左右扩展，单位双声道帧。
+ * @note  左扩展2048+模板2400+右扩展2048=6496帧；候选早于2048时左端贴流起点，
+ *        跨度上限2048+6496-1=8543，因此容量取8544保证单次复制即可装入。
+ */
+#define CHIRP_CAPTURE_FRAMES 8544U
+#define CHIRP_CAPTURE_LEFT 2048U
+#define CHIRP_CAPTURE_RIGHT 2048U
+/**
+ * @brief 一次完整搜索任务候选附近PCM切片的零拷贝租借描述。
+ * @note  samples指向服务内部定界缓冲，仅回调期间有效；frames为实际复制帧数，可能因
+ *        流起点或数据未到被裁剪（left/right_clamped置位）；hint/raw_first为绝对帧坐标，
+ *        tail_topup表示完成时补过右尾部（含在frames内）。
+ */
+typedef struct {
+    const int16_t *samples;
+    uint16_t frames;
+    uint32_t session;
+    uint32_t id;
+    uint64_t first_frame, hint_frame, raw_first_frame;
+    bool left_clamped, right_clamped, tail_topup;
+} ChirpCaptureSlice;
+/** @brief 候选PCM切片消费回调；返回前须复制/发送，函数内部不保留指针。 */
+typedef void (*ChirpCaptureSink)(const ChirpCaptureSlice *slice);
 /** @brief 饱和累计计数；last/max_scan和scores为每次Process帧/窗口数量，耗时单位HAL毫秒。max_complete_ms/max_drop_ms为任务从关联块completed_ms到完成/丢弃时刻（实时读取HAL tick）的饱和最大毫秒差，分开报告。 */
 typedef struct {
     uint32_t valid_blocks,rejected_blocks,candidates,matches,dropped,skipped_blocks,errors,evaluations;
@@ -24,6 +48,8 @@ typedef struct {
     uint32_t max_complete_ms,max_drop_ms;
     /** @brief SEARCH报告交给日志回调的次数及待发报告因覆盖/清历史丢失的次数，分别饱和；不代表PC确认。 */
     uint32_t report_emitted,report_dropped;
+    /** @brief 候选PCM切片交接给sink的次数、其中被裁剪(左或右)的次数、补过右尾部的次数及未交接(无sink/无内容)次数。 */
+    uint32_t capture_ok,capture_clamped,capture_tail,capture_miss;
     uint16_t last_scanned,last_scores,max_scanned,max_scores;
     uint8_t pending;
     bool configured,staging;
@@ -67,4 +93,11 @@ void ChirpService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot);
  * @note 毫秒计数粒度不能证明微秒级实时预算；没有物理识别概率。
  */
 void ChirpService_GetSnapshot(ChirpServiceSnapshot *out);
+/**
+ * @brief 设置候选PCM切片消费回调；在下一个任务缓存时生效。
+ * @param sink 可为NULL清除；回调仅前台、每次完整任务以零拷贝交接一次，返回前须消费切片。
+ * @return 无返回值。
+ * @note 须在ChirpService_Init之后调用；sink不得修改服务状态或重入ChirpService。
+ */
+void ChirpService_SetCaptureSink(ChirpCaptureSink sink);
 #endif

@@ -20,6 +20,8 @@
 #include "Audio/audio_capture.h"
 #include "Audio/audio_time_anchor.h"
 #include "Audio/audio_time_map_monitor.h"
+#include "Detector/chirp_service.h"
+#include "Network/udp_chirp_capture.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -277,6 +279,47 @@ void UDPProbe_Process(uint32_t now_ms)
     assert(probe_initialized && now_ms == tick_ms);
     assert(lwip_calls > 0 && last_lwip_tick_ms == now_ms);
     ++probe_calls;
+}
+
+static bool capture_initialized;
+static unsigned capture_sends;
+static unsigned sink_register_calls;
+/**
+ * @brief   模拟候选PCM捕获UDP初始化：仅记录初始化状态，不发送。
+ * @param   now_ms 当前测试毫秒计数。
+ * @param   log 应非NULL的日志回调，用于元数据行。
+ * @return  无返回值（void）。
+ * @note    仅主机桩；与心跳/探测计数互相独立。
+ */
+void UDPChirpCapture_Init(uint32_t now_ms, void (*log)(const char *, int))
+{
+    assert(now_ms == tick_ms && log != NULL);
+    capture_initialized = true;
+    capture_sends = 0;
+}
+/**
+ * @brief   模拟候选PCM切片发送：核对初始化与切片字段，不真的发送。
+ * @param   slice 非NULL只读切片。
+ * @return  true表示模拟成功。
+ * @note    仅主机桩；不保留slice指针。
+ */
+bool UDPChirpCapture_Send(const ChirpCaptureSlice *slice)
+{
+    assert(capture_initialized && slice != NULL && slice->samples != NULL &&
+           slice->frames != 0U && slice->session != 0U);
+    ++capture_sends;
+    return true;
+}
+/**
+ * @brief   模拟候选PCM切片回调注册。
+ * @param   sink 可为NULL的回调。
+ * @return  无返回值（void）。
+ * @note    仅主机桩；不校验回调节点。
+ */
+void ChirpService_SetCaptureSink(ChirpCaptureSink sink)
+{
+    ++sink_register_calls;
+    assert(sink != NULL);
 }
 
 /**

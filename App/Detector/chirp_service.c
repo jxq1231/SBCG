@@ -24,6 +24,14 @@ static const SoundDetectorConfig gate_config={64U,128U,64U,2U,8U,24000U};
 static int16_t copied[CHIRP_SERVICE_HISTORY_FRAMES+BSP_AUDIO_HALF_FRAMES];
 /* 活动任务完整输入独立于下一块复制，防止慢调度时搜索半途丢失数据。 */
 static int16_t job_samples[CHIRP_SERVICE_JOB_SAMPLES];
+/* 候选附近PCM捕获定界缓冲及元数据；仅在End验证过、任务缓存时刻与完成时填充。
+   固定放于音频DMA区之后NOLOAD预留段，避免BSS挤占0x20010000前的DTCM空间。 */
+static int16_t capture[CHIRP_CAPTURE_FRAMES]
+    __attribute__((section(".ChirpCaptureSection"),aligned(32)));
+static uint64_t capture_first,capture_hint,capture_wanted;
+static uint32_t capture_session;
+static uint16_t capture_frames;
+static bool capture_left_clamped,capture_right_clamped,capture_tail_topup;
 typedef struct {
     uint64_t first,next,last,hint,raw_first;
     uint32_t completed_ms,id;
@@ -55,10 +63,14 @@ static bool have_copy,stage_valid,stage_contiguous,job_cached;
 static uint64_t job_first;
 static uint32_t last_process_ms;
 static bool have_process_time,diagnostic_next;
+static ChirpCaptureSink sink;
 /** @brief 搜索丢弃的互斥主原因；NONE表示完整完成，不是丢弃。 */
 typedef enum { DROP_NONE,DROP_EXPIRED,DROP_HISTORY,DROP_FULL,DROP_RANGE,DROP_RESET } DropReason;
 _Static_assert(sizeof copied==22528U,"Chirp CPU copy buffer size changed");
 _Static_assert(sizeof job_samples==5312U,"Chirp job snapshot size changed");
+_Static_assert(sizeof capture==17088U,"Chirp capture buffer size changed");
+_Static_assert(CHIRP_CAPTURE_LEFT+CHIRP_TEMPLATE_FRAMES+CHIRP_CAPTURE_RIGHT<=CHIRP_CAPTURE_FRAMES,
+    "Capture span must fit the bounded capture buffer");
 _Static_assert(CHIRP_SERVICE_JOB_SAMPLES==CHIRP_TEMPLATE_FRAMES+
     CHIRP_SERVICE_SEARCH_BEFORE+CHIRP_SERVICE_SEARCH_AFTER,"Job input must cover entire search");
 /* 帧0截断后的最短搜索仍有65窗；待发成功报告的下一轮不能完成另一个任务。 */
@@ -177,6 +189,7 @@ static void ClearHistory(void)
     RecordDrop(DROP_RESET,count);head=count=0U;have_copy=false;prefix_count=scan_offset=0U;
     job_cached=false;
     if(report_pending){report_pending=false;Add(&state.report_dropped,1U);}
+    capture_frames=0U;capture_tail_topup=false;
     (void)SoundDetector_Reset(&gate);
 }
 /** @brief 取当前CPU副本最早有效绝对帧，无参数；调用前须have_copy。 */
@@ -199,6 +212,7 @@ bool ChirpService_Init(uint32_t now_ms,uint8_t channel,void (*log)(const char *,
     job_cached=report_pending=false;pending_report=(SearchReport){0};
     have_process_time=diagnostic_next=false;last_process_ms=now_ms;
     prefix_count=scan_offset=0U;last_state_ms=now_ms;sequence=0U;
+    sink=NULL;capture_frames=0U;capture_tail_topup=false;
     const bool ready=ChirpWindow_Init(&reference,ChirpTemplate_PCM,CHIRP_TEMPLATE_FRAMES) &&
         SoundDetector_Init(&gate,&gate_config);
     state.configured=ready && channel<2U && log!=NULL;
@@ -206,7 +220,8 @@ bool ChirpService_Init(uint32_t now_ms,uint8_t channel,void (*log)(const char *,
     char line[256];
     Emit(line,snprintf(line,sizeof line,
         "$CHIRP_INIT,RESULT=OK,CH=%u,TEMPLATE=2K6K50MS,SCAN=%u,SCORE=8,BEFORE=192,AFTER=64,"
-        "CACHE_FRAMES=2656,JOB_MS=1500,RMS=64,CORR_PPM=800000,GATE_RMS=128,PROFILE=EXPERIMENTAL,SYNC=0,DIAG=2\r\n",
+        "CACHE_FRAMES=2656,JOB_MS=1500,RMS=64,CORR_PPM=800000,GATE_RMS=128,PROFILE=EXPERIMENTAL,SYNC=0,"
+        "DIAG=3,CAPT=8544,L=2048,R=2048\r\n",
         (unsigned)channel,(unsigned)CHIRP_SERVICE_SCAN_BUDGET));
     return true;
 }
@@ -306,6 +321,69 @@ static void Scan(void)
     }
 }
 /**
+ * @brief 从当前已验证副本复制[from,to)帧到捕获缓冲的out_from起的连续位置。
+ * @param out_from 捕获缓冲写入起点，缓存填充为0，右尾补充为已有帧数。
+ * @param from 起始绝对帧，须不小于FirstAvailable()。
+ * @param to 结束绝对帧（不含），不得大于copied_end。
+ * @return 实际复制帧数，0表示无可用输入。
+ * @note 仅前台；调用方保证from/to在已验证范围内，写入不越过CHIRP_CAPTURE_FRAMES。
+ */
+static uint16_t CopyCaptureRange(uint16_t out_from,uint64_t from,uint64_t to)
+{
+    uint16_t n=0U;
+    while(from<to && (uint16_t)(out_from+n)<CHIRP_CAPTURE_FRAMES){
+        const uint64_t index=from>=copied_first ?
+            CHIRP_SERVICE_HISTORY_FRAMES+(from-copied_first):
+            CHIRP_SERVICE_HISTORY_FRAMES-(copied_first-from);
+        capture[out_from+n]=copied[(uint32_t)index];
+        ++n;++from;
+    }
+    return n;
+}
+/**
+ * @brief 在任务首次缓存搜索输入时，把候选附近End验证窗口复制进定界捕获缓冲。
+ * @param job 非NULL只读活动任务，仅本次借用；hint为候选起点。
+ * @return 无返回值。
+ * @note 跨度左2048+模板2400+右2048，按可用已验证范围两端裁剪并记录标志；
+ *       未注册sink时跳过复制，不产生搜索/匹配开销。
+ */
+static void CaptureCache(const SearchJob *job)
+{
+    capture_frames=0U;capture_tail_topup=false;
+    capture_left_clamped=false;capture_right_clamped=false;
+    if(sink==NULL)return;
+    if(job->hint>UINT64_MAX-(CHIRP_CAPTURE_LEFT+CHIRP_TEMPLATE_FRAMES+CHIRP_CAPTURE_RIGHT))return;
+    const uint64_t wanted=job->hint+CHIRP_CAPTURE_LEFT+CHIRP_TEMPLATE_FRAMES+CHIRP_CAPTURE_RIGHT;
+    uint64_t lo=job->hint>CHIRP_CAPTURE_LEFT ? job->hint-CHIRP_CAPTURE_LEFT:0U;
+    if(lo<FirstAvailable()){lo=FirstAvailable();capture_left_clamped=true;}
+    const uint64_t hi=wanted<copied_end ? wanted:copied_end;
+    if(hi<wanted)capture_right_clamped=true;
+    if(hi<=lo)return;
+    const uint16_t n=CopyCaptureRange(0U,lo,hi);
+    if(n==0U)return;
+    capture_first=lo;capture_frames=n;capture_session=copied_session;
+    capture_hint=job->hint;capture_wanted=wanted;
+}
+/**
+ * @brief 任务完成时若右端因数据未到被裁剪且后续块已到，则就地补充右尾。
+ * @return 无返回值。
+ * @note 会话变化(清历史)或已复制内容游出可用范围时不拼接，只保留已有的定界内容。
+ */
+static void CaptureTopUp(void)
+{
+    if(capture_frames==0U || !capture_right_clamped)return;
+    if(capture_session!=copied_session)return;
+    const uint64_t from=capture_first+capture_frames;
+    if(from<FirstAvailable())return;
+    const uint64_t to=capture_wanted<copied_end ? capture_wanted:copied_end;
+    if(to<=from)return;
+    const uint16_t n=CopyCaptureRange(capture_frames,from,to);
+    if(n==0U)return;
+    capture_frames=(uint16_t)(capture_frames+n);
+    if(to>=capture_wanted)capture_right_clamped=false;
+    capture_tail_topup=true;
+}
+/**
  * @brief 评分至多8个窗口，独立聚合原始峰与有效匹配，完成时保存标量报告及终结时延。
  * @param now_ms 最新HAL毫秒，任务1500ms过期。
  * @param publish 非NULL独占输出；返回true时含最高评分完整搜索结果。
@@ -334,6 +412,7 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
             }
             memcpy(job_samples,copied+(uint32_t)offset,length*sizeof job_samples[0]);
             job_first=job->next;job_cached=true;
+            CaptureCache(job);
         }
         ChirpMatch match;ChirpWindowDiagnostic diagnostic;
         const bool found=ChirpWindow_ScoreWithDiagnostic(&reference,
@@ -357,6 +436,21 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
             /* 本服务没有观察搜索完成瞬间的采样游标，不填造confirmed_frame。 */
             if(matched){*publish=job->best;Add(&state.matches,1U);}
             StoreReport(job);
+            CaptureTopUp();
+            if(capture_frames!=0U && sink!=NULL){
+                const ChirpCaptureSlice slice={.samples=capture,.frames=capture_frames,
+                    .session=capture_session,.id=job->id,.first_frame=capture_first,
+                    .hint_frame=capture_hint,.raw_first_frame=job->raw_first,
+                    .left_clamped=capture_left_clamped,.right_clamped=capture_right_clamped,
+                    .tail_topup=capture_tail_topup};
+                sink(&slice);
+                Add(&state.capture_ok,1U);
+                if(capture_left_clamped||capture_right_clamped)Add(&state.capture_clamped,1U);
+                if(capture_tail_topup)Add(&state.capture_tail,1U);
+            }else{
+                Add(&state.capture_miss,1U);
+            }
+            capture_frames=0U;capture_tail_topup=false;
             /* 在本次完成分支实时读取tick，时延包含本调用内已执行的扫描/评分，而非Process入口时刻。 */
             RecordLatency(BSP_Console_GetTickMs(),job->completed_ms,true);
             Add(&state.completed_jobs,1U);Pop(DROP_NONE);return matched;
@@ -441,3 +535,11 @@ void ChirpService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
  */
 void ChirpService_GetSnapshot(ChirpServiceSnapshot *out)
 {if(out!=NULL){*out=state;out->pending=count;}}
+/**
+ * @brief 设置候选PCM切片消费回调；在下一个任务缓存时生效，须在Init之后调用。
+ * @param new_sink 可为NULL清除；回调仅前台、每次完整任务以零拷贝交接一次，返回前须消费切片。
+ * @return 无返回值。
+ * @note 回调不得修改服务状态或重入ChirpService；先前已缓存任务的捕获仍按旧配置完成。
+ */
+void ChirpService_SetCaptureSink(ChirpCaptureSink new_sink)
+{sink=new_sink;}

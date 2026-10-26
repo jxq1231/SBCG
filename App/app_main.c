@@ -4,7 +4,7 @@
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
- *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时交由各独立服务。
+ *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
 #include "app_main.h"
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
@@ -21,6 +21,9 @@
 #endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
+#endif
+#ifdef SBCG_USE_PPS
+#include "Sync/pps_service.h"
 #endif
 #include "BSP/bsp_console.h"
 #ifdef SBCG_USE_BOARD_SYNC
@@ -42,11 +45,15 @@
 #ifdef SBCG_USE_AUDIO_MAP
 #include "Audio/audio_time_map_monitor.h"
 #endif
+#ifdef SBCG_USE_CHIRP
+#include "Detector/chirp_service.h"
+#endif
 #ifdef SBCG_USE_LWIP
 #include "lwip.h"
 #include "Network/udp_heartbeat.h"
 #include "Network/udp_probe.h"
 #include "Network/udp_time_exchange.h"
+#include "Network/udp_chirp_capture.h"
 #include "Sync/ptp_clock.h"
 #include "Sync/ptp_rx.h"
 #include "Sync/ptp_tx.h"
@@ -63,7 +70,7 @@
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
 #if defined(SBCG_USE_CHIRP)
-#define APP_FIRMWARE_ID "SBCG-M4.2-SEARCHDIAG"
+#define APP_FIRMWARE_ID "SBCG-M4.2-PCMCAP"
 #elif defined(SBCG_USE_TOUCHGFX) && defined(SBCG_USE_RESET_DIAGNOSTIC)
 #define APP_FIRMWARE_ID "SBCG-U3.1-RESET"
 #elif defined(SBCG_USE_TOUCHGFX)
@@ -77,7 +84,11 @@
 #elif defined(SBCG_USE_SOUND_DETECTOR)
 #define APP_FIRMWARE_ID "SBCG-M4.1-CAND-R1"
 #elif defined(SBCG_USE_BOARD_SYNC)
+#ifdef SBCG_USE_PPS
+#define APP_FIRMWARE_ID "SBCG-M2.3-PPS"
+#else
 #define APP_FIRMWARE_ID "SBCG-M2.3-SYNC"
+#endif
 #elif defined(SBCG_USE_BOARD_IDENTITY)
 #define APP_FIRMWARE_ID "SBCG-M2.3-ROLE"
 #elif defined(SBCG_USE_AUDIO_MAP)
@@ -294,6 +305,16 @@ static void ReportReset(void)
 }
 #endif
 
+#if defined(SBCG_USE_LWIP) && defined(SBCG_USE_CHIRP)
+/**
+ * @brief 将ChirpService候选附近PCM切片转交UDP下传；sink仅前台借用一次。
+ * @param slice 非NULL只读切片，仅本调用有效，不保存指针。
+ * @return 无返回值。
+ */
+static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
+{(void)UDPChirpCapture_Send(slice);}
+#endif
+
 /**
  * @brief 读取身份并按依赖顺序初始化，诊断版本在BOOT后排队一次复位副本。
  * @return 无返回值。
@@ -372,6 +393,7 @@ void App_Init(void)
 #ifdef SBCG_USE_LWIP
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
     UDPProbe_Init(last_heartbeat_ms, info.uid_words, SendLine);
+    UDPChirpCapture_Init(last_heartbeat_ms, SendLine);
     PtpClock_Init(BSP_Console_GetTickMs(), SendLine);
     PtpRx_Init(BSP_Console_GetTickMs(), SendLine);
     PtpTx_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
@@ -394,6 +416,10 @@ void App_Init(void)
     TemperatureConsole_Init(SendLine);
 #ifdef SBCG_USE_AUDIO
     AudioCapture_Init(BSP_Console_GetTickMs(), SendLine);
+#endif
+#if defined(SBCG_USE_LWIP) && defined(SBCG_USE_CHIRP)
+    /* 候选附近End验证PCM快照经UDP下传；Init已清状态，注册sink不改变检测结果。 */
+    ChirpService_SetCaptureSink(ChirpCaptureToUdp);
 #endif
 #ifdef SBCG_USE_AUDIO_ANCHOR
     AudioTimeAnchor_Init(BSP_Console_GetTickMs(), SendLine);
@@ -489,6 +515,10 @@ void App_Process(void)
 #ifdef SBCG_USE_BOARD_SYNC
     /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
     TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#ifdef SBCG_USE_PPS
+    /* DHT拉低只禁止新目标排程；安全截止及已到达目标的消费每轮仍须执行。 */
+    PpsService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+#endif
 #endif
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #ifdef SBCG_USE_AUDIO
