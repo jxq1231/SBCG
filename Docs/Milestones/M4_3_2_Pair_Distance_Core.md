@@ -6,8 +6,8 @@
 
 在两板硬件联调之前，先完成可主机验证的纯软件核心：`8811e57 feat: add two-board event pairing distance core`。
 
-- [sound_pair.c](App/Measure/sound_pair.c)：固定队列配对、乱序/重复/漏检/歧义拒绝、质量/类型/共同时间域门控、`d=c|tB−tA|`、A/B方向；
-- [sound_event_wire.c](App/Network/sound_event_wire.c)：固定36字节显式大端序事件线协议，编解码与字段/长度/魔数校验；
+- [sound_pair.c](../../App/Measure/sound_pair.c)：固定队列配对、乱序/重复/漏检/歧义拒绝、质量/类型/共同时间域门控、`d=c|tB−tA|`、A/B方向；
+- [sound_event_wire.c](../../App/Network/sound_event_wire.c)：固定36字节显式大端序事件线协议，编解码与字段/长度/魔数校验；
 - O0/O2主机测试覆盖距离/方向、乱序、重复、歧义、超时、质量/类型/时间域/量程、线协议roundtrip和坏包；
 - Debug/Release构建通过，未烧录、未接交换机/两板、未产生真实距离验收。
 
