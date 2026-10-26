@@ -20,7 +20,7 @@
 ## 边界
 
 - **周期性不等于标准声身份**：重复击掌在相同间隔下也可能被标为候选；
-- App已把每个成功TOA事件喂入监控并在状态变化时输出`$STANDARD_SEQUENCE`（带`DIAG=1,SYNC=0`）；尚未用它门控MeasurementResult/UDP。
+- App已把每个成功TOA事件喂入监控并在状态变化时输出`$STANDARD_SEQUENCE`（带`DIAG=1,SYNC=0`）；App的测量发布回调现在要求序列已形成且quality≥50，否则撤销MeasurementResult。事件UDP仍发送诊断事件，尚未按序列阻断。
 - 标准声模板相关仍MATCH0；本模块不宣称标准识别通过；
 - 未硬件/两板验证；事件质量当前尚未由真实波形质量指标提供。
 

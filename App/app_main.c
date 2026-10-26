@@ -340,8 +340,14 @@ static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
 static void PublishMeasurement(const SoundPairResult *pair)
 {
     TemperatureSnapshot temperature;
+    StandardSequenceSnapshot sequence;
     const uint32_t now_ms=BSP_Console_GetTickMs();
     TemperatureService_GetSnapshot(now_ms,&temperature);
+    StandardSequence_Get(&standard_sequence,&sequence);
+    if(!sequence.detected || sequence.quality<50U){
+        MeasurementResult_Invalidate(now_ms);
+        return;
+    }
     (void)MeasurementResult_PublishPair(pair,&temperature,now_ms);
 }
 #endif

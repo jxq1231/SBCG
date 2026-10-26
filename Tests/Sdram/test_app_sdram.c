@@ -56,6 +56,9 @@ bool StandardSequence_Init(StandardSequence *s,const StandardSequenceConfig *c){
 bool StandardSequence_Push(StandardSequence *s,uint64_t t,uint8_t q){(void)s;(void)t;(void)q;return false;}
 /** @brief App测试桩：清零序列快照。 */
 void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o){(void)s;if(o)memset(o,0,sizeof *o);}
+
+/** @brief App测试桩：撤销权威测量结果。 */
+void MeasurementResult_Invalidate(uint32_t now){(void)now;}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);
