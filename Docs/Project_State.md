@@ -20,6 +20,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**P1受控采集已完成一次真实试跑（2026-10-26）。** trial `p1-20261026-01` 记录BOOT/UID、`SBCG-M4.2-PCMCAP`本地ELF SHA `286940ae…`（flash verify exit0）、CH0、RATE47976、WAV 10起点及前后12秒静默；13 PCM、12 SOUND、12窗，现有账本/回放 current_envelope **slot0..9全出现**（另1背景候选 slot13），TOOL_CHECK PASS、无格式/硬失败。该结果仅证采集/回放全10槽，不是物理TOA/PTP/双板/识别通过；下一步多条件重复聚合。详见[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)。
+
 **M4.2.5失败搜索诊断已硬件复验；标准音仍0/10。** A板运行`SBCG-M4.2-SEARCHDIAG`（Debug `c219af98…`）：24个完整任务全部LOW_CORR，最高raw相关0.773821<0.80，RMS2265–2302、N=257/V=257、LR/Z/I=0，MATCH0；10个高能量候选、7个高相关任务；RPT24/RLOST0，资源/日志/UI错误全0。数字WAV与模板相关1.0。诊断链已实机工作，失败在门限前相关度，不是搜索预算/范围/低RMS；独立只读复核PASS_WITH_RESERVATIONS（无阻塞，低风险流程/测试项）。下一步保存PCM/受控声学实验，不盲目降门限，识别/PTP/测距仍未验收。[M4.2.5复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。
 
 **M4.2.1扫频匹配核心的软件范围已完成。** 固定2–6kHz/50ms模板及流式正确性基线经O0/O2各3001个C断言、38组独立参考验证。后续M4.2.2已注册固定模板和有界单窗评分，原逐采样流式直接相关仍仅作基线，不走板端实时路径。[历史软件证据](Milestones/M4_2_1_Chirp_Matcher_Core.md)。
