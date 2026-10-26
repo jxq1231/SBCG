@@ -1,10 +1,10 @@
 # 标准音频选型与现有文件
 
-<!-- doc-status: current-candidate-assets-active-recognition-failed; reviewed: 2026-10-26 -->
+<!-- doc-status: selected-standard-sound-recognition-pending; reviewed: 2026-10-27 -->
 
 ## 结论和当前边界
 
-2026-10-25用户确认：**老师允许标准音频自行选择**。任务书PDF中“实验室提供”的文字保留为原文历史依据，本次选型按老师最新说明执行。
+2026-10-25用户确认、2026-10-27再次确认：**老师允许标准音频自行选择，当前仓库的`standard_chirp_2-6khz_10x_20s.wav`被选为正式标准声**。任务书PDF中“实验室提供”的文字保留为原文历史依据，本次选型按老师最新说明执行。选择契约固定于[Data/Audio/standard_selection.json](../Data/Audio/standard_selection.json)，可用`python -B Analysis/verify_standard_selection.py`只读复核文件哈希/事件时刻/编译模板哈希。
 
 建议以 **2–6kHz、50ms线性上扫频（chirp），48kHz、单声道PCM16 WAV** 作为首个标准音候选，后续采用模板相关与质量门限定位。它适合作为当前手机外放、板载麦克风链路的起点；尚未完成手机/音箱/教室的对照录音，不能称为普遍最优，也没有实测识别概率。
 
@@ -41,7 +41,7 @@
 
 ## 本次验证能说明什么
 
-`candidate_manifest.json` 记录合成配方、事件采样点、实际WAV格式、SHA256和理想自相关指标。`reference_source.json` 记录下载原件与许可；[署名说明](../Data/Audio/ATTRIBUTION.md)随文件保留。
+`Data/Audio/standard_selection.json`是正式选型契约，记录播放文件/模板哈希、10次播放时刻、播放条件和识别未通过边界；`candidate_manifest.json`仍记录合成配方、事件采样点、实际WAV格式、SHA256和理想自相关指标。`reference_source.json` 记录下载原件与许可；[署名说明](../Data/Audio/ATTRIBUTION.md)随文件保留。
 
 生成脚本会核对两个WAV的全部PCM样本、10个事件位置和全部静音、无截幅、格式、清单及下载原件散列。自相关对照使用同样50ms长度/渐变包络的3kHz单音，指标为 `max(|R(lag)|)/R(0)`，限定正延迟至少24点（0.5ms）。这是理想数字波形的周期歧义指标，数值更小表示这个延迟区间中的竞争峰较弱；**不是有噪声检测率，也不代表主峰宽度、房间多径表现或板端精度**。相关运算的定义可参考 [SciPy官方文档](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.correlate.html)。
 

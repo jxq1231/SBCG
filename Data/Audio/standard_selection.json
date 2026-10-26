@@ -1,0 +1,28 @@
+{
+  "status": "selected_standard_sound",
+  "selection_date": "2026-10-27",
+  "selection_basis": "Instructor allowed the team to choose its own standard sound; the existing local chirp asset is selected.",
+  "playback_file": "standard_chirp_2-6khz_10x_20s.wav",
+  "playback_file_sha256": "56dedc456145b5f268c8fa45e3e6fbcccc618eec5b961135ea7beaccf192878a",
+  "template_file": "chirp_2-6khz_50ms_template.wav",
+  "template_file_sha256": "c37114332a698910e12ac855b47b566df229a3c7ec01414371e32969da3e084d",
+  "format": {
+    "sample_rate_hz": 48000,
+    "channels": 1,
+    "sample_width_bytes": 2,
+    "duration_s": 20.0,
+    "event_duration_ms": 50,
+    "start_frequency_hz": 2000,
+    "end_frequency_hz_at_50ms_exclusive": 6000
+  },
+  "playback_event_onsets_s": [1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0],
+  "standard_event_definition": "ten identical 50 ms linear chirps at 2 s spacing in the 20 s playback file",
+  "playback_device": "fixed external player chosen by the team; record model/volume/position per trial",
+  "recognition_evidence": {
+    "status": "not_passed",
+    "last_observed": "2026-10-26 PC speaker trial: 10 energy/search responses, CHIRP MATCH=0, max raw correlation 0.773821",
+    "scope": "template correlation on the selected standard sound is not yet accepted; event energy/TOA diagnostic path must not be reported as standard recognition"
+  },
+  "scope": "Software/asset selection only; no hardware, synced two-board, accuracy or course-score verification is implied.",
+  "source_manifest": "candidate_manifest.json"
+}
