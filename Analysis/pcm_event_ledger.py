@@ -63,7 +63,7 @@ def parse_trial_records(trial: str, run_path: Path) -> (List[Record], List[str])
     records: List[Record] = []
     problems: List[str] = []
     recognized = {"$SOUND_CAND", "$SOUND_TIME", "$CHIRP_SEARCH",
-                  "$CHIRP_CAPTURE", "BOOT"}
+                  "$CHIRP_CAPTURE", "BOOT", "$BOOT"}
     with run_path.open(encoding="utf-8") as handle:
         for line_no, raw_line in enumerate(handle, start=1):
             raw_line = raw_line.rstrip("\r\n")
@@ -71,11 +71,14 @@ def parse_trial_records(trial: str, run_path: Path) -> (List[Record], List[str])
                 continue
             try:
                 host = json.loads(raw_line)
-                host_sec = host.get("t")
-                text = host.get("line", "")
-            except (ValueError, TypeError):
+            except ValueError:
                 problems.append(f"{trial}:{line_no}: bad json host record")
                 continue
+            if not isinstance(host, dict):
+                problems.append(f"{trial}:{line_no}: host record not object")
+                continue
+            host_sec = host.get("t")
+            text = host.get("line", "")
             if not isinstance(text, str) or not text:
                 continue
             tag = line_tag(text)
@@ -94,7 +97,7 @@ def boot_segments(records: List[Record]) -> List[str]:
     current = "unknown"
     boots = 0
     for record in records:
-        if record.kind == "BOOT":
+        if record.kind in ("BOOT", "$BOOT"):
             boots += 1
             current = f"boot{boots}"
             segments.append("boundary")
@@ -157,10 +160,11 @@ class Ledger:
     isolation: Dict[str, List[str]]
 
 
-def event_key(kind: str, fields: Dict[str, str]) -> str:
+def event_key(kind: str, fields: Dict[str, str], domain: str = "?",
+              first: str = "?") -> str:
     session = fields.get("SESSION", "?")
-    ident = fields.get("SEQ") or fields.get("ID") or fields.get("FIRST") or "?"
-    return f"{kind}:{session}:{ident}"
+    ident = fields.get("SEQ") or fields.get("ID") or first or "?"
+    return f"{kind}:{domain}:{session}:{first}:{ident}"
 
 
 def _frame_range(fields: Dict[str, str]):
@@ -178,7 +182,9 @@ def build_ledger(records: List[Record], trial: str,
     problems = list(scan_problems or ())
     events = [LedgerEvent(kind=r.kind, trial=trial, line_no=r.line_no,
                           host_sec=r.host_sec, raw=r.raw, domain=r.domain,
-                          key=event_key(r.kind, r.fields), fields=r.fields)
+                          key=event_key(r.kind, r.fields, r.domain,
+                                        r.fields.get("FIRST")),
+                          fields=r.fields)
               for r in records]
     edges: List[LedgerEdge] = []
     domains: Dict[str, Dict[str, object]] = {}
@@ -210,10 +216,10 @@ def build_ledger(records: List[Record], trial: str,
     def conflict_free(domain: str) -> bool:
         return not domains[domain]["conflict"]
 
-    # Detect id/frame regressions inside a domain.
+    # Detect log-order regressions inside a domain (events keep record order =
+    # serial line order; ids/frames must not go backwards, seqs must rise).
     for domain, dom in domains.items():
-        captures = sorted(dom["captures"],
-                          key=lambda e: (to_int(e.fields.get("ID", "0")) or 0))
+        captures = dom["captures"]
         ids = [to_int(e.fields.get("ID")) for e in captures]
         firsts = [to_int(e.fields.get("FIRST")) for e in captures]
         if any(i is None for i in ids):
@@ -226,6 +232,17 @@ def build_ledger(records: List[Record], trial: str,
             if a is not None and b is not None and b < a:
                 dom["conflict"] = True
                 problems.append(f"{domain}: capture first regresses {a}->{b}")
+        sounds = dom["sounds"]
+        seqs = [to_int(e.fields.get("SEQ")) for e in sounds]
+        sfirsts = [to_int(e.fields.get("FIRST")) for e in sounds]
+        for a, b in zip(seqs, seqs[1:]):
+            if a is not None and b is not None and b <= a:
+                dom["conflict"] = True
+                problems.append(f"{domain}: sound seq regresses {a}->{b}")
+        for a, b in zip(sfirsts, sfirsts[1:]):
+            if a is not None and b is not None and b < a:
+                dom["conflict"] = True
+                problems.append(f"{domain}: sound first regresses {a}->{b}")
 
     # Capture <-> search by id in the same domain, verifying frame overlap.
     for domain, dom in domains.items():
@@ -256,12 +273,9 @@ def build_ledger(records: List[Record], trial: str,
                         f"[{lo},{hi})")
             edges.append(edge)
 
-    # PCM entries link to captures by id.
+    # PCM entries link to captures; same id may exist in several boot domains,
+    # so keep every compatible candidate instead of overwriting to one domain.
     pcm_invalid = {"orphan_pcm": [], "orphan_json": [], "metadata_conflict": []}
-    capture_home: Dict[str, str] = {}
-    for domain, by_id in capture_by_id.items():
-        for ident in by_id:
-            capture_home[ident] = domain
     for entry in pcm_entries:
         ident = entry["id"]
         stem = f"{trial}:{ident}"
@@ -271,29 +285,77 @@ def build_ledger(records: List[Record], trial: str,
         if not entry["has_json"]:
             pcm_invalid["orphan_pcm"].append(stem)
             continue
-        if ident not in capture_home:
-            pcm_invalid["orphan_pcm"].append(stem)
-            problems.append(f"{trial}: pcm id {ident} has no capture record")
+        candidates = []
+        for domain, by_id in capture_by_id.items():
+            cap = by_id.get(ident)
+            if cap is None:
+                continue
+            json_meta = entry["json"]
+            ok = True
+            if to_int(json_meta.get("id")) not in (None, ident):
+                ok = False
+            session_json = to_int(json_meta.get("session"))
+            session_cap = cap.parse_int("SESSION")
+            if session_json is not None and session_cap is not None \
+                    and session_json != session_cap:
+                ok = False
+            first_json = entry["json"].get("first_frame")
+            first_cap = cap.parse_int("FIRST")
+            if first_json is not None and first_cap is not None \
+                    and int(first_json) != first_cap:
+                ok = False
+            frames_json = to_int(entry["json"].get("frames"))
+            frames_cap = cap.parse_int("FRAMES")
+            if frames_json is not None and frames_cap is not None \
+                    and frames_json != frames_cap:
+                ok = False
+                problems.append(
+                    f"{domain}: pcm {ident} frames {frames_json} != "
+                    f"capture {frames_cap}")
+            if ok:
+                candidates.append((domain, cap))
+            else:
+                problems.append(f"{trial}: pcm {ident} metadata mismatches "
+                                f"{domain} capture")
+        if not candidates:
+            pcm_invalid["metadata_conflict"].append(stem)
+            problems.append(f"{trial}: pcm {ident} matches no capture domain")
             continue
-        domain = capture_home[ident]
-        cap = capture_by_id[domain][ident]
-        if to_int(entry["json"].get("id")) != ident:
-            pcm_invalid["metadata_conflict"].append(stem)
-            problems.append(f"{trial}: pcm json id mismatch for {ident}")
-        if cap.parse_int("SESSION") is not None and to_int(entry["json"].get("session")) \
-                != cap.parse_int("SESSION"):
-            pcm_invalid["metadata_conflict"].append(stem)
-            problems.append(f"{trial}: pcm json session mismatch for {ident}")
-        first_frame = entry["json"].get("first_frame")
-        cap_first = cap.parse_int("FIRST")
-        if first_frame is not None and cap_first is not None \
-                and int(first_frame) != cap_first:
-            pcm_invalid["metadata_conflict"].append(stem)
-            problems.append(f"{trial}: pcm first frame {first_frame} != "
-                            f"capture {cap_first} for {ident}")
-        edges.append(LedgerEdge(
-            source=f"pcm:{trial}:{ident}", target=f"capture:{domain}:{ident}",
-            kind="pcm-capture", status="LINKED"))
+        if len(candidates) == 1:
+            domain, cap = candidates[0]
+            edges.append(LedgerEdge(
+                source=f"pcm:{trial}:{ident}",
+                target=f"capture:{domain}:{ident}",
+                kind="pcm-capture",
+                status="LINKED" if conflict_free(domain) else "CONFLICT_BLOCKED"))
+        else:
+            for domain, cap in candidates:
+                edges.append(LedgerEdge(
+                    source=f"pcm:{trial}:{ident}",
+                    target=f"capture:{domain}:{ident}",
+                    kind="pcm-capture", status="AMBIGUOUS"))
+            problems.append(f"{trial}: pcm {ident} matches {len(candidates)} "
+                            f"capture domains (ambiguous)")
+
+    # Search HINT/BEST vs pcm hint_frame/raw_first_frame cross-check.
+    pcm_json_by_id = {e["id"]: e.get("json", {}) for e in pcm_entries
+                      if e.get("has_json") and isinstance(e.get("json"), dict)}
+    for domain, dom in domains.items():
+        for search in dom["searches"]:
+            ident = search.parse_int("ID")
+            meta = pcm_json_by_id.get(ident)
+            if not meta:
+                continue
+            hint_j = to_int(meta.get("hint_frame"))
+            hint_s = search.parse_int("HINT")
+            if hint_s is not None and hint_j is not None and hint_s != hint_j:
+                problems.append(f"{domain}: search {ident} HINT {hint_s} != "
+                                f"pcm hint_frame {hint_j}")
+            best_s = search.parse_int("BEST")
+            raw_j = to_int(meta.get("raw_first_frame"))
+            if best_s is not None and raw_j is not None and best_s != raw_j:
+                problems.append(f"{domain}: search {ident} BEST {best_s} != "
+                                f"pcm raw_first_frame {raw_j}")
 
     # Sound <-> capture candidate edges by frame containment (channel unproven).
     for domain, dom in domains.items():
@@ -342,7 +404,7 @@ def build_ledger(records: List[Record], trial: str,
     isolation = {
         "orphan_pcm": pcm_invalid["orphan_pcm"],
         "orphan_json": pcm_invalid["orphan_json"],
-        "pcm_metadata_conflict": pcm_invalid["metadata_conflict"],
+        "metadata_conflict": pcm_invalid["metadata_conflict"],
     }
     return Ledger(trial=trial, events=events, edges=edges, domains=domains,
                   problems=problems, isolation=isolation)
@@ -352,18 +414,29 @@ def load_pcm_entry(directory: Path, stem: str, trial: str) -> Dict:
     """Describe one id*.pcm / id*.json pairing plus framing validation."""
     pcm_path = directory / (stem + ".pcm")
     json_path = directory / (stem + ".json")
-    entry = {"id": int(stem[2:]), "trial": trial, "has_pcm": pcm_path.exists(),
+    entry = {"id": None, "trial": trial, "has_pcm": pcm_path.exists(),
              "has_json": json_path.exists(),
              "domain": f"{trial}::unknown::?", "json": {}, "valid": True,
              "problem": None}
+    if not stem[2:].isdigit():
+        entry["valid"] = False
+        entry["problem"] = "non-numeric id"
+        return entry
+    entry["id"] = int(stem[2:])
     if json_path.exists():
         try:
-            entry["json"] = json.loads(json_path.read_text(encoding="utf-8")) or {}
+            parsed = json.loads(json_path.read_text(encoding="utf-8"))
         except ValueError:
             entry["json"] = {}
             entry["valid"] = False
             entry["problem"] = "bad json"
             return entry
+        if not isinstance(parsed, dict):
+            entry["json"] = {}
+            entry["valid"] = False
+            entry["problem"] = "bad json shape"
+            return entry
+        entry["json"] = parsed
     if not entry["has_pcm"]:
         entry["valid"] = False
         return entry

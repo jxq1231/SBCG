@@ -202,5 +202,134 @@ class PipelineTest(unittest.TestCase):
                                     "current_envelope"})
 
 
+class CliSaferTest(unittest.TestCase):
+    """Review-driven: space paths, NaN rejection, format-error gating."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.snap = Path(cls.tmp.name) / "snap"
+        ver = cls.snap / "peak_backtrack"
+        ver.mkdir(parents=True)
+        for name in ("toa_estimator.c", "toa_estimator.h"):
+            shutil.copy(ROOT / "App" / "Detector" / name, ver / name)
+        from toa_replay import compile_cli as build_cli
+        run = Path(cls.tmp.name) / "run"
+        run.mkdir()
+        code, cls.exe = build_cli(run, cls.snap, "peak_backtrack", "-O2")
+        if code != 0:
+            raise RuntimeError("cli build failed")
+        # NaN stub binary
+        stub_dir = Path(cls.tmp.name) / "stub"
+        stub_dir.mkdir()
+        (stub_dir / "toa_estimator.c").write_text(
+            '#include "toa_estimator.h"\n#include <math.h>\n'
+            "const ToaBackwardConfig ToaBackward_DefaultConfig={256U,128U,8U,4U};\n"
+            "const ToaEstimatorConfig ToaEstimator_DefaultConfig={32U,128U,4U};\n"
+            "bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *c,"
+            " const int16_t *s, double *o){"
+            "(void)c;(void)s;*o=NAN;return true;}\n"
+            "bool ToaEstimator_Estimate(const ToaEstimatorConfig *c,"
+            " const int16_t *s, double *o){(void)c;(void)s;(void)o;return false;}\n",
+            encoding="utf-8")
+        shutil.copy(ROOT / "App" / "Detector" / "toa_estimator.h",
+                    stub_dir / "toa_estimator.h")
+        cc = shutil.which("gcc")
+        cls.stub_exe = Path(cls.tmp.name) / "stub_cli.exe"
+        result = subprocess.run(
+            [cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pedantic",
+             "-I", str(stub_dir),
+             str(Path(__file__).resolve().parents[1] / "toa_replay_cli.c"),
+             str(stub_dir / "toa_estimator.c"), "-o", str(cls.stub_exe), "-lm"],
+            capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_space_in_path_survives(self):
+        from toa_replay import run_cli
+        space_dir = Path(self.tmp.name) / "space dir"
+        space_dir.mkdir()
+        window = space_dir / "two_spikes.pcm"
+        window.write_bytes(b"\x00\x00" * 256)
+        out = run_cli(self.exe, [window])
+        self.assertIn(str(window), out)
+        self.assertEqual(out[str(window)]["VALID"], "0")
+
+    def test_nan_fraction_rejected(self):
+        from toa_replay import run_cli
+        window = Path(self.tmp.name) / "ok.pcm"
+        window.write_bytes(make_pcm(256))
+        out = run_cli(self.stub_exe, [window])
+        self.assertEqual(out[str(window)]["VALID"], "0")
+        self.assertEqual(out[str(window)]["REASON"], "nonfinite")
+
+    def test_format_errors_fail_tool_check(self):
+        import subprocess as sp
+        tmp = Path(self.tmp.name) / "bad"
+        trial = "t1"
+        trial_dir = tmp / "Logs" / "Chirp" / trial
+        pcm_dir = tmp / "Logs" / "Chirp" / "PCM" / trial
+        trial_dir.mkdir(parents=True)
+        pcm_dir.mkdir(parents=True)
+        # one good-looking candidate + a capture with a wrong-format pcm
+        (trial_dir / "run.jsonl").write_text(
+            json.dumps({"t": 1.0, "line": "$CHIRP_CAPTURE,ID=1,SESSION=1,"
+                        "FIRST=100000,FRAMES=1000,CLAMP=0,TAIL=1,PKTS=2,"
+                        "TOTAL=2,RESULT=OK"}) + "\n" +
+            json.dumps({"t": 1.1, "line": "$SOUND_CAND,SEQ=1,SESSION=1,CH=0,"
+                        "FIRST=100500,CONFIRMED=100627,E_AC=1,PEAK=1,CLIP=0,"
+                        "LOCAL=1,SYNC=0,TOA_US=1000"}) + "\n",
+            encoding="utf-8")
+        # pcm byte count disagrees with json frames -> format error
+        (pcm_dir / "id1.pcm").write_bytes(b"\x00\x00" * 900)
+        (pcm_dir / "id1.json").write_text(
+            json.dumps({"id": 1, "session": 1, "frames": 1000,
+                        "first_frame": 100000}), encoding="utf-8")
+        out_root = tmp / "Replay"
+        run = sp.run([sys.executable, "-B",
+                      str(Path(__file__).resolve().parents[1] / "toa_replay.py"),
+                      "--trials", trial,
+                      "--output-root", str(out_root),
+                      "--root", str(tmp / "Logs" / "Chirp"),
+                      "--assets-dir", str(tmp / "NoAssets"),
+                      "--skip-synthetic"],
+                     capture_output=True, text=True, timeout=300)
+        self.assertNotEqual(run.returncode, 0)
+        summary = sorted(out_root.iterdir())[-1]
+        s = json.loads((summary / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(s["conclusions"]["TOOL_CHECK"], "FAIL")
+        self.assertTrue(s["format_errors"])
+
+
+class SlotGateTest(unittest.TestCase):
+    """Review-driven: cross-round gate must require one unique value per round."""
+
+    def test_one_round_repeated_three_times_is_not_complete(self):
+        from toa_replay import aggregate_diagnostics
+        rows = []
+        base_us = 10_000_000.0
+        # Only toaB-07 exists in the data (repeated three times); the other
+        # two rounds are absent entirely.
+        for trial in ("toaB-20261026-07", "toaB-20261026-07",
+                      "toaB-20261026-07"):
+            for slot in range(10):
+                frac = (base_us + slot * 2_000_000.0) * 48000 / 1e6
+                rows.append({"trial": trial, "sound_key": f"w:{trial}:{slot}",
+                             "offline_window_status": "OK", "anchor": 0,
+                             "replays": [
+                                 {"version": "current_envelope", "opt": "-O0",
+                                  "runs": [{"valid": True,
+                                            "fraction_frames": frac}]}]})
+        diagnostics = aggregate_diagnostics(rows, ["current_envelope"])
+        group = diagnostics["cross_round_by_group"]["B"]
+        self.assertFalse(
+            group["per_version"]["current_envelope"]
+            ["full_10_slot_consistency_possible"])
+
+
 if __name__ == "__main__":
     unittest.main()

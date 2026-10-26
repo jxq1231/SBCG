@@ -112,14 +112,109 @@ class LedgerTest(unittest.TestCase):
         meta3 = {"id": 3, "session": 1, "frames": 4}
         (self.root / "Logs/Chirp/PCM/t/id3.json").write_text(
             json.dumps(meta3), encoding="utf-8")
+        (self.root / "Logs/Chirp/PCM/t/id5.pcm").write_bytes(b"\x00\x00" * 8)
         ledger = self.build("t", [])
-        self.assertIn("t:2", ledger.isolation["orphan_pcm"])
+        self.assertIn("t:2", ledger.isolation["metadata_conflict"])
         self.assertIn("t:3", ledger.isolation["orphan_json"])
+        self.assertIn("t:5", ledger.isolation["orphan_pcm"])
         (self.root / "Logs/Chirp/PCM/t/id4.json").write_text(
             "{bad json", encoding="utf-8")
+        (self.root / "Logs/Chirp/PCM/t/id6.json").write_text(
+            "[]", encoding="utf-8")
         ledger = self.build("t", [])
         self.assertIn("t:4", ledger.isolation["orphan_json"])
+        self.assertIn("t:6", ledger.isolation["orphan_json"])
         self.assertTrue(any("bad json" in p for p in ledger.problems))
+
+    def test_negative_first_frame_regression_in_log_order(self):
+        # Same session logs ID2/FIRST200000 then ID1/FIRST100000: must be a
+        # regression even though sorting by id would hide it.
+        lines = [capture(2, first=200000), capture(1, first=100000)]
+        ledger = self.build("t1", lines)
+        self.assertTrue(next(iter(ledger.domains.values()))["conflict"])
+        self.assertTrue(any("regresses" in p for p in ledger.problems))
+
+    def test_dollar_boot_splits_domains(self):
+        lines = [capture(1, first=100000),
+                 "$BOOT,FW=x",
+                 capture(5, first=200000)]
+        ledger = self.build("t", lines)
+        capture_domains = {e.domain for e in ledger.events
+                           if e.kind == "$CHIRP_CAPTURE"}
+        self.assertEqual(len(capture_domains), 2)
+
+    def test_sound_seq_regression_flagged(self):
+        lines = [sound(2, 100500), sound(1, 110000), capture(1, first=100000)]
+        ledger = self.build("t", lines)
+        self.assertTrue(next(iter(ledger.domains.values()))["conflict"])
+        self.assertTrue(any("sound seq regresses" in p for p in ledger.problems))
+
+    def test_keys_include_domain_and_first(self):
+        # Two boot domains with identical SOUND SEQ1/SESSION1 must produce
+        # distinct event keys and distinct replay labels.
+        lines = [capture(1, first=100000), sound(1, 100500),
+                 "$BOOT,FW=x", capture(5, first=200000), sound(1, 201000)]
+        ledger = self.build("t", lines)
+        sound_keys = [e.key for e in ledger.events if e.kind == "$SOUND_CAND"]
+        self.assertEqual(len(set(sound_keys)), 2)
+
+    def test_pcm_links_only_matching_boot_domain(self):
+        # Same capture id before and after boot; pcm metadata matches the
+        # first boot only. The second domain must not swallow the pcm edge.
+        lines = [capture(1, first=100000, frames=1000),
+                 "$BOOT,FW=x", capture(1, first=200000, frames=1000)]
+        make_trial(self.root, "t", lines,
+                   pcm_files=[("id1", b"\x00\x00" * 2000,
+                               {"id": 1, "session": 1, "frames": 1000,
+                                "first_frame": 100000})])
+        records, _ = parse_trial_records("t", self.root / "Logs/Chirp/t/run.jsonl")
+        assign_domains(records, "t")
+        entries, scan_problems = scan_pcm_directory(
+            self.root / "Logs/Chirp/PCM/t", "t")
+        ledger = build_ledger(records, "t", entries, scan_problems)
+        pcm_edges = [e for e in ledger.edges if e.kind == "pcm-capture"]
+        self.assertEqual([e.status for e in pcm_edges], ["LINKED"])
+        self.assertEqual(len(pcm_edges), 1)
+
+    def test_frames_mismatch_is_metadata_conflict(self):
+        lines = [capture(1, first=100000, frames=1000)]
+        make_trial(self.root, "t", lines,
+                   pcm_files=[("id1", b"\x00\x00" * 14,
+                               {"id": 1, "session": 1, "frames": 7,
+                                "first_frame": 100000})])
+        records, _ = parse_trial_records("t", self.root / "Logs/Chirp/t/run.jsonl")
+        assign_domains(records, "t")
+        entries, scan_problems = scan_pcm_directory(
+            self.root / "Logs/Chirp/PCM/t", "t")
+        ledger = build_ledger(records, "t", entries, scan_problems)
+        self.assertTrue(["id1" for p in ledger.isolation["metadata_conflict"]])
+        pcm_edges = [e for e in ledger.edges if e.kind == "pcm-capture"]
+        self.assertEqual(len(pcm_edges), 0)
+
+    def test_search_hint_best_cross_check(self):
+        lines = ["$CHIRP_SEARCH,ID=1,SESSION=1,HINT=100064,LO=100000,HI=100512,"
+                 "BEST=100070,CORR_PPM=100,RMS=1,CLIP=0,INV=1,EDGE=0,MATCH=0,"
+                 "WHY=LOW_CORR,N=257,V=257,LR=0,Z=0,I=0",
+                 capture(1, first=100000, frames=1000)]
+        make_trial(self.root, "t", lines,
+                   pcm_files=[("id1", b"\x00\x00" * 1000,
+                               {"id": 1, "session": 1, "frames": 500,
+                                "first_frame": 100000,
+                                "hint_frame": 100066, "raw_first_frame": 100088})])
+        records, _ = parse_trial_records("t", self.root / "Logs/Chirp/t/run.jsonl")
+        assign_domains(records, "t")
+        entries, scan_problems = scan_pcm_directory(
+            self.root / "Logs/Chirp/PCM/t", "t")
+        ledger = build_ledger(records, "t", entries, scan_problems)
+        hits = [p for p in ledger.problems
+                if "pcm hint_frame" in p or "pcm raw_first_frame" in p]
+        self.assertEqual(len(hits), 2)
+
+    def test_non_numeric_pcm_id_is_listed(self):
+        make_trial(self.root, "t", [])
+        (self.root / "Logs/Chirp/PCM/t/idX.pcm").write_bytes(b"\x00\x00" * 4)
+        ledger = self.build("t", [])
+        self.assertTrue(any("non-numeric" in p for p in ledger.problems))
 
     def test_pcm_first_frame_conflict_with_capture(self):
         make_trial(self.root, "t", [capture(1, first=100000, frames=1000)],
@@ -130,7 +225,7 @@ class LedgerTest(unittest.TestCase):
         assign_domains(records, "t")
         entries, _ = scan_pcm_directory(self.root / "Logs/Chirp/PCM/t", "t")
         ledger = build_ledger(records, "t", entries)
-        self.assertTrue(["id1" for p in ledger.isolation["pcm_metadata_conflict"]])
+        self.assertTrue(["id1" for p in ledger.isolation["metadata_conflict"]])
 
     def test_orphan_candidate_kept(self):
         # Sound before the first capture range stays in the ledger.

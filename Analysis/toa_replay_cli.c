@@ -9,6 +9,7 @@
  *              运行由调用方编排，用于核对算法输出的可复现性。
  */
 #include "toa_estimator.h"
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -17,21 +18,21 @@
 
 /**
  * @brief   打印单窗口回放结果行。
- * @param   label 窗口文件路径，用作行首标识。
+ * @param   label 窗口文件路径，用作行尾标识（可能含空格）。
  * @param   valid 估算是否成功。
  * @param   fraction 成功时的子帧位置，失败时为0。
  * @param   reason 失败原因或空串。
  * @return  无返回值。
- * @note    行格式固定为 FILE=<label> VALID=<0|1> FRACTION=<.6f> REASON=<...>，
- *          调用方按输入顺序对齐。
+ * @note    行格式固定为 VALID=<0|1> FRACTION=<.6f> REASON=<...> FILE=<label>，
+ *          FILE 作为行末唯一 token，避免路径含空格时被拆断；调用方按输入顺序对齐。
  */
 static void Emit(const char *label, int valid, double fraction, const char *reason)
 {
     if (valid) {
-        printf("FILE=%s VALID=1 FRACTION=%.6f REASON=ok\n", label, fraction);
+        printf("VALID=1 FRACTION=%.6f REASON=ok FILE=%s\n", fraction, label);
     } else {
-        printf("FILE=%s VALID=0 FRACTION=0.000000 REASON=%s\n",
-               label, reason != 0 ? reason : "unknown");
+        printf("VALID=0 FRACTION=0.000000 REASON=%s FILE=%s\n",
+               reason != 0 ? reason : "unknown", label);
     }
 }
 
@@ -71,7 +72,7 @@ int main(int argc, char **argv)
             Emit(path, 0, 0.0, "estimate_failed");
             continue;
         }
-        if (fraction < 0.0 || fraction >= (double)TOA_WINDOW_FRAMES) {
+        if (isnan(fraction) || fraction < 0.0 || fraction >= (double)TOA_WINDOW_FRAMES) {
             Emit(path, 0, 0.0, "nonfinite");
             continue;
         }

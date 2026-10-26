@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python标准库、已有NumPy分析函数、现有主机GCC测试模式、项目原TOA C接口；运行产物放在Logs，摘要放在Docs。
 
-<!-- doc-status: planned-not-implemented; reviewed: 2026-10-26 -->
+<!-- doc-status: implemented-and-review-fixed; reviewed: 2026-10-26 -->
 
 ## 1. 当前目标与边界
 

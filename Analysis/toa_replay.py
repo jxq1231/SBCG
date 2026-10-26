@@ -35,6 +35,19 @@ TRIALS_DEFAULT = ["toa-20261026-04", "toa-20261026-05", "toa-20261026-06",
                   "toaC-20261026-01", "toaC-20261026-02", "toaC-20261026-03"]
 PEAK_REF = "c79bf25"
 
+FORMAT_MARKERS = ("bad json", "odd byte", "frames*2", "non-numeric",
+                  "bad json shape", "regresses", "metadata",
+                  "without capture", "no capture domain",
+                  "HINT ", "BEST ", "not object")
+
+
+def format_error(problem: str) -> bool:
+    """True when a ledger problem is an input-format defect rather than a
+    legitimate coverage gap (e.g. a timer-aligned candidate missing PCM)."""
+    if "outside every capture" in problem:
+        return False
+    return any(marker in problem for marker in FORMAT_MARKERS)
+
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -46,6 +59,7 @@ def sha256_path(path: Path) -> str:
 
 def run_git(args):
     return subprocess.run(["git"] + args, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
                           cwd=ROOT, check=True)
 
 
@@ -99,21 +113,32 @@ def compile_cli(run_dir, snapshot_dir, version, opt):
 
 
 def run_cli(exe, window_paths, chunk=250):
-    """Run the adapter over many windows, batching argv, return {label: row}."""
+    """Run the adapter over many windows, batching argv, return {label: row}.
+
+    The adapter prints FILE=<path> as the LAST token so paths containing
+    spaces survive the whitespace split of the earlier fields.
+    """
     results = {}
     for offset in range(0, len(window_paths), chunk):
         part = window_paths[offset:offset + chunk]
         proc = subprocess.run([str(exe)] + [str(p) for p in part],
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=120)
         if proc.returncode != 0:
             raise RuntimeError(f"cli exit {proc.returncode}: {proc.stderr[:200]}")
         for line in proc.stdout.splitlines():
-            fields = dict(item.split("=", 1) for item in line.split()
-                          if "=" in item)
-            label = fields.get("FILE")
-            if label is None:
-                raise RuntimeError(f"cli row missing FILE: {line!r}")
-            results[label] = fields
+            marker = "FILE="
+            index = line.rfind(marker)
+            if index < 0:
+                raise RuntimeError(f"cli row missing FILE marker: {line!r}")
+            label = line[index + len(marker):]
+            row = {}
+            for item in line[:index].split():
+                if "=" in item:
+                    key, _, value = item.partition("=")
+                    row[key] = value
+            results[label] = row
     return results
 
 
@@ -215,10 +240,13 @@ def main():
             continue
         trial_input["serial"] = {"bytes": serial_path.stat().st_size,
                                  "sha256": sha256_path(serial_path)}
-        summary_path = args.root / trial / "trial_summary.json"
+        summary_path = args.root / "PCM" / trial / "trial_summary.json"
         if summary_path.exists():
             trial_input["summary"] = {"bytes": summary_path.stat().st_size,
-                                      "sha256": sha256_path(summary_path)}
+                                      "sha256": sha256_path(summary_path),
+                                      "content": json.loads(
+                                          summary_path.read_text(
+                                              encoding="utf-8"))}
         stems = sorted({p.stem for p in pcm_dir.glob("id*.pcm")} |
                        {j.stem for j in pcm_dir.glob("id*.json")}) \
             if pcm_dir.exists() else []
@@ -257,9 +285,12 @@ def main():
     windows_dir = run_dir / "windows"
     windows_dir.mkdir()
     replay_rows = []
+    ledgers = {}
     conservation = {"raw_lines": 0, "events": 0, "sound_total": 0,
-                    "sound_replayable_pcm": 0, "windows_ok": 0}
+                    "sound_replayable_pcm": 0, "windows_ok": 0,
+                    "pcm_total": 0, "pcm_unused": 0}
     per_trial = {}
+    format_errors = []
 
     for trial in args.trials:
         serial_path = args.root / trial / "run.jsonl"
@@ -277,8 +308,11 @@ def main():
                         "ambiguous": 0, "orphan_sounds": 0}
         pcm_by_id = {}
         for entry in entries:
-            if entry["has_pcm"] and entry["has_json"]:
+            if entry["has_pcm"] and entry["has_json"] and entry["valid"]:
                 pcm_by_id[entry["id"]] = entry
+        for problem in problems:
+            if format_error(problem):
+                format_errors.append(f"{trial}: {problem}")
         for event in ledger.events:
             if event.kind != "$SOUND_CAND":
                 continue
@@ -298,9 +332,9 @@ def main():
                     "online_window_status": "UNKNOWN",
                     "firmware_binding": "UNKNOWN", "replays": []})
                 continue
-            if any(e.status == "AMBIGUOUS" for e in edges):
+            ambiguous = any(e.status == "AMBIGUOUS" for e in edges)
+            if ambiguous:
                 trial_detail["ambiguous"] += 1
-            anchors = {}
             for edge in edges:
                 target = edge.target  # capture:<domain>:<id>
                 ident = target.rsplit(":", 1)[-1]
@@ -330,8 +364,9 @@ def main():
                                         "on-device version not provable",
                        "replays": []}
                 if win_status == "OK":
-                    conservation["windows_ok"] += 1
-                    trial_detail["unique_windows"] += 1
+                    if not ambiguous:
+                        conservation["windows_ok"] += 1
+                        trial_detail["unique_windows"] += 1
                     label = f"{trial}:{event.key}:pcm{ident_int}"
                     window_path = windows_dir / f"{label.replace(':', '__')}.pcm"
                     window_path.write_bytes(data)
@@ -357,6 +392,25 @@ def main():
                     replay_rows.append(row)
                 else:
                     replay_rows.append(row)
+        ledgers[trial] = {
+            "events": [{"kind": e.kind, "trial": e.trial, "line_no": e.line_no,
+                        "host_sec": e.host_sec, "domain": e.domain,
+                        "key": e.key, "fields": e.fields,
+                        "parse_problem": e.parse_problem}
+                       for e in ledger.events],
+            "edges": [{"source": e.source, "target": e.target,
+                       "kind": e.kind, "status": e.status, "detail": e.detail}
+                      for e in ledger.edges],
+            "domains": {domain: {
+                "conflict": bool(dom.get("conflict", False)),
+                "n_captures": len(dom.get("captures", [])),
+                "n_sounds": len(dom.get("sounds", [])),
+                "n_searches": len(dom.get("searches", [])),
+                "n_sound_times": len(dom.get("sound_times", []))}
+                for domain, dom in ledger.domains.items()},
+            "isolation": ledger.isolation,
+            "problems": problems,
+        }
         trial_detail["windows_ok"] = sum(
             1 for r in replay_rows
             if r["trial"] == trial and r["offline_window_status"] == "OK")
@@ -364,6 +418,15 @@ def main():
 
     conservation["sound_replayable_pcm"] = sum(
         1 for r in replay_rows if r["kind"] == "WINDOW")
+    conservation["pcm_total"] = sum(v.get("pairs", 0)
+                                    for v in inventory.values())
+    trial_used = {}
+    for row in replay_rows:
+        if row["kind"] == "WINDOW" and row["offline_window_status"] == "OK":
+            trial_used.setdefault(row["trial"], set()).add(row["pcm_id"])
+    conservation["pcm_unused"] = sum(
+        max(0, inventory.get(t, {}).get("pairs", 0) - len(trial_used.get(t, set())))
+        for t in args.trials)
 
     # ---- serialize outputs ----
     (run_dir / "manifest.json").write_text(
@@ -377,16 +440,35 @@ def main():
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "ledger.json").write_text(
         json.dumps({"conservation": conservation, "per_trial": per_trial,
-                    "hard_failures": status["hard_failures"]},
+                    "ledgers": ledgers, "hard_failures": status["hard_failures"],
+                    "format_errors": format_errors},
                    ensure_ascii=False, indent=2), encoding="utf-8")
+    with (run_dir / "records.jsonl").open("w", encoding="utf-8") as handle:
+        for trial, ledger in ledgers.items():
+            for event in ledger["events"]:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+    with (run_dir / "ledger.csv").open("w", encoding="utf-8",
+                                       newline="") as handle:
+        import csv
+        writer = csv.writer(handle)
+        writer.writerow(["trial", "source", "target", "kind", "status", "detail"])
+        for trial, ledger in ledgers.items():
+            for edge in ledger["edges"]:
+                writer.writerow([trial, edge["source"], edge["target"],
+                                 edge["kind"], edge["status"], edge["detail"]])
     with (run_dir / "replay.jsonl").open("w", encoding="utf-8") as handle:
         for row in replay_rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     # ---- summary ----
     diagnostics = aggregate_diagnostics(replay_rows, versions)
-    synthetic_results = [] if args.skip_synthetic else run_synthetic(
-        run_dir, binaries, args.assets_dir)
+    synthetic_results, corr_ref = [], {}
+    if not args.skip_synthetic:
+        synthetic_results, corr_ref = run_synthetic(
+            run_dir, binaries, args.assets_dir)
+    synthetic_stats = None
+    if synthetic_results:
+        synthetic_stats = summarize_synthetic(synthetic_results, versions)
     determinism_rows = 0
     determinism_bad = 0
     for row in replay_rows:
@@ -397,6 +479,14 @@ def main():
                 determinism_rows += 1
             else:
                 determinism_bad += 1
+    for result in synthetic_results:
+        for score in result["scores"].values():
+            for run_a, run_b in zip(score["runs"][::2], score["runs"][1::2]):
+                if run_a["valid"] == run_b["valid"] and \
+                        run_a["fraction"] == run_b["fraction"]:
+                    determinism_rows += 1
+                else:
+                    determinism_bad += 1
     determinism_opt_mismatch = 0
     for row in replay_rows:
         opt_fractions = {}
@@ -409,11 +499,24 @@ def main():
             o2 = opt_fractions.get((version, "-O2"))
             if o0 is not None and o2 is not None and o0 != o2:
                 determinism_opt_mismatch += 1
+    for result in synthetic_results:
+        per_version = {}
+        for label, score in result["scores"].items():
+            per_version[label] = (score["runs"][0]["valid"],
+                                  score["runs"][0]["fraction"])
+        for version in versions:
+            o0 = per_version.get(f"{version}:-O0")
+            o2 = per_version.get(f"{version}:-O2")
+            if o0 is not None and o2 is not None and o0 != o2:
+                determinism_opt_mismatch += 1
     tool_check_ok = (determinism_bad == 0 and determinism_opt_mismatch == 0
-                     and not status["hard_failures"])
+                     and not status["hard_failures"] and not format_errors)
     summary = {"run_dir": str(run_dir), "conservation": conservation,
                "per_trial": per_trial, "diagnostics": diagnostics,
-               "synthetic": {"windows": len(synthetic_results)},
+               "synthetic": {"windows": len(synthetic_results),
+                             "corr_reference": corr_ref,
+                             "stats": synthetic_stats},
+               "format_errors": format_errors,
                "reproducibility": {"repeat_rows": determinism_rows,
                                    "repeat_mismatch": determinism_bad,
                                    "opt_mismatch": determinism_opt_mismatch},
@@ -427,8 +530,9 @@ def main():
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
-    if status["hard_failures"]:
+    if status["hard_failures"] or format_errors:
         print("HARD FAILURES:", status["hard_failures"], flush=True)
+        print("FORMAT ERRORS:", format_errors, flush=True)
         return 1
     print("REPLAY_OK", flush=True)
     return 0
@@ -487,7 +591,12 @@ def synth_ramp(onset, amp, noise, echo_delay, echo_gain, seed=7):
 
 
 def synth_chirp(onset, assets_dir, noise, echo_delay, echo_gain, rng):
-    """Slice the standard chirp asset around its fade start."""
+    """Slice the standard chirp asset around its fade start.
+
+    Returns (signal, meta) where meta.amp_cross is the numeric amplitude
+    threshold crossing inside the 256 window (limit = max(128, peak//8)),
+    and signal_start is the slice-relative fade start.
+    """
     import struct
     wav_path = assets_dir / "standard_chirp_2-6khz_10x_20s.wav"
     if not wav_path.exists():
@@ -495,7 +604,6 @@ def synth_chirp(onset, assets_dir, noise, echo_delay, echo_gain, rng):
     signal = [0] * WINDOW_FRAMES
     saturations = 0
     with open(wav_path, "rb") as handle:
-        handle.seek(44)  # standard PCM WAV header
         base = 48000  # first chirp fade start in the file
         for i in range(WINDOW_FRAMES):
             frame = base - onset + i
@@ -516,13 +624,49 @@ def synth_chirp(onset, assets_dir, noise, echo_delay, echo_gain, rng):
             if clip != value:
                 saturations += 1
             signal[i] = int(clip)
-    return signal, {"signal_start": onset, "amp_cross": None,
-                    "limit": None, "peak": max(abs(v) for v in signal),
+    peak = max(abs(v) for v in signal)
+    limit = max(128, peak // 8) if peak else 0
+    crossing = None
+    for i in range(1, WINDOW_FRAMES):
+        before, after = abs(signal[i - 1]), abs(signal[i])
+        if before < limit <= after:
+            crossing = (i - 1) + (limit - before) / (after - before)
+            break
+    return signal, {"signal_start": onset, "amp_cross": crossing,
+                    "limit": limit, "peak": peak,
                     "saturations": saturations}
 
 
+def corr_reference(assets_dir, rng):
+    """norm_peak(diagnostic) reference on a long std-chirp slice (reuse)."""
+    import struct
+    wav_path = assets_dir / "standard_chirp_2-6khz_10x_20s.wav"
+    template_path = assets_dir / "chirp_2-6khz_50ms_template.wav"
+    if not wav_path.exists() or not template_path.exists():
+        return {"status": "SKIPPED", "reason": "assets missing"}
+    try:
+        template = chirp_capture_analysis.load_template(template_path)
+    except (ValueError, OSError):
+        return {"status": "SKIPPED", "reason": "template unreadable"}
+    samples = []
+    with open(wav_path, "rb") as handle:
+        for i in range(48000, 48000 + 4096):
+            handle.seek(44 + i * 2)
+            samples.append(struct.unpack("<h", handle.read(2))[0])
+    signal = [float(v) for v in samples]
+    import numpy as np
+    lag, corr = chirp_capture_analysis.norm_peak(
+        np.asarray(signal, dtype=np.float64), template)
+    return {"status": "OK", "n": len(samples),
+            "corr_lag_frames": lag, "corr": corr}
+
+
 def run_synthetic(run_dir, binaries, assets_dir, seed=7):
-    """Generate known-onset windows and run both frozen versions over them."""
+    """Generate known-onset windows and run both frozen versions over them.
+
+    Every binary is invoked twice per batch so synthetic windows participate
+    in the repeat/O0-O2 determinism gates.
+    """
     rng = __import__("random").Random(seed)
     windows = []
     meta = []
@@ -539,14 +683,19 @@ def run_synthetic(run_dir, binaries, assets_dir, seed=7):
                                  "noise": noise, "echo_delay": echo_delay,
                                  "echo_gain": echo_gain})
                     meta.append(info)
-    # std chirp slice: phase sweep, no noise/echo
+    # std chirp slice: phase x noise x echo (bounded coverage)
     for phase in (0, 8, 16, 24, 32, 40, 48, 56, 63):
-        signal, info = synth_chirp(phase, assets_dir, 0, 0, 0.0, rng)
-        if signal is not None:
-            windows.append(signal)
-            info.update({"signal": "stdchirp", "phase": phase, "amp": 1.0,
-                         "noise": 0, "echo_delay": 0, "echo_gain": 0.0})
-            meta.append(info)
+        for noise in (0, 128):
+            for echo_delay, echo_gain in ((0, 0.0), (24, 1.5)):
+                signal, info = synth_chirp(phase, assets_dir, noise,
+                                           echo_delay, echo_gain, rng)
+                if signal is not None:
+                    windows.append(signal)
+                    info.update({"signal": "stdchirp", "phase": phase,
+                                 "amp": 1.0, "noise": noise,
+                                 "echo_delay": echo_delay,
+                                 "echo_gain": echo_gain})
+                    meta.append(info)
     # silence and single-spike sanity
     windows.append([0] * WINDOW_FRAMES)
     meta.append({"signal": "silence", "phase": 0, "amp": 1.0, "noise": 0,
@@ -557,8 +706,8 @@ def run_synthetic(run_dir, binaries, assets_dir, seed=7):
     spike[128] = 30000
     windows.append(spike)
     meta.append({"signal": "spike", "phase": 0, "amp": 1.0, "noise": 0,
-                 "echo_delay": 0, "echo_gain": 0.0, "signal_start": None,
-                 "amp_cross": None, "limit": 3750, "peak": 30000,
+                 "echo_delay": 0, "echo_gain": 0.0, "signal_start": 128,
+                 "amp_cross": 128.0, "limit": 3750, "peak": 30000,
                  "saturations": 0})
     synth_dir = run_dir / "synthetic_windows"
     synth_dir.mkdir()
@@ -573,16 +722,18 @@ def run_synthetic(run_dir, binaries, assets_dir, seed=7):
     results = [{"index": index, **meta[index], "scores": {}}
                for index in range(len(paths))]
     for (version, opt), exe in binaries.items():
-        out = run_cli(exe, paths)
-        for index, path in enumerate(paths):
-            fields = out.get(str(path), {})
-            results[index]["scores"][f"{version}:{opt}"] = {
-                "valid": fields.get("VALID") == "1",
-                "fraction": float(fields.get("FRACTION", "0.0")),
-                "reason": fields.get("REASON")}
+        for repeat in (1, 2):
+            out = run_cli(exe, paths)
+            for index, path in enumerate(paths):
+                fields = out.get(str(path), {})
+                label = f"{version}:{opt}"
+                results[index]["scores"].setdefault(label, {"runs": []})["runs"].append(
+                    {"repeat": repeat, "valid": fields.get("VALID") == "1",
+                     "fraction": float(fields.get("FRACTION", "0.0")),
+                     "reason": fields.get("REASON")})
     (run_dir / "synthetic_known_input.json").write_text(
         json.dumps(results, ensure_ascii=False), encoding="utf-8")
-    return results
+    return results, corr_reference(assets_dir, rng)
 
 
 # --------------------------------------------------------------------------
@@ -667,12 +818,13 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
     for group, trials in groups.items():
         group_stats = {"trials": list(trials), "per_version": {}}
         for version in versions:
-            per_slot = {}
+            trial_slots = {}
             for trial in trials:
                 values_us = by_trial_version.get((trial, version), [])
                 if not values_us:
                     continue
                 base = min(values_us)
+                slots = {}
                 for value in values_us:
                     distance = value - base
                     k = round(distance / SLOT_SPACING_US)
@@ -680,22 +832,30 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
                         continue
                     if abs(distance - k * SLOT_SPACING_US) > 500_000.0:
                         continue
-                    per_slot.setdefault(k, []).append(value - base)
+                    slots.setdefault(k, []).append(value - base)
+                trial_slots[trial] = slots
             slots = {}
             complete = True
-            for k in sorted(per_slot):
-                values = per_slot[k]
+            for k in range(N_SLOTS):
+                values = []
+                n_rounds = 0
+                for trial, t_slots in trial_slots.items():
+                    here = t_slots.get(k)
+                    if here is None or len(here) != 1:
+                        continue
+                    n_rounds += 1
+                    values.append(here[0])
+                if not values or n_rounds != len(trials):
+                    complete = False
+                    continue
                 mean = statistics.mean(values)
                 deviations = [v - mean for v in values]
                 slots[str(k)] = {
-                    "n": len(values),
+                    "n": n_rounds,
                     "max_dev_us": round(max(abs(d) for d in deviations), 2),
                     "sigma_us": round((sum(d * d for d in deviations) /
                                        len(deviations)) ** 0.5, 2)}
-            missing = [k for k in range(N_SLOTS) if k not in per_slot]
-            if missing or any(len(v) != len(trials)
-                              for v in per_slot.values()):
-                complete = False
+            missing = [k for k in range(N_SLOTS) if k not in slots]
             group_stats["per_version"][version] = {
                 "slots": slots, "missing_slots": missing,
                 "full_10_slot_consistency_possible": complete}
@@ -711,6 +871,53 @@ def aggregate_diagnostics(replay_rows, versions=("peak_backtrack",
                 "max_frames": round(max(values), 4),
                 "mean_us": round(statistics.mean(values) * 1e6 / SAMPLE_HZ, 2)}
     return diagnostics
+
+
+def summarize_synthetic(results, versions):
+    """Per-version per-signal validity, bias and jump over the synthetic grid."""
+    import statistics
+    out = {"per_version": {}}
+    for version in versions:
+        per_signal = {}
+        for result in results:
+            signal = result["signal"]
+            entry = per_signal.setdefault(
+                signal, {"n": 0, "valid": 0, "bias_cross_us": [],
+                         "bias_start_us": [], "jump_us": []})
+            entry["n"] += 1
+            score = result["scores"].get(f"{version}:-O2")
+            if score and score["runs"] and score["runs"][0]["valid"]:
+                entry["valid"] += 1
+                fraction = score["runs"][0]["fraction"]
+                amp_cross = result.get("amp_cross")
+                signal_start = result.get("signal_start")
+                if amp_cross is not None:
+                    entry["bias_cross_us"].append(
+                        (fraction - amp_cross) * 1e6 / SAMPLE_HZ)
+                if signal_start is not None:
+                    entry["bias_start_us"].append(
+                        (fraction - signal_start) * 1e6 / SAMPLE_HZ)
+            fractions = [run_["fraction"]
+                         for label, score2 in result["scores"].items()
+                         if label.startswith(version)
+                         for run_ in score2["runs"] if run_["valid"]]
+            if len(fractions) >= 2:
+                entry["jump_us"].append(
+                    (max(fractions) - min(fractions)) * 1e6 / SAMPLE_HZ)
+        out["per_version"][version] = {}
+        for signal, entry in per_signal.items():
+            def agg(values):
+                if not values:
+                    return None
+                return {"mean_us": round(statistics.mean(values), 2),
+                        "max_abs_us": round(max(abs(v) for v in values), 2)}
+            out["per_version"][version][signal] = {
+                "n": entry["n"], "valid": entry["valid"],
+                "bias_vs_amp_cross": agg(entry["bias_cross_us"]),
+                "bias_vs_signal_start": agg(entry["bias_start_us"]),
+                "jump_max_us": agg(entry["jump_us"]),
+            }
+    return out
 
 
 if __name__ == "__main__":
