@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import udp_chirp_capture as capture  # noqa: E402
 
-SND_FILENAME_NODEFAULT = 0x20002  # winsound.SND_FILENAME | SND_NODEFAULT
+SND_FILENAME_NODEFAULT_ASYNC = 0x20003  # SND_FILENAME | SND_NODEFAULT | SND_ASYNC
 
 
 def main():
@@ -87,7 +87,8 @@ def main():
             played = True
             play_span = [round(now - started, 3), None]
             try:
-                winsound.PlaySound(str(args.wav.resolve()), SND_FILENAME_NODEFAULT)
+                # Async playback keeps the serial/UDP loops draining during the whole file.
+                winsound.PlaySound(str(args.wav.resolve()), SND_FILENAME_NODEFAULT_ASYNC)
             except Exception as error:
                 failures.append(f"play:{error}")
             play_span[1] = round(time.monotonic() - started, 3)
