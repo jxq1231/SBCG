@@ -14,7 +14,7 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
-**M4.2.4-A4 对照基线与音频统计优化已完成；C2日志策略评估完成。** 此前实测A板运行A4优化镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug SHA256 `de212005…`）：STAT_MS 15→8–9ms、AUDIO 27→17–19ms、LOOP 40→34ms；当前同轮OTHER/FLUSH=15/15ms成为最大单项，UI=1–2ms。SOUND/CHIRP/AUDIO/LOG/UI错误全0、候选零丢弃。对照镜像（关闭A3诊断）两次LOOP43/AUDIO29/FLUSH13，未发现A3诊断抬高最大值。C2评估测得70秒UART占用约21.5%、23.7行/秒、最大单行`$UI`174B≈15.1ms；建议集中quiet/full过滤+关键行保留，待选择方案并授权。C1 UI暂缓；主动标准音频仍因环境不能发声未验收。[A4记录](Milestones/M4_2_4_A4_Control_Statistics.md) · [C2评估](Milestones/M4_2_4_C2_Log_Evaluation.md)。
+**M4.2.5失败搜索诊断已硬件复验；标准音仍0/10。** A板运行`SBCG-M4.2-SEARCHDIAG`（Debug `c219af98…`）：24个完整任务全部LOW_CORR，最高raw相关0.773821<0.80，RMS2265–2302、N=257/V=257、LR/Z/I=0，MATCH0；10个高能量候选、7个高相关任务；RPT24/RLOST0，资源/日志/UI错误全0。数字WAV与模板相关1.0。诊断链已实机工作，失败在门限前相关度，不是搜索预算/范围/低RMS；下一步保存PCM/受控声学实验，不盲目降门限，识别/PTP/测距仍未验收。[M4.2.5复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。
 
 **M4.2.1扫频匹配核心的软件范围已完成。** 固定2–6kHz/50ms模板及流式正确性基线经O0/O2各3001个C断言、38组独立参考验证。后续M4.2.2已注册固定模板和有界单窗评分，原逐采样流式直接相关仍仅作基线，不走板端实时路径。[历史软件证据](Milestones/M4_2_1_Chirp_Matcher_Core.md)。
 
