@@ -33,7 +33,7 @@
 
 ## 其他修改和测试，哪些应复用
 
-当前审计基线代码为`c27e5e7`（P0复核修复提交）。独立P0复核`Logs/Detector/TOA_Replay/P0_review/review.json`=PASS_WITH_RESERVATIONS；修复后基准`Logs/Detector/TOA_Replay/20261026T110943/`（两版）/`20261026T111047/`（三版）。M4.2.5诊断、M4.2.6候选PCM/UDP、M4.2.7-A/B TOA都已经推进；不再重复烧录旧c219af诊断版。能量段起跳修正`db441e0`、尖峰门控`5471919`和回放工具审查修复`74e563e`已入库；全事件回放审计见[审计与后续规划](Plans/2026-10-26_PCM_Event_Replay_Audit.md)。 P1受控采集已完成单次试跑`p1-20261026-01`（[记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)），现有回放current_envelope覆盖slot0..9；多条件重复与跨轮聚合仍未完成。
+当前审计基线代码为`c27e5e7`（P0复核修复提交）。独立P0复核`Logs/Detector/TOA_Replay/P0_review/review.json`=PASS_WITH_RESERVATIONS；修复后基准`Logs/Detector/TOA_Replay/20261026T110943/`（两版）/`20261026T111047/`（三版）。M4.2.5诊断、M4.2.6候选PCM/UDP、M4.2.7-A/B TOA都已经推进；不再重复烧录旧c219af诊断版。能量段起跳修正`db441e0`、尖峰门控`5471919`和回放工具审查修复`74e563e`已入库；全事件回放审计见[审计与后续规划](Plans/2026-10-26_PCM_Event_Replay_Audit.md)。 P1受控采集已完成首批音量扫描（[记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)）；vol100/80各1 trial覆盖slot0..9，但vol100重复/vol60未全10槽，全10槽尚不稳定；同条件≥5次重复与距离/方向组仍待做。
 
 可以复用：DMA唯一Begin/End和连续帧编号、已有PTP锚点、优化后的有界搜索、真实PCM捕获/重组、温度服务、TouchGFX状态页。在线/离线对同一捕获的相关峰数值与位置一致，是捕获/评分一致性的有效证据，不必再反复证明数字模板相关1.0。
 
