@@ -36,6 +36,8 @@ typedef struct
     uint16_t fraction_q16;
     uint32_t mean_square_ac;
     uint32_t peak_abs;
+    uint8_t event_class;   /**< EventClass副本；UNKNOWN/CLAP由上层决定是否发布。 */
+    uint8_t quality;
 } SoundEventTimeEvent;
 /** @brief uint32饱和累计；pending为当前固定队列长度，无DMA所有权。 */
 typedef struct {

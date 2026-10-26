@@ -284,7 +284,8 @@ static void PushEvent(const Pending *item, const AudioTimeMapResult *result)
     toa_events[toa_event_count++] = (SoundEventTimeEvent){
         item->sequence, item->candidate.session, result->estimate_ns,
         item->toa.frame + 1U, item->toa.fraction_q16,
-        item->candidate.mean_square_ac, item->candidate.peak_abs};
+        item->candidate.mean_square_ac, item->candidate.peak_abs,
+        item->candidate.event_class, item->candidate.quality};
 }
 /** @brief 发送Q16窗口TOA结果或明确失败；缺失/非法不输出模型字段。 */
 static void EmitToa(const Pending *item, const char *status,

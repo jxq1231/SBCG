@@ -24,6 +24,7 @@
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Detector/standard_sequence.h"
+#include "Detector/event_classifier.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -611,8 +612,9 @@ void App_Process(void)
 #ifdef SBCG_USE_BOARD_IDENTITY
             const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
             if (event_profile == NULL) { break; }
+            if (notice.event_class != EVENT_CLASS_CHIRP) { continue; }
             const bool sequence_detected=StandardSequence_Push(
-                &standard_sequence,notice.time_ns,100U);
+                &standard_sequence,notice.time_ns,notice.quality);
             if(sequence_detected!=standard_sequence_detected){
                 StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
                 char sequence_line[256];
@@ -633,7 +635,7 @@ void App_Process(void)
             SoundEventRecord event = {0};
             event.valid = true;
             event.type = SOUND_EVENT_CHIRP;
-            event.quality = 100U;
+            event.quality = notice.quality;
             event.side = event_profile->role == BOARD_ROLE_A ? SOUND_SIDE_A : SOUND_SIDE_B;
             event.time_domain = domain.id;
             event.session = notice.session;

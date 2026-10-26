@@ -26,6 +26,7 @@ def main():
         print('gcc not found', file=sys.stderr)
         return 2
     source = root / 'App/Detector/sound_detector_service.c'
+    classifier = root / 'App/Detector/event_classifier.c'
     detector = root / 'App/Detector/sound_detector.c'
     estimator = root / 'App/Detector/toa_estimator.c'
     scenarios = ('partial-tail', 'complete-boundary', 'cross-block-left',
@@ -43,7 +44,7 @@ def main():
                 command.append('-finstrument-functions')
             command += ['-I', str(root / 'App'),
                         str(root / 'Tests/SoundDetectorService' / filename),
-                        str(source), str(detector)]
+                        str(source), str(detector), str(classifier)]
             if real_toa:
                 command.append(str(estimator))
             command += ['-o', str(exe)]
@@ -71,7 +72,7 @@ def main():
                 handoff_command = [compiler,'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
                     '-DSBCG_USE_SOUND_TIME=1','-I',str(root/'App'),
                     str(root/'Tests/SoundDetectorService/test_toa_handoff.c'),
-                    str(source),str(detector),'-o',str(handoff)]
+                    str(source),str(detector),str(classifier),'-o',str(handoff)]
                 built_handoff = subprocess.run(handoff_command,capture_output=True,text=True,timeout=30)
                 (out / f'toa-handoff_{option[1:]}_build.log').write_text(
                     ('COMMAND: ' + subprocess.list2cmdline(handoff_command) + '\n' +

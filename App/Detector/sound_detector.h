@@ -24,6 +24,9 @@ typedef struct {
     uint64_t onset_frame, confirmed_frame;
     uint32_t mean_square_ac, peak_abs;
     bool clipped;
+    /** @brief 服务层波形分类副本；核心检测器不填写，初值为0=UNKNOWN。 */
+    uint8_t event_class;
+    uint8_t quality;
 } SoundCandidate;
 /** @brief 单帧处理结果；DISCONTINUITY已清历史并消费当前样本，INVALID按公开接口约定拒绝。 */
 typedef enum {

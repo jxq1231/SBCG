@@ -8,6 +8,7 @@
  */
 #include "sound_detector_service.h"
 #include "sound_event_time.h"
+#include "event_classifier.h"
 #include "BSP/bsp_console.h"
 #include "toa_estimator.h"
 #include <inttypes.h>
@@ -86,6 +87,31 @@ static bool QuantizeToa(uint64_t anchor,double fraction,SoundToaPosition *out)
     if(anchor>UINT64_MAX-integer-1U){out->status=SOUND_TOA_INVALID;return false;}
     out->frame=anchor+integer;out->fraction_q16=(uint16_t)q16;
     out->status=SOUND_TOA_VALID;return true;
+}
+
+/**
+ * @brief 从候选onset后的PCM窗口提取波形/包络/过零趋势分类，供后续类型与质量门控。
+ * @param block 非NULL当前借用块，样本仅本次读取。
+ * @param event 非NULL能量候选，onset为块内绝对帧。
+ * @param slot 暂存槽位；失败写UNKNOWN/quality0。
+ * @note 最多读取2400帧(50ms)；不足480帧不分类；不保留PCM指针、不改变能量候选。
+ */
+static void ClassifyCandidate(const BSP_AudioBlock *block,const SoundCandidate *event,
+                              uint8_t slot)
+{
+    staged[slot].event_class=EVENT_CLASS_UNKNOWN;staged[slot].quality=0U;
+    if(event->onset_frame<block->first_frame)return;
+    const uint64_t local=event->onset_frame-block->first_frame;
+    if(local>=block->frame_count)return;
+    const uint64_t available=block->frame_count-local;
+    const uint16_t frames=(uint16_t)(available>2400U?2400U:available);
+    if(frames<480U)return;
+    /* 只读本块PCM分类；显式去掉DMA缓冲的volatile限定，不保留指针。 */
+    const int16_t *first=(const int16_t *)&block->samples[2U*(size_t)local+diagnostics.channel];
+    EventClassResult classified;
+    (void)EventClassifier_ClassifyStrided(first,2U,frames,&classified);
+    staged[slot].event_class=(uint8_t)classified.type;
+    staged[slot].quality=classified.quality;
 }
 
 /**
@@ -201,8 +227,10 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
         {
             ++staged_total;
             if(staged_count<SOUND_DETECTOR_QUEUE_CAPACITY){
-                staged[staged_count]=event;
-                EstimateToa(block,&event,staged_count,diagnostics.channel);
+                const uint8_t slot=staged_count;
+                staged[slot]=event;
+                EstimateToa(block,&event,slot,diagnostics.channel);
+                ClassifyCandidate(block,&event,slot);
                 ++staged_count;
             }
         }

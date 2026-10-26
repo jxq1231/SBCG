@@ -17,7 +17,7 @@ def main():
     environment["PATH"] = str(Path(compiler).parent) + os.pathsep + environment["PATH"]
     failures = 0
     cases = [
-        ("sound_capture", "stubs", ["App/Audio/audio_capture.c", "App/Audio/audio_statistics.c", "App/Detector/sound_detector.c", "App/Detector/sound_detector_service.c", "App/Detector/toa_estimator.c"]),
+        ("sound_capture", "stubs", ["App/Audio/audio_capture.c", "App/Audio/audio_statistics.c", "App/Detector/sound_detector.c", "App/Detector/sound_detector_service.c", "App/Detector/event_classifier.c", "App/Detector/toa_estimator.c"]),
         ("audio_time_map_monitor", "stubs", ["App/Audio/audio_time_map_monitor.c", "App/Audio/audio_time_map.c"]),
         ("audio_time_map", "stubs", ["App/Audio/audio_time_map.c"]),
         ("audio_time_anchor", "stubs", ["App/Audio/audio_time_anchor.c"]),
