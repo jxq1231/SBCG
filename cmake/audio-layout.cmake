@@ -30,7 +30,9 @@ if(_sbcg_audio_mode)
         App/Audio/audio_frame_index.c)
     if(TARGET LwIP)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_SOUND_TIME=1)
-        target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Detector/sound_event_time.c)
+        target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+            App/Detector/sound_event_time.c App/Measure/sound_pair.c
+            App/Network/sound_event_wire.c)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_ANCHOR=1)
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Audio/audio_time_anchor.c)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_AUDIO_MAP=1)
