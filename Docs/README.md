@@ -8,6 +8,8 @@
 
 **最新先读[M4.2.5真实播放复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。** 用户已开放声音测试；`SBCG-M4.2-SEARCHDIAG` 镜像自动播放标准WAV 20秒/10次，24个完整任务全部`LOW_CORR`、MATCH0；最高raw相关0.773821<0.80、RMS≈2300、N=257/V=257、LR/Z/I=0，RPT24/RLOST0，资源/日志/UI错误0；10个高能量候选、7个高相关任务。数字WAV与模板相关1.0，诊断链已实机工作；失败在门限前相关度，不是搜索预算/范围/低RMS；独立复核PASS_WITH_RESERVATIONS（无阻塞）。下一步保存PCM/受控声学实验，不直接降低门限；识别/PTP/测距仍未验收。
 
+**最新M4.3.3诊断事件UDP（2026-10-27）：** 成功窗口TOA事件已接入5009板间UDP、36字节线协议和纯配对/距离核心，输出`$SOUND_PAIR`；当前time_domain/事件类型/quality为诊断设置、SYNC=0，未接真实两板/未烧录，不能当同步或测距验收。[M4.3.3记录](Milestones/M4_3_3_Diagnostic_Event_UDP.md)。
+
 **最新M4.3.2软件核心（2026-10-26）：** 两板事件配对/距离纯C核心与36字节事件线协议已完成O0/O2/Debug/Release验证；支持乱序、重复、歧义、质量/类型/共同时间域拒绝、`d=c|Δt|`和A/B方向。尚未接实际UDP/未烧录，不能把合成数据当两板验收。[M4.3.2记录](Milestones/M4_3_2_Pair_Distance_Core.md)。
 
 **最新M4.3.1软件完成（2026-10-26）：** 检测器固定窗口TOA的整数锚点+Q16子帧已接入本地PTP模型；旧`SOUND_TIME`不变，新增`$SOUND_TOA_TIME`，TOA缺失/非法不回退FIRST+1。主机回归、Q16 Fraction、Debug/Release和audio layout通过；未烧录/未实物验收。下一软件增量：两板事件UDP/配对，之后仍需标准声身份/质量与硬件验证。[M4.3.1记录](Milestones/M4_3_1_Local_PTP_TOA_Time.md)。
