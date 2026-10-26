@@ -2,7 +2,9 @@
  * @file        sound_detector_service.c
  * @brief       在PCM唯一借用中暂存检测，归还验证成功后发布有界本地帧候选。
  * @details     工作副本隔离未验证PCM，固定两级4条队列；失败/断流清历史，限速发送并统计损失。
- * @note        仅串行前台，不调用BSP Begin/End、不保留样本指针；无新IRQ/DMA/PTP时间查询。
+ *              TOA仅使用当前借用块内完整256帧窗口；窗口不完整时保留能量候选并输出NA。
+ *              名义微秒发布前检查数值及uint64范围，十进制缓冲可容纳20位及结尾字符。
+ * @note        仅串行前台，不调用BSP Begin/End、不保留样本指针或重组跨块PCM；无新IRQ/DMA/PTP时间查询。
  */
 #include "sound_detector_service.h"
 #ifdef SBCG_USE_SOUND_TIME
@@ -64,13 +66,14 @@ static void RecordProcessTime(uint32_t begin_ms)
 { const uint32_t elapsed=BSP_Console_GetTickMs()-begin_ms;
   if(elapsed>diagnostics.max_process_ms)diagnostics.max_process_ms=elapsed; }
 /**
- * @brief 在Stage借用期内用峰回溯估计器对候选窗做栅格无关前沿估算。
- * @param block 非NULL借用交错PCM描述符；event为暂存的候选。
+ * @brief 在Stage借用期内仅对当前块内的完整256帧候选窗调用原TOA估算器。
+ * @param block 非NULL只读交错PCM借用描述符，样本仅在本次调用中读取。
+ * @param event 非NULL只读暂存能量候选，onset_frame为会话内绝对帧号。
  * @param slot 暂存槽位，写入锚点/分数/有效性。
- * @param channel 选定声道。
- * @return 无返回值；失败置toa_valid=false且计toa_miss。
- * @note 窗起点=onset−64（限块首），长度≤256帧，覆盖门控64帧栅格的相位；
- *       锚点绝对帧随队列保存，Process按(锚点+分数)换算为微秒。
+ * @param channel 选定声道0或1。
+ * @return 无返回值；不完整窗口或估算失败清暂存TOA有效性并计toa_miss，不丢能量候选。
+ * @note 目标窗起点=max(onset−64,0)，缺左沿或右侧不足256帧时直接拒绝，不裁到块首、
+ *       不补零、不重组跨块PCM。完整窗锚点随队列保存，Process按(锚点+分数)换算微秒。
  */
 static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
     uint8_t slot,uint8_t channel)
@@ -78,15 +81,13 @@ static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
     staged_toa_ok[slot]=false;staged_toa[slot]=0.0;staged_toa_anchor[slot]=0U;
     uint64_t anchor=0U;
     if(event->onset_frame>TOA_LEFT_MARGIN)anchor=event->onset_frame-TOA_LEFT_MARGIN;
-    if(anchor<block->first_frame)anchor=block->first_frame;
+    if(anchor<block->first_frame){Add(&diagnostics.toa_miss,1U);return;}
     const uint64_t local=anchor-block->first_frame;
-    if(local>=block->frame_count)return;
+    if(local>=block->frame_count){Add(&diagnostics.toa_miss,1U);return;}
     const uint64_t available=block->frame_count-local;
-    const uint16_t frames=(uint16_t)(available<TOA_SEARCH_WINDOW ?
-        available:TOA_SEARCH_WINDOW);
-    if(frames<32U){Add(&diagnostics.toa_miss,1U);return;}
+    if(available<TOA_SEARCH_WINDOW){Add(&diagnostics.toa_miss,1U);return;}
     int16_t window[TOA_SEARCH_WINDOW];
-    for(uint16_t i=0U;i<frames;++i)
+    for(uint16_t i=0U;i<TOA_SEARCH_WINDOW;++i)
         window[i]=block->samples[2U*(size_t)(local+i)+channel];
     double fraction=0.0;
     if(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,window,&fraction)){
@@ -228,6 +229,7 @@ void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
  * @param snapshot 当前非NULL只读采集快照，函数不保留指针。
  * @return 无返回值。
  * @note staging时不执行任何发布；故障清旧历史，不补发日志。候选仅含本地帧，SYNC始终0。
+ *       名义TOA微秒为负数、非有限数或舍入后达到2^64时输出NA；不更改局部估算成功计数。
  */
 void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
 {
@@ -247,13 +249,16 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
     if(count!=0U && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
     {
         const QueuedCandidate item=queue[head];head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;
-        last_event_ms=now_ms;char first[21],confirmed[21],toa_us[16];
+        last_event_ms=now_ms;char first[21],confirmed[21],toa_us[21]="NA";
         Decimal(item.event.onset_frame,first);Decimal(item.event.confirmed_frame,confirmed);
         if(item.toa_valid){
-            /* 子帧到达时刻换算为微秒：(锚点绝对帧+插值分数)×(1e6/采样率)。 */
+            /* 保持名义48000Hz换算；先拒绝负数/非有限数，再保证舍入结果可转为uint64。 */
             const double frames=(double)item.toa_anchor+item.toa_fraction;
-            Decimal((uint64_t)(frames*1000000.0/(double)AUDIO_RATE_HZ+0.5),toa_us);
-        }else{toa_us[0]='N';toa_us[1]='A';toa_us[2]='\0';}
+            const double microseconds=frames*1000000.0/(double)AUDIO_RATE_HZ;
+            const double rounded_microseconds=microseconds+0.5;
+            if(0.0<=microseconds && rounded_microseconds<0x1p64)
+                Decimal((uint64_t)rounded_microseconds,toa_us);
+        }
         Emit(line,snprintf(line,sizeof line,
             "$SOUND_CAND,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",CH=%u,FIRST=%s,CONFIRMED=%s,E_AC=%" PRIu32
             ",PEAK=%" PRIu32 ",CLIP=%u,LOCAL=1,SYNC=0,TOA_US=%s\r\n",

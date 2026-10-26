@@ -1,5 +1,7 @@
 # 串口观测与UDP应用协议
 
+> 2026-10-26 TOA口径补充：当前SOUND_CAND的TOA_US是会话采样轴按名义48000Hz换算的微秒，不是PTP域时刻或已校准物理到达。现有SOUND_TIME仍查询原能量候选整数onset+1，尚未使用子帧TOA。完整窗口不足或换算不可表示时应输出NA；局部估算成功计数不能代替输出/声学有效性。见[目标路线](Goal_Aligned_Roadmap_2026_10_26.md)。
+
 <!-- doc-status: current-interface; reviewed: 2026-10-23 -->
 
 更新：2026-10-23。新增SBCG-M2.3-PPS尚未烧录/实物验收，PPS行定义见下；当前已验收A/B板网络基线为 **SBCG-M2.3-ROLE**；**SBCG-M2.3-SYNC**已由用户手动烧录并通过1分钟运行内部观测。以下按首次引入增量列出仍有效的接口；旧“本版本”是对应报告的实验范围，不表示板上仍运行旧固件。原UDP type1～7及温度命令均保留，新增AUDIO_POS、AUDIO_ANCHOR及AUDIO_MAP/CHECK仅为串口行。

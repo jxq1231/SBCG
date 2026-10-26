@@ -1,6 +1,8 @@
 # M4.2.6 候选附近PCM捕获（里程碑实施记录，实物待验）
 
-<!-- doc-status: implemented-awaiting-hardware; reviewed: 2026-10-26 -->
+<!-- doc-status: hardware-capture-observed-acoustic-limits-open; reviewed: 2026-10-26 -->
+
+> 后续复核：PCM捕获已有实物数据，非仍全部待验；旧同步播放窗口存在主机串口/UDP采集缺口，其少量完整捕获可以作波形诊断，不能以捕获文件数计算板端识别率。声学频响/多径原因仍属假说，在线/离线峰一致仅证明同一数据处理一致，不证明通用声学根因。最新归纳及后续单板/双板顺序见[目标路线](../Goal_Aligned_Roadmap_2026_10_26.md)。
 
 ## 目标
 
