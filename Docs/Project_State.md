@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.4权威测量结果与状态页软件完成（2026-10-27）。** 配对结果经结果回调进入唯一`MeasurementResult`（测量ID/距离/A-B方向/质量/温度版本/2s有效期），UI/TouchGFX通过同一快照显示；无温度/声速/超龄/越界不出数值。仍为诊断时间域/CHIRP/quality=100，未烧录、未接真实两板；不能当任务书测距验收。见[M4.3.4记录](Milestones/M4_3_4_Measurement_UI.md)。
+
 **M4.3.3诊断型两板事件UDP路径软件完成（2026-10-27）。** SoundEventTime成功TOA事件队列→App构造事件→UDP 5009发送/接收→`sound_pair`，输出`$SOUND_PAIR`/`$SOUND_EVENT_STATE`。当前时间域是诊断常量、事件类型固定CHIRP/quality=100、SYNC=0，未接真实两板/未烧录；不能当任务书同步或测距验收。见[M4.3.3记录](Milestones/M4_3_3_Diagnostic_Event_UDP.md)。
 
 **M4.3.2两板事件配对/距离纯核心软件完成（2026-10-26）。** `sound_pair`支持同一`time_domain`下A/B事件乱序/重复/漏检/歧义拒绝、质量/类型窗口、`d=c|tB−tA|`与A/B方向；`sound_event_wire`提供36字节显式大端序编解码。O0/O2主机测试、Debug/Release构建通过；尚未接UDP、未烧录、未产生真实两板距离。见[M4.3.2记录](Milestones/M4_3_2_Pair_Distance_Core.md)。

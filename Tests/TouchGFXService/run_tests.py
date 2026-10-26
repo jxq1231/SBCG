@@ -25,6 +25,9 @@ sources = [root / 'Tests/TouchGFXService/test_service.c',
 snapshot = root / 'App/UI/status_snapshot.c'
 if snapshot.exists():
     sources.append(snapshot)
+measurement = root / 'App/Measure/measurement_result.c'
+if measurement.exists():
+    sources.append(measurement)
 exe = out / 'service.exe'
 subprocess.run([shutil.which('gcc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
                 '-pedantic', '-I', str(root / 'App'), *map(str, sources),
