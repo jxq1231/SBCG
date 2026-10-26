@@ -34,7 +34,8 @@ MeasurementWireStatus MeasurementWire_Encode(const MeasurementResultSnapshot *re
        result->time_domain==0U ||
        (result->direction!=SOUND_DIRECTION_A && result->direction!=SOUND_DIRECTION_B) ||
        (result->calibration_offset_mm>MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM ||
-        result->calibration_offset_mm< -MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM))
+        result->calibration_offset_mm< -MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM) ||
+       (result->calibration_offset_mm!=0 && result->calibration_version==0U))
         return MEASUREMENT_WIRE_INVALID_FIELD;
     data[0]='M';data[1]='R';data[2]='E';data[3]='S';
     data[4]=MEASUREMENT_WIRE_VERSION;data[5]=1U;
@@ -84,7 +85,8 @@ MeasurementWireStatus MeasurementWire_Decode(const uint8_t *data, uint16_t lengt
     result->calibration_version=(uint16_t)(((uint16_t)data[28]<<8)|data[29]);
     result->calibration_offset_mm=(int16_t)(((uint16_t)data[30]<<8)|data[31]);
     if(result->calibration_offset_mm>MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM ||
-       result->calibration_offset_mm< -MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM)
+       result->calibration_offset_mm< -MEASUREMENT_WIRE_MAX_CAL_OFFSET_MM ||
+       (result->calibration_offset_mm!=0 && result->calibration_version==0U))
         return MEASUREMENT_WIRE_INVALID_FIELD;
     return MEASUREMENT_WIRE_OK;
 }

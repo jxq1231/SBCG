@@ -503,8 +503,10 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
         return;
     }
     if(!ResultExchange_ShouldSend(&result_exchange,now_ms,result.id)){return;}
-    if(UDPSoundEvent_SendResult(now_ms,&result))
-    { ResultExchange_MarkSent(&result_exchange,now_ms,result.id); }
+    /* Mark the attempt even on failure: a broken link must retry at the
+       500ms cadence, not once per main-loop iteration. */
+    (void)UDPSoundEvent_SendResult(now_ms,&result);
+    ResultExchange_MarkSent(&result_exchange,now_ms,result.id);
 }
 #endif
 

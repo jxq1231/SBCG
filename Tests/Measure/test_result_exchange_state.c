@@ -31,6 +31,16 @@ int main(void)
     /* Domain restore also clears the ACK. */
     ResultExchange_OnDomainRestored(&s);
     assert(ResultExchange_ShouldSend(&s,20003U,2U));
+    /* Duplicate same-sequence ACK is not a peer restart. */
+    ResultExchange_MarkSent(&s,20003U,2U);
+    ResultExchange_OnAck(&s,2U);
+    ResultExchange_OnPeerAckSequence(&s,1U);
+    ResultExchange_OnPeerAckSequence(&s,2U);
+    ResultExchange_OnPeerAckSequence(&s,2U);
+    assert(!ResultExchange_ShouldSend(&s,20004U,2U));
+    /* A backward ACK sequence (out-of-order older packet) is handled as reset. */
+    ResultExchange_OnPeerAckSequence(&s,1U);
+    assert(ResultExchange_ShouldSend(&s,20005U,2U));
     /* ID 0 is never sent. */
     assert(!ResultExchange_ShouldSend(&s,20004U,0U));
     puts("PASS result exchange: retry cadence, ACK stop, peer-sequence regression and domain restore");

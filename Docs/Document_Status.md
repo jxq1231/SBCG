@@ -35,6 +35,7 @@
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
 | [M4.3.9结果周期刷新/计数](Milestones/M4_3_9_Result_Refresh.md) | 软件完成·无ACK/未烧录 | A每500ms重发同ID；B刷新2s；`$MEASURE_RESULT_STATE`计数 |
+| [M4.3.18结果P2修复](Milestones/M4_3_18_Result_P2_Fixes.md) | 软件完成·集成测试仍缺 | 失败500ms退避；重复ACK不误判；MRES标定一致性 |
 | [M4.3.17结果重发状态模块](Milestones/M4_3_17_Result_Exchange_State.md) | 软件完成·硬件待验 | ACK序号回退/域恢复恢复重发；O0/O2测试 |
 | [M4.3.16 c24b5ba review修复](Milestones/M4_3_16_Review_Fixes.md) | 软件完成·未烧录 | B重启恢复重发；域超时3s；标定偏移/配对窗口校验 |
 | [M4.3.15 0.5m标定/温补](Milestones/M4_3_15_Calibration_Temperature.md) | 软件完成·触发/实测待验 | 500mm偏移/版本、MRES32携标定；A应用/B显示；未接按键/未烧录 |

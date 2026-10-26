@@ -23,8 +23,10 @@ void ResultExchange_OnDomainRestored(ResultExchangeState *state)
 void ResultExchange_OnPeerAckSequence(ResultExchangeState *state,uint32_t sequence)
 {
     if(state==NULL)return;
+    /* Only a real backward step is treated as a peer restart; an equal
+       sequence is a UDP duplicate/retransmission and must not clear the ACK. */
     if(state->have_peer_sequence &&
-       (int32_t)(sequence-state->last_peer_sequence)<=0)
+       (int32_t)(sequence-state->last_peer_sequence)<0)
     {
         state->acked_id=0U;
         state->last_id=0U;
