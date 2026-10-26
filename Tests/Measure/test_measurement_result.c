@@ -50,6 +50,16 @@ int main(void)
     assert(MeasurementResult_Get(700U,&out) && out.id==42U && out.distance_mm==777 &&
            out.direction==SOUND_DIRECTION_B && out.quality==90U);
     remote.time_domain=0U;assert(!MeasurementResult_PublishRemote(&remote,800U));
+    /* Out-of-order old remote IDs must not overwrite a fresh newer result. */
+    MeasurementResultSnapshot older=remote;older.id=41U;older.time_domain=1U;
+    assert(!MeasurementResult_PublishRemote(&older,800U));
+    assert(MeasurementResult_Get(800U,&out) && out.id==42U);
+    older.id=43U;assert(MeasurementResult_PublishRemote(&older,900U));
+    assert(MeasurementResult_Get(900U,&out) && out.id==43U);
+    /* Only after the current result ages out may a lower ID be accepted (A reboot). */
+    older.id=1U;assert(!MeasurementResult_PublishRemote(&older,900U));
+    assert(MeasurementResult_PublishRemote(&older,900U+MEASUREMENT_MAX_AGE_MS));
+    assert(MeasurementResult_Get(900U+MEASUREMENT_MAX_AGE_MS,&out) && out.id==1U);
     puts("PASS measurement result: id/age/temp version/direction/speed/range gating and remote ID");
     return 0;
 }

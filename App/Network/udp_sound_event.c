@@ -157,9 +157,12 @@ bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *r
 /** @brief 发布本板事件；未绑定/编码失败返回false并计数。 */
 bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
 {
-    (void)now_ms;
-    if(!configured || service_pcb==NULL || event==NULL ||
-       !netif_is_link_up(&gnetif)){Increment(&tx_err);return false;}
+    if(!configured || event==NULL){Increment(&tx_err);return false;}
+    /* 本端事件必须同时进入配对器；Receive只接收对端，配对器需要A+B两侧。 */
+    if(!SoundPair_Submit(&pair_manager,event,now_ms))
+    {Increment(&tx_err);return false;}
+    if(service_pcb==NULL || !netif_is_link_up(&gnetif))
+    {Increment(&tx_err);return false;}
     uint8_t data[SOUND_EVENT_WIRE_BYTES];
     if(SoundEventWire_Encode(event,data,sizeof data)!=SOUND_EVENT_WIRE_OK)
     {Increment(&tx_err);return false;}

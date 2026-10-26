@@ -62,6 +62,10 @@ bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
         result->distance_mm > (int32_t)MEASUREMENT_MAX_DISTANCE_MM ||
         result->quality > 100U || result->sound_speed_mm_s == 0U ||
         result->time_domain == 0U) { return false; }
+    /* 同一ID刷新年龄；旧ID只在当前结果已超龄后允许覆盖，避免乱序旧包覆盖新值。 */
+    if (latest.status == MEASUREMENT_VALID && latest.id > result->id &&
+        (uint32_t)(now_ms - latest.captured_ms) < MEASUREMENT_MAX_AGE_MS)
+    { return false; }
     latest = *result;
     latest.captured_ms = now_ms;
     latest.status = MEASUREMENT_VALID;

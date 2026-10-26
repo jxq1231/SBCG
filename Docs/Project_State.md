@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.11配对P0/结果边界修复（2026-10-27）。** `UDPSoundEvent_Send`现在把本端事件提交配对器，修复真实双板永不成对的结构P0；新增本端发送+对端接收配对集成测试。同时域失效立即清A/B结果、拒绝乱序旧ID、MRES拒绝UNKNOWN方向。P1共享域证据仍未解决；未烧录。见[M4.3.11记录](Milestones/M4_3_11_Pairing_Review_Fixes.md)。
+
 **M4.3.10 PPS资格共同域门控（未验证，2026-10-27）。** 用户PPS工作与`PpsService_GetSnapshot`只读快照已提交；`TimeDomain_UpdateWithPps`要求A/B TimeSync条件+PPS QUALIFIED/RATE_REQUALIFY，PPS FAULT/UNQUALIFIED撤域。软件/主机测试PASS，但**未烧录、未示波器验证±10µs/冷启动≤30s**；不得标记为同步验收。见[M4.3.10未验证记录](Milestones/M4_3_10_PPS_Domain_Unverified.md)。
 
 **M4.3.9权威结果周期刷新（2026-10-27）。** A板每500ms重发当前有效结果（ID变化立即发），B按同ID刷新2s有效期；新增`$MEASURE_RESULT_STATE`TX/RX/BAD计数。无ACK/可靠传输、无结果序列号；未烧录/未两板实测。见[M4.3.9记录](Milestones/M4_3_9_Result_Refresh.md)。

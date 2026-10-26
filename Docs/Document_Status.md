@@ -35,6 +35,8 @@
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
 | [M4.3.9结果周期刷新/计数](Milestones/M4_3_9_Result_Refresh.md) | 软件完成·无ACK/未烧录 | A每500ms重发同ID；B刷新2s；`$MEASURE_RESULT_STATE`计数 |
+| [M4.3.11配对P0/结果边界修复](Milestones/M4_3_11_Pairing_Review_Fixes.md) | P0已修·P1域证据未解 | 本端事件提交配对器；域失效清结果；旧ID/UNKNOWN方向拒绝；未烧录 |
+| [M4.3.10 PPS共同域门控](Milestones/M4_3_10_PPS_Domain_Unverified.md) | 未验证·PPS/两板待验 | PPS只读getter+QUALIFIED/RATE_REQUALIFY门控；不得当同步验收 |
 | [M4.3.8两屏权威结果交换](Milestones/M4_3_8_Authoritative_Result_Exchange.md) | 软件完成·无重传/未烧录 | A→B 28字节MRES，同一ID/距离；B不重算；单包丢失旧值至2s |
 | [M4.3.7标准chirp/击掌分类](Milestones/M4_3_7_Chirp_Clap_Classifier.md) | 软件接入·真实声样本待验 | 包络/ZCR趋势/差分能量，CHIRP才进序列/UDP；合成测试，未真实标准声/未烧录 |
 | [M4.3.6共同时间域门控](Milestones/M4_3_6_Time_Domain_Gate.md) | 软件门控完成·PPS/两板待验 | A参考/B内部锁定+offset；域无效撤UDP/测量；未直接读PPS/未烧录 |

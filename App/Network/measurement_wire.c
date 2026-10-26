@@ -29,12 +29,12 @@ MeasurementWireStatus MeasurementWire_Encode(const MeasurementResultSnapshot *re
     if(result->status!=MEASUREMENT_VALID || !result->valid || result->id==0U ||
        result->distance_mm<0 || result->distance_mm>10000 ||
        result->quality>100U || result->sound_speed_mm_s==0U ||
-       result->time_domain==0U)
+       result->time_domain==0U ||
+       (result->direction!=SOUND_DIRECTION_A && result->direction!=SOUND_DIRECTION_B))
         return MEASUREMENT_WIRE_INVALID_FIELD;
     data[0]='M';data[1]='R';data[2]='E';data[3]='S';
     data[4]=MEASUREMENT_WIRE_VERSION;data[5]=1U;
-    data[6]=result->direction==SOUND_DIRECTION_A?1U:
-            result->direction==SOUND_DIRECTION_B?2U:0U;
+    data[6]=result->direction==SOUND_DIRECTION_A?1U:2U;
     data[7]=result->quality;
     PutU32(data+8,result->id);
     PutI32(data+12,result->distance_mm);
@@ -59,7 +59,8 @@ MeasurementWireStatus MeasurementWire_Decode(const uint8_t *data, uint16_t lengt
     const uint32_t version=GetU32(data+20);
     const uint32_t domain=GetU32(data+24);
     if(data[5]!=1U || id==0U || distance<0 || distance>10000 ||
-       data[7]>100U || speed==0U || domain==0U || data[6]>2U)
+       data[7]>100U || speed==0U || domain==0U ||
+       (data[6]!=1U && data[6]!=2U))
         return MEASUREMENT_WIRE_INVALID_FIELD;
     result->status=MEASUREMENT_VALID;
     result->valid=true;

@@ -371,7 +371,11 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
     if(profile==NULL || profile->role!=BOARD_ROLE_B){return;}
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
-    if(!domain.valid || domain.id!=result->time_domain){return;}
+    if(!domain.valid || domain.id!=result->time_domain)
+    {
+        MeasurementResult_Invalidate(BSP_Console_GetTickMs());
+        return;
+    }
     (void)MeasurementResult_PublishRemote(result,BSP_Console_GetTickMs());
 }
 /**
@@ -385,6 +389,13 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
     if(profile==NULL || profile->role!=BOARD_ROLE_A){return;}
     MeasurementResultSnapshot result;
     if(!MeasurementResult_Get(now_ms,&result)){return;}
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(!domain.valid || result.time_domain!=domain.id)
+    {
+        MeasurementResult_Invalidate(now_ms);
+        return;
+    }
     if(result.id==last_result_id &&
        (uint32_t)(now_ms-last_result_tx_ms)<APP_RESULT_REFRESH_MS){return;}
     if(UDPSoundEvent_SendResult(now_ms,&result))
