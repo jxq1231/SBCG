@@ -4,7 +4,9 @@
 
 更新：2026-10-26。**先读本页，再读当前状态和本次计划；无需按时间顺序重读所有历史文档。**
 
-当前A为M4.2.4-A4优化镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug de212005…）：STAT_MS 15→8–9ms、AUDIO 27→18ms、LOOP 40→34ms；同轮OTHER/FLUSH≈15ms成为最大单项，UI1–2ms；业务错误0。对照镜像排除A3诊断自扰动。C2评估测得UART占用约21.5%、23.7行/秒，建议集中quiet/full策略。[A4记录](Milestones/M4_2_4_A4_Control_Statistics.md) · [C2评估](Milestones/M4_2_4_C2_Log_Evaluation.md)。此前A/B/A2/A3耗时与批量Stage、M4.2.3-B扫描静默证据按各自范围保留；主动标准音频仍因环境不能发声未验收。历史DIAG窗口定位：扫描59ms、评分5ms、日志208次队满；历史证据保留。
+**最新进度与下一步先读[2026-10-26复核](Progress_Review_2026_10_26.md)。** 检测优化已至A4；C2仅评估完成。除了真实标准音验证，仍缺匹配时间接口、双板事件配对、距离/方向及统一结果显示。下一独立目标建议M4.3.1“已确认匹配→本地PTP模型时间”，日志策略保留为条件优化。本轮软件复验通过，未烧录或重新读取板卡。
+
+当前A为M4.2.4-A4优化镜像（固件标识仍`SBCG-M4.2-BATCH`，Debug de212005…）：STAT_MS 15→8–9ms、AUDIO 27→18ms、LOOP 40→34ms；同轮OTHER/FLUSH≈15ms成为最大单项，UI1–2ms；业务错误0。对照镜像未发现A3诊断抬高最大值。C2评估测得UART占用约21.5%、23.7行/秒，建议集中quiet/full策略。[A4记录](Milestones/M4_2_4_A4_Control_Statistics.md) · [C2评估](Milestones/M4_2_4_C2_Log_Evaluation.md)。此前A/B/A2/A3耗时与批量Stage、M4.2.3-B扫描静默证据按各自范围保留；主动标准音频仍因环境不能发声未验收。历史DIAG窗口定位：扫描59ms、评分5ms、日志208次队满；历史证据保留。
 
 当前 **U3.1 TouchGFX显示范围已实机通过；首窗未知重启待查**：[U3.1记录](Milestones/U3_1_TouchGFX_Status_Page.md) · [当前状态](Project_State.md)。NoOS、软件绘图、约1Hz真实状态，距离/方向/质量仍占位；8根颜色低位暂缓。U2真实RGB565、U0软件页面和U1 SDRAM为历史前置，不重做色条、FMC/MPU或破坏性内存测试。
 
@@ -16,7 +18,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 
 | 用途 | 现行文档 | 阅读规则 |
 | --- | --- | --- |
-| 性能问题下一步怎样优化 | [M4.2.3优化方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | B批量扫描已静默实测SCAN≤3ms（原59ms）；仅剩主动标准音频与主机压力待验 |
+| 性能问题下一步怎样优化 | [M4.2.3优化方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | B批量扫描已静默实测SCAN≤3ms（原59ms）；主机压力已完成，主动声学与真实负载待验 |
 | 下一批软件优化做什么 | [M4.2.4项目书](Plans/2026-10-26_M4_2_4_Foreground_Optimization.md) | A/B/A2/A3/A4完成；C2评估完成（UART占用21.5%），quiet/full方案待选 |
 | 扫频识别现在做到哪一步 | [M4.2.2有界接入](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 初版/R1/R2静默失败保留；DIAG定位；扫描瓶颈已由M4.2.3-B静默改善，手机/标准音频识别仍待验收 |
 | 整个系统如何构建与运行 | [System_Architecture](System_Architecture.md) | 先看目录职责，再沿真实启动/主循环/异步路径阅读 |
@@ -24,7 +26,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 本轮注释改了哪些、是否影响代码 | [Architecture_Comment_Review](Architecture_Comment_Review.md) | 58文件清单、函数覆盖与Flash字节等价证明 |
 | 现在完成什么、板上是什么版本 | [Project_State](Project_State.md) | 每次开始先读；只维护当前状态，不堆叠历史快照 |
 | 全部文档哪些还有效 | [Document_Status](Document_Status.md) | 按文件给出状态、报告与跳读规则 |
-| 本次任务执行到哪里 | [M4.2.4-C2日志评估](Milestones/M4_2_4_C2_Log_Evaluation.md) | C2现状量化与方案评估完成；实施待选择+授权，主动声学仍待验 |
+| 本次任务执行到哪里 | [进度复核与下一步](Progress_Review_2026_10_26.md) | 15组回归及构建/布局复验；明确测距主链缺口和下一单独目标 |
 | 课程目标和未实现部分 | [Project_Roadmap](Project_Roadmap.md) | 基础/提高指标和整机路线仍有效，不是一次实现全部功能的授权 |
 | 构建、烧录、调试 | [Development_Workflow](Development_Workflow.md) | 日常操作指南；硬件访问遵守根规则和当前授权 |
 | 实际连线、资源与未来方案 | [Hardware_Resources](Hardware_Resources.md) | 先看当前资源摘要；TouchGFX已实屏验收，PPS软件待波形验收；双板内部闭环按短时验收边界理解 |
@@ -32,7 +34,7 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 | 自选标准音频和下载素材 | [Audio_Selection](Audio_Selection.md) | 老师允许自行选择；素材和纯C核心已准备，板端识别率未验收 |
 | 网页串口怎么使用 | [SerialWeb](SerialWeb.md) | 115200/8N1；当前已支持手动温度命令；后半为早期发送实验 |
 | 仅核对SYS/RCC | [CubeMX_Step1](CubeMX_Step1.md) | 已完成的系统基线，不重复启用外设 |
-| 最近一次板端实验详情 | [M4.2.4-A4对照与优化](Milestones/M4_2_4_A4_Control_Statistics.md) | A4优化静默通过；C2日志策略待评估，主动声学待验 |
+| 最近一次板端实验详情 | [M4.2.4-A4对照与优化](Milestones/M4_2_4_A4_Control_Statistics.md) | A4优化静默通过；C2日志评估完成、未实施，主动声学待验 |
 | 团队规则 | [AGENTS](../AGENTS.md)、[CONTRIBUTING](../CONTRIBUTING.md) | 持续有效 |
 
 ## 已完成文档的使用规则
@@ -45,6 +47,6 @@ M2.3.1已完成A联合验收，用户随后烧录B；60秒双板各60包、B30�
 
 当前仍 **LOCAL/SYNC=0**。两板内部闭环已通过短时观测，外部同步精度/PPS波形、声学延迟校准、标准音频识别和测距尚未完成，LCD状态页已实测；历史M2.3.2软件及1分钟运行观测通过；交换机原分配A=2、B=1、PC=3口，当前仅A在场。
 
-最新固件与静默运行见[M4.1.3记录](Milestones/M4_1_3_Sound_Event_Time.md)，当前软件页面和下一步见[U0报告](Milestones/U0_RGB565_Status_Page.md)。M2.3.2短时双板观测按历史范围保留，外部精度未测。
+最新进度见[本轮复核](Progress_Review_2026_10_26.md)，最新记录镜像见[A4报告](Milestones/M4_2_4_A4_Control_Statistics.md)，显示范围见[U3.1报告](Milestones/U3_1_TouchGFX_Status_Page.md)。M4.1.3/U0是历史前置，M2.3.2短时双板观测不代表外部精度。
 
 2026-10-23短时验收：B60秒236组四硬件时刻，协议估算−65～+340ns，控制错误/拒绝0；稳定网络A/B各60包零缺口。此为内部估计，各窗口部分重叠，未证明外部同步精度。详见本次交付记录。

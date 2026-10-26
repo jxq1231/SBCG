@@ -12,7 +12,7 @@
 4. R1温度正常采样、T1.2后续连续拔插、sound-01延后和sound-02通过分别保留。旧状态已标注，禁止跨版本合并成一次全绿实验。
 5. U3.1 TouchGFX显示范围已通过单A实屏及82.55秒静默，首窗重启原因未知；U2 RGB565为历史已验收后端；FMC/Region1/2已生成且U1-SDRAM-R1四轮8MB自检及静默共存通过；PPS已由用户生成硬件配置并接入软件，实物未验收；双板闭环源码按M2.3.2记录，短时运行通过，外部精度待验收；现已生成的SAI2/DMA2、USART1 RX、温度和网络不再作为待配置步骤。
 
-当前 **M4.2.2初版、R1、R2均已烧录且静默验收失败**，R2搜索DROP56、串口TX_ERRORS503，下一步需软件修复；DIAG定位已实测：扫描59ms/评分5ms，21次超时/13次覆盖、208次日志队满；性能仍开放。历史M3.2.4板端接入与实物验收计划和报告均已归档。当前M2.3.1身份选择软件与A板联合实测通过，双板网络共存随后通过；M2.3.2软件及1分钟运行内部闭环通过，外部精度未测。M4.2.3-B扫频批量接入已烧录A板并静默通过（SCAN≤3ms、DONE_MAX≤494ms、日志/音频零错误），主动标准音频与MATCH未验收。M4.2.4-A/B已完成静默验证；A2同循环归因、A3 AUDIO/OTHER分解、A4关闭诊断对照与AudioStatistics优化均完成（STAT15→8–9ms、AUDIO27→18ms、LOOP40→34ms）；C2日志评估测得UART占用21.5%、23.7行/秒，quiet/full方案待选，C1 UI暂缓。旧方案和历史烧录授权不可作为新版本的操作指令。
+**最新进度见[2026-10-26复核](Progress_Review_2026_10_26.md)：检测优化已至A4，整机并非只差标准音验证。** M4.2.2初版/R1/R2和DIAG的失败记录按历史保存，扫描瓶颈随后由M4.2.3-B改善；不重复实施旧修复计划。M4.2.3-B当时SCAN≤3ms、DONE_MAX831ms；≤494ms属于后续M4.2.4-B，不跨版本混用。主机合成压力已完成；主动标准音、外部同步精度、双板事件/测距/结果显示仍待实现或验收。M4.2.4-A/B/A2/A3/A4静默范围完成，C2评估完成但未实施，C1 UI暂缓。下一独立目标建议匹配帧→本地PTP模型事件，C2为条件优化。旧方案和历史烧录许可不能作为新操作指令。
 
 ## 逐文件状态
 
@@ -20,6 +20,8 @@
 
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
+| [进度复核与下一步](Progress_Review_2026_10_26.md) | 当前核对结论·软件复验通过 | 整机目标分层、M4.3.1建议、实物补验和精度边界 |
+| [本轮审计计划](Plans/2026-10-26_Progress_Audit/task_plan.md) | 审计已完成·未实施下一功能 | task_plan/findings/progress仅追溯本轮检查 |
 | [M4.2.3性能方案](Plans/2026-10-25_Audio_Scan_Optimization/task_plan.md) | A/B软件完成·B静默通过·主动声学待验 | 批量门控、语义对照、资源预算及分层验收；依据/规划进度在同目录按需读取 |
 | [M4.2.3-A批量门控核心](Milestones/M4_2_3_A_Batch_Detector_Core.md) | 软件等价验证通过·已接入 | 64点批量入口、逐字段对照与复跑证据；B已接入并有静默实测 |
 | [M4.2.3-B静默实测](Milestones/M4_2_3_B_Batch_Scan.md) | 静默范围通过·主动声学待验 | 批量扫描、时延诊断、A板烧录与零错误证据；不表示MATCH/声学精度 |
@@ -28,10 +30,10 @@
 | [M4.2.4-B批量Stage](Milestones/M4_2_4_B_Batch_Stage.md) | 批量迁移静默对比通过·C未开始 | STAGE21→7ms、GAP60→49ms、业务零错误；不表示声学精度 |
 | [M4.2.4-A2同循环归因](Milestones/M4_2_4_A2_Loop_Attribution.md) | 同循环归因通过·C1未触发 | 最大循环AUDIO21–25/OTHER16/UI1ms；口径限制见报告 |
 | [M4.2.4-A3 AUDIO/OTHER分解](Milestones/M4_2_4_A3_Audio_Other_Profile.md) | 内部分解通过·A4已完成 | 最大轮STAT15/SD_STAGE6/CH_PROC6，同轮FLUSH12；不表示纯CPU/最坏时间 |
-| [M4.2.4-A4对照与优化](Milestones/M4_2_4_A4_Control_Statistics.md) | 对照+统计优化通过·C2评估完成 | STAT15→8–9ms、AUDIO27→18ms、LOOP40→34ms；FLUSH≈15ms为下一项 |
+| [M4.2.4-A4对照与优化](Milestones/M4_2_4_A4_Control_Statistics.md) | 对照+统计优化通过·C2评估完成 | STAT15→8–9ms、AUDIO27→18ms、LOOP40→34ms；FLUSH≈15ms保留为条件优化 |
 | [M4.2.4-C2日志评估](Milestones/M4_2_4_C2_Log_Evaluation.md) | 评估完成·实施未开始 | UART占用21.5%、23.7行/秒；quiet/full方案与风险边界 |
 | [M4.2.2有界接入](Milestones/M4_2_2_Bounded_Chirp_Integration.md) | 初版/R1/R2静默均失败 | 失败证据、缓存/调度修复、冻结镜像及验收边界 |
-| [M4.2.2实施计划](Plans/2026-10-25_Bounded_Chirp_Integration.md) | 当前计划·DIAG观测已完成 | 下一步优化能量扫描，保留各自阈值，三次失败保留 |
+| [M4.2.2实施计划](Plans/2026-10-25_Bounded_Chirp_Integration.md) | 历史实施/定位计划·后续批量化已完成 | 按需追溯三次失败和DIAG，不重复旧下一步 |
 | [M4.2.1匹配核心](Milestones/M4_2_1_Chirp_Matcher_Core.md) | 软件范围通过·基线归档 | 模板及配置已用于M4.2.2，逐采样流式算法仍只作基线，不当作实物识别率 |
 | [M4.2.1实施计划](Plans/2026-10-25_Chirp_Matcher_Core.md) | 已完成·历史计划 | 不重复核心实施；下一增量另做实时预算与板端接入 |
 | [标准音频选型](Audio_Selection.md) | 候选素材·待声学实测 | 原始下载/合成文件、参数和许可；纯C核心已验证，板端识别尚未完成 |
