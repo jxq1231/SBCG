@@ -22,6 +22,7 @@ static ip_addr_t peer;
 static uint32_t (*read_tick)(void);
 static UDPSoundEvent_Log emit;
 static UDPSoundEvent_ResultSink result_sink;
+static UDPSoundEvent_EventSink event_sink;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
 static uint32_t last_bind_ms, last_state_ms;
@@ -93,6 +94,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     const uint32_t now=read_tick!=NULL?read_tick():0U;
     if(!SoundPair_Submit(&pair_manager,&event,now))
     {Increment(&rx_bad);return;}
+    if(event_sink!=NULL){event_sink(&event);}
     Increment(&rx_ok);
 }
 /** @brief 在链路可用时重试绑定；1秒节流，失败不阻塞。 */
@@ -135,6 +137,11 @@ void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)
 void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink)
 {
     measurement_sink=sink;
+}
+/** @brief 安装对端事件消费者；NULL不回调。 */
+void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink)
+{
+    event_sink=sink;
 }
 /** @brief A板发送权威结果；非A/未绑定/编码失败返回false并计数。 */
 bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *result)

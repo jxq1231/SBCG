@@ -20,8 +20,14 @@ typedef struct
     uint32_t id;
 } TimeDomainSnapshot;
 
-/** @brief 清空域；上电/重初始化调用。 */
+/** @brief 清空域与令牌；上电/重初始化调用。 */
 void TimeDomain_Init(void);
+
+/** @brief 设置A派生域令牌；0表示尚未获得共享令牌。 */
+void TimeDomain_InitWithId(uint32_t local_id);
+
+/** @brief B收到A事件后采用A派生令牌；不改变TimeSync/PPS资格。 */
+void TimeDomain_AdoptPeerId(uint32_t peer_id);
 
 /** @brief 仅按同步快照更新域（无PPS输入时的兼容路径）。 */
 void TimeDomain_Update(const TimeSyncSnapshot *sync);

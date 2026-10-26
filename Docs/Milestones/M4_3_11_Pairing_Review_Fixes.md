@@ -19,13 +19,19 @@ Review findings中的结构性P0已修复：
 4. MRES不接收方向UNKNOWN，Encode/Decode都要求A/B方向；
 5. 现有评分/结果边界测试补齐上述用例。
 
+## P1 #2：域ID共享证据（部分修复）
+
+- A板用自身UID+启动时刻派生域令牌，随事件携带；
+- B板只有收到A侧事件后采用该令牌，之后B事件/MRES均使用同一令牌；
+- `time_domain`不再固定常量1；A/B配对/结果仍校验令牌相等；
+- 但这只是**A派生启动令牌+单向前置采用**，不是双向握手、不是PTP epoch证据；仍不能当外部同步验收。
+
 ## 仍未解决（不掩盖）
 
-- **P1域证据**：`time_domain`仍是常量ID，PPS/TimeSync只证明本地资格，未携带A/B共享同步标识/epoch证据；这是下一步P1，不是本次已修。
 - 无ACK/结果序列号；A周期刷新仍可能短暂丢包。
 - 真实两板、PPS示波器±10µs、标准声MATCH=0、静默/标定/温补未验证。
 - `event_classifier.high_ratio`仍只作诊断，未参与分类。
-- RATE_REQUALIFY放行仍是内部约定，不等于外部精度证据。
+- RATE_REQUALIFY已从共同域门控排除（仅严格QUALIFIED放行），但仍需真实PPS样本验证。
 
 ## 验证
 

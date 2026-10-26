@@ -379,6 +379,18 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
     (void)MeasurementResult_PublishRemote(result,BSP_Console_GetTickMs());
 }
 /**
+ * @brief B只有收到A的本端事件才采用A域令牌；A事件侧/域非零由UDP层已校验。
+ * @param event 非NULL对端事件，仅本次调用有效。
+ * @return 无返回值；不修改A/B角色、PPS或TimeSync。
+ */
+static void AdoptPeerDomain(const SoundEventRecord *event)
+{
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(event==NULL || profile==NULL || profile->role!=BOARD_ROLE_B)return;
+    if(event->side==SOUND_SIDE_A && event->time_domain!=0U)
+        TimeDomain_AdoptPeerId(event->time_domain);
+}
+/**
  * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
  * @param now_ms 当前HAL毫秒，无符号差支持回绕。
  * @return 无返回值；同ID最多每500ms重发，ID变化立即发送。
@@ -492,7 +504,16 @@ void App_Init(void)
         static const char error[] = "$SYNC_INIT,RESULT=INIT_ERROR\r\n";
         SendLine(error, (int)(sizeof(error) - 1U));
     }
-    TimeDomain_Init();
+    {
+        uint32_t token=0U;
+        if(profile->role==BOARD_ROLE_A){
+            uint32_t hash=2166136261U;
+            for(unsigned i=0U;i<3U;++i){hash=(hash^profile->uid_words[i])*16777619U;}
+            hash=(hash^BSP_Console_GetTickMs())*16777619U;
+            token=hash!=0U?hash:1U;
+        }
+        TimeDomain_InitWithId(token);
+    }
 #endif
 #endif
     TemperatureService_Init(BSP_Console_GetTickMs(), info.uid_words, SendLine);
@@ -529,6 +550,7 @@ void App_Init(void)
     else {
         UDPSoundEvent_SetResultSink(PublishMeasurement);
         UDPSoundEvent_SetMeasurementSink(PublishRemoteMeasurement);
+        UDPSoundEvent_SetEventSink(AdoptPeerDomain);
     }
 #endif
 #endif
@@ -686,7 +708,7 @@ void App_Process(void)
             }
             TimeDomainSnapshot domain;
             TimeDomain_Get(&domain);
-            if (!domain.valid)
+            if (!domain.valid || domain.id==0U)
             {
                 MeasurementResult_Invalidate(BSP_Console_GetTickMs());
                 continue;

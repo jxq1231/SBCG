@@ -10,10 +10,23 @@
 
 #define TIME_DOMAIN_DIAGNOSTIC_ID 1U
 static TimeDomainSnapshot domain;
+static uint32_t token_id;
 
 void TimeDomain_Init(void)
 {
     memset(&domain, 0, sizeof domain);
+    token_id=0U;
+}
+
+void TimeDomain_InitWithId(uint32_t local_id)
+{
+    memset(&domain, 0, sizeof domain);
+    token_id=local_id;
+}
+
+void TimeDomain_AdoptPeerId(uint32_t peer_id)
+{
+    if(peer_id!=0U)token_id=peer_id;
 }
 
 static void UpdateCore(const TimeSyncSnapshot *sync,const PpsServiceSnapshot *pps)
@@ -31,10 +44,14 @@ static void UpdateCore(const TimeSyncSnapshot *sync,const PpsServiceSnapshot *pp
     }
     if (pps != NULL)
     {
-        valid = valid && pps->configured && !pps->faulted && pps->qualified;
+        /* RATE_REQUALIFY remains an internal bounded re-qualification; it is
+           not accepted as a formal common-domain gate until externally verified. */
+        valid = valid && pps->configured && !pps->faulted &&
+                pps->state == PPS_SERVICE_QUALIFIED;
     }
     domain.valid = valid;
-    domain.id = valid ? TIME_DOMAIN_DIAGNOSTIC_ID : 0U;
+    domain.id = valid ? (token_id != 0U ? token_id :
+        (pps == NULL ? TIME_DOMAIN_DIAGNOSTIC_ID : 0U)) : 0U;
 }
 
 void TimeDomain_Update(const TimeSyncSnapshot *sync)

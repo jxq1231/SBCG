@@ -18,6 +18,10 @@ typedef void (*UDPSoundEvent_Log)(const char *line, int length);
 typedef void (*UDPSoundEvent_ResultSink)(const SoundPairResult *result);
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
 void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink);
+/** @brief 对端有效事件回调；用于B采用A域令牌，不替代配对。 */
+typedef void (*UDPSoundEvent_EventSink)(const SoundEventRecord *event);
+/** @brief 安装对端事件消费者；NULL不回调。 */
+void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink);
 /** @brief B板接收A板权威结果的回调；NULL仅丢弃。 */
 typedef void (*UDPSoundEvent_MeasurementSink)(const MeasurementResultSnapshot *result);
 /** @brief 安装权威结果消费者；A板发送、B板接收。 */

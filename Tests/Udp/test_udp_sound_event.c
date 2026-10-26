@@ -18,6 +18,7 @@ static unsigned char rx_payload[SOUND_EVENT_WIRE_BYTES];
 static unsigned int sends, allocs, frees;
 static SoundPairResult paired;
 static unsigned pair_count;
+static uint32_t adopted_domain;
 static uint32_t tick_ms;
 
 struct udp_pcb *udp_new(void) { return &fake_pcb; }
@@ -39,6 +40,8 @@ u16_t pbuf_copy_partial(const struct pbuf *p, void *data, u16_t len, u16_t offse
 static void Log(const char *line,int length) { (void)line;(void)length; }
 static void Result(const SoundPairResult *result)
 { paired=*result; ++pair_count; }
+static void EventSink(const SoundEventRecord *event)
+{ adopted_domain=event->time_domain; }
 static uint32_t Tick(void) { return tick_ms; }
 
 static void ReceiveWire(const uint8_t *wire)
@@ -61,6 +64,7 @@ int main(void)
     gnetif.flags=NETIF_FLAG_UP|NETIF_FLAG_LINK_UP;
     assert(UDPSoundEvent_Init(0U,&profile,Tick,Log));
     UDPSoundEvent_SetResultSink(Result);
+    UDPSoundEvent_SetEventSink(EventSink);
     UDPSoundEvent_Process(100U); /* lazy bind before send */
     SoundEventRecord local={0};
     local.valid=true;local.type=SOUND_EVENT_CHIRP;local.quality=80U;
@@ -79,6 +83,7 @@ int main(void)
     tick_ms=102U;
     ReceiveWire(rx_payload);
     UDPSoundEvent_Process(102U);
+    assert(adopted_domain==1U);
     assert(pair_count==1U && paired.valid && paired.distance_mm==343U &&
            paired.direction==SOUND_DIRECTION_A && paired.a_sequence==1U &&
            paired.b_sequence==2U);

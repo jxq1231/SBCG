@@ -41,9 +41,22 @@ int main(void)
     pps.configured=true;pps.qualified=true;pps.faulted=false;pps.state=PPS_SERVICE_QUALIFIED;
     TimeDomain_UpdateWithPps(&b,&pps);TimeDomain_Get(&out);assert(out.valid);
     pps.state=PPS_SERVICE_RATE_REQUALIFY;TimeDomain_UpdateWithPps(&b,&pps);
-    TimeDomain_Get(&out);assert(out.valid);
+    TimeDomain_Get(&out);assert(!out.valid);
     TimeDomain_UpdateWithPps(&b,NULL);TimeDomain_Get(&out);assert(out.valid);
     TimeDomain_UpdateWithPps(NULL,&pps);TimeDomain_Get(&out);assert(!out.valid);
-    puts("PASS time domain: A/B sync+PPS gating, fault/unqualified and fallback");
+    /* A-derived token is shared with B; invalidation retains it for re-lock. */
+    pps.state=PPS_SERVICE_QUALIFIED;pps.qualified=true;pps.faulted=false;pps.configured=true;
+    TimeDomain_InitWithId(0x12345678U);
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);
+    assert(out.valid && out.id==0x12345678U);
+    TimeDomain_Invalidate();TimeDomain_Get(&out);assert(!out.valid && out.id==0U);
+    TimeDomain_UpdateWithPps(&a,&pps);TimeDomain_Get(&out);
+    assert(out.valid && out.id==0x12345678U);
+    TimeDomain_AdoptPeerId(0x87654321U);
+    TimeDomain_UpdateWithPps(&b,&pps);TimeDomain_Get(&out);
+    assert(out.valid && out.id==0x87654321U);
+    TimeDomain_InitWithId(0U);TimeDomain_UpdateWithPps(&a,&pps);
+    TimeDomain_Get(&out);assert(out.valid && out.id==0U);
+    puts("PASS time domain: A/B sync+PPS gating, shared token adoption and fallback");
     return 0;
 }
