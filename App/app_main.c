@@ -25,6 +25,7 @@
 #include "Measure/measurement_result.h"
 #include "Detector/standard_sequence.h"
 #include "Detector/event_classifier.h"
+#include "Measure/measurement_gate.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -118,6 +119,7 @@ static bool standard_sequence_detected;
 static uint32_t last_result_id;
 static uint32_t last_result_tx_ms;
 static uint32_t acked_result_id;
+static uint32_t last_audio_session;
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -391,8 +393,20 @@ static void ServiceDomain(uint32_t now_ms)
     TimeDomain_Tick(now_ms);
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL)return;
+    if(profile->role==BOARD_ROLE_A)
+    {
+        MeasurementGate_Tick(now_ms);
+        if(MeasurementGate_TakeInvalidation())MeasurementResult_Invalidate(now_ms);
+    }
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
+    static bool last_domain_valid;
+    if(profile->role==BOARD_ROLE_A && domain.valid!=last_domain_valid)
+    {
+        if(domain.valid)MeasurementGate_OnDomainValid(now_ms);
+        else MeasurementGate_OnDomainInvalid(now_ms);
+        last_domain_valid=domain.valid;
+    }
     static bool last_valid;
     static uint32_t last_domain_log_ms;
     if(domain.valid!=last_valid)
@@ -429,11 +443,15 @@ static void PublishMeasurement(const SoundPairResult *pair)
     StandardSequence_Get(&standard_sequence,&sequence);
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
-    if(!domain.valid || !sequence.detected || sequence.quality<50U){
+    MeasurementGateSnapshot gate;
+    MeasurementGate_Get(&gate);
+    if(!domain.valid || domain.id==0U || !sequence.detected || sequence.quality<50U ||
+       !MeasurementGate_CanPublish(&gate)){
         MeasurementResult_Invalidate(now_ms);
         return;
     }
-    (void)MeasurementResult_PublishPair(pair,&temperature,now_ms);
+    if(MeasurementResult_PublishPair(pair,&temperature,now_ms))
+    { (void)MeasurementGate_OnMeasurement(now_ms); }
 }
 /**
  * @brief B板接收A板权威结果；共同域不匹配或非B角色时丢弃，不重算距离。
@@ -603,12 +621,13 @@ void App_Init(void)
     SoundEventTime_Init(SendLine);
 #ifdef SBCG_USE_BOARD_IDENTITY
     MeasurementResult_Init(BSP_Console_GetTickMs());
+    MeasurementGate_Init(BSP_Console_GetTickMs());
     {
         const StandardSequenceConfig sequence_config={
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
         (void)StandardSequence_Init(&standard_sequence,&sequence_config);
         standard_sequence_detected=false;
-        last_result_id=0U;last_result_tx_ms=0U;acked_result_id=0U;
+        last_result_id=0U;last_result_tx_ms=0U;acked_result_id=0U;last_audio_session=0U;
     }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))
@@ -754,6 +773,16 @@ void App_Process(void)
         }
         BSP_AudioSnapshot snapshot;
         BSP_Audio_GetSnapshot(&snapshot);
+#ifdef SBCG_USE_BOARD_IDENTITY
+        const BoardIdentityProfile *audio_profile=BSP_BoardIdentity_Get();
+        if(audio_profile!=NULL && audio_profile->role==BOARD_ROLE_A &&
+           last_audio_session!=0U && snapshot.session!=last_audio_session)
+        {
+            MeasurementGate_OnStreamInvalid(BSP_Console_GetTickMs());
+            MeasurementResult_Invalidate(BSP_Console_GetTickMs());
+        }
+        last_audio_session=snapshot.session;
+#endif
         SoundEventTime_Process(BSP_Console_GetTickMs(),&snapshot);
         /* Diagnostic event publishing: identity/time-domain are supplied by App,
            but this constant domain is not a PTP sync or formal measurement claim. */
@@ -764,8 +793,12 @@ void App_Process(void)
             const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
             if (event_profile == NULL) { break; }
             if (notice.event_class != EVENT_CLASS_CHIRP) { continue; }
+            if(event_profile->role==BOARD_ROLE_A)
+                MeasurementGate_OnChirp(BSP_Console_GetTickMs(),notice.session);
             const bool sequence_detected=StandardSequence_Push(
                 &standard_sequence,notice.time_ns,notice.quality);
+            if(sequence_detected && event_profile->role==BOARD_ROLE_A)
+                MeasurementGate_OnSequence(BSP_Console_GetTickMs());
             if(sequence_detected!=standard_sequence_detected){
                 StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
                 char sequence_line[256];

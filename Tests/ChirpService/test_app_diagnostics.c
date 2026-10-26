@@ -10,6 +10,7 @@
 #include "Detector/sound_event_time.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
+#include "Measure/measurement_gate.h"
 #include "Detector/standard_sequence.h"
 #include "Sync/time_domain.h"
 /** @brief 空锚点源，out借用不写，返回false。 */
@@ -100,6 +101,29 @@ void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink){(void)sink;}
 /** @brief App测试桩：B发送MACK。 */
 bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
 {(void)now;(void)id;(void)domain;return true;}
+
+/** @brief App测试桩：初始化测量门控。 */
+void MeasurementGate_Init(uint32_t now){(void)now;}
+/** @brief App测试桩：提交CHIRP。 */
+void MeasurementGate_OnChirp(uint32_t now,uint32_t session){(void)now;(void)session;}
+/** @brief App测试桩：标准序列形成。 */
+void MeasurementGate_OnSequence(uint32_t now){(void)now;}
+/** @brief App测试桩：记录测量。 */
+bool MeasurementGate_OnMeasurement(uint32_t now){(void)now;return true;}
+/** @brief App测试桩：域失效。 */
+void MeasurementGate_OnDomainInvalid(uint32_t now){(void)now;}
+/** @brief App测试桩：域恢复。 */
+void MeasurementGate_OnDomainValid(uint32_t now){(void)now;}
+/** @brief App测试桩：流失效。 */
+void MeasurementGate_OnStreamInvalid(uint32_t now){(void)now;}
+/** @brief App测试桩：门控周期。 */
+void MeasurementGate_Tick(uint32_t now){(void)now;}
+/** @brief App测试桩：允许发布。 */
+bool MeasurementGate_CanPublish(const MeasurementGateSnapshot *s){(void)s;return true;}
+/** @brief App测试桩：无失效请求。 */
+bool MeasurementGate_TakeInvalidation(void){return false;}
+/** @brief App测试桩：复制空状态。 */
+void MeasurementGate_Get(MeasurementGateSnapshot *out){if(out)memset(out,0,sizeof *out);}
 int main(void)
 {
  Reset(0U,true);temperature_low=true;

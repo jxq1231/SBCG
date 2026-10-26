@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.14静默/瞬态测量门控（软件完成，2026-10-27）。** `measurement_gate`状态机：1s预热、标准序列才开测量、3s无新序列撤销、失域/音频会话变化FAULT；单CHIRP/击掌不打开门控。主机测试PASS，未烧录/未60s实测。见[M4.3.14记录](Milestones/M4_3_14_Quiet_Transient_Gate.md)。
+
 **M4.3.13权威结果MACK确认（软件完成，2026-10-27）。** B接受MRES后回16字节MACK；A收到同令牌成功ACK后停止该ID刷新，ACK丢失仍500ms重发；结果状态增加ACK_TX/RX/BAD。未烧录/未两板实测。见[M4.3.13记录](Milestones/M4_3_13_Result_Ack.md)。
 
 **M4.3.12共同域双向握手（软件完成，2026-10-27）。** 新增`DOMN` 24字节REQ/ACK：A每500ms发REQ，B仅本地严格合格才回ACK，A收到同令牌有效ACK才放行；B收到REQ且本地合格才可发事件；超时/FAULT撤域。未烧录/未示波器验收。见[M4.3.12记录](Milestones/M4_3_12_Domain_Handshake.md)。
