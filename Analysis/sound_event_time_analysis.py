@@ -3,7 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from audio_time_map_analysis import Anchor,reference
+from audio_time_map_analysis import Anchor,reference,reference_q16
 from serial_capture_integrity import validate_boot_capture
 FW='SBCG-M4.1-TIME'
 
@@ -54,6 +54,29 @@ def evaluate(records,run,preparation_boots=1,quiet=False,expected_firmware=None)
    if expected[0]!=0 or actual!=expected[2:]:errors.append('exact Fraction mismatch')
    else:verified+=1
   except (KeyError,ValueError):errors.append('missing/invalid model source')
+ # Independent Q16 TOA records are optional for old captures; when present they
+ # must identify a real candidate and match the exact rational model.
+ toa_results={};toa_verified=0
+ for t,d in rows('$SOUND_TOA_TIME'):
+  seq=int(d['SEQ'])
+  if seq in toa_results or seq not in events:errors.append('duplicate or foreign TOA result');continue
+  toa_results[seq]=(t,d)
+  et,event=events[seq]
+  if d.get('SESSION')!=event.get('SESSION'):errors.append('TOA candidate identity mismatch')
+  if d.get('LOCAL')!='1' or d.get('SYNC')!='0':errors.append('TOA scope mismatch')
+  if d.get('STATUS')!='OK':
+   if d.get('STATUS') not in ('CLOCK','STREAM','ANCHOR','SESSION','ORDER','GAP','STALE','NO_LEFT','TIMEOUT','CORE','TOA_MISSING','TOA_INVALID'):errors.append('unknown TOA status')
+   if any(k in d for k in ('EST_NS','LO_NS','HI_NS','L','R','FRAME','Q16')):errors.append('failed TOA contains model fields')
+   continue
+  try:
+   left,right=anchors[int(d['L'])],anchors[int(d['R'])]
+   if int(d['R'])!=int(d['L'])+1 or any(anchor_sources[int(d[k])][0]>t for k in ('L','R')):errors.append('future/nonadjacent TOA anchor')
+   expected=reference_q16(a(left),a(right),int(d['SESSION']),int(d['FRAME']),int(d['Q16']))
+   actual=tuple(int(d[k]) for k in ('EST_NS','LO_NS','HI_NS'))
+   if expected[0]!=0 or actual!=expected[2:]:errors.append('TOA exact Fraction mismatch')
+   elif event.get('TOA_US')=='NA':errors.append('TOA success with SOUND_CAND TOA_US=NA')
+   else:toa_verified+=1
+  except (KeyError,ValueError):errors.append('missing/invalid TOA model source')
  responses=[]
  for tone in run.get('tones',[]):
   begin=tone['host_start_s']-shift
@@ -71,11 +94,12 @@ def evaluate(records,run,preparation_boots=1,quiet=False,expected_firmware=None)
   'positions_contiguous':zero('$AUDIO_POS',['GAP','FAULTS']) and all(d.get('INDEX_VALID')=='1' and d.get('CONTIG')=='1' and d.get('VALID')=='1' for _,d in rows('$AUDIO_POS')),
   'all_candidates_accounted':(quiet or bool(events)) and events.keys()==results.keys(),
   'model_exact_and_no_invalid_fields':verified>=(0 if quiet else 5) and not errors,
+  'toa_model_optional_and_exact':(not toa_results) or (toa_verified>0 and not errors),
   'stimulus_scope_satisfied':(quiet and not run.get('tones') and not run.get('play_requested',False)) or (not quiet and len(responses)==5 and all(r['all_have_ok_model'] for r in responses)),
   'queue_drained_no_losses':bool(states) and states[-1][1].get('PENDING')=='0' and zero('$SOUND_TIME_STATE',['DROPPED']) and int(states[-1][1].get('QUEUED','-1'))==len(events) and int(states[-1][1].get('OK','-1'))==verified and int(states[-1][1].get('REJECT','-1'))==rejected,
   'original_map_observer_alive':len(rows('$AUDIO_MAP_CHECK'))>=20 and len(rows('$AUDIO_MAP'))==len(rows('$AUDIO_MAP_CHECK')) and all(d.get('STATUS')=='OK' for _,d in rows('$AUDIO_MAP')),
  }
- return {'status':('PASS_QUIET_PIPELINE_SCOPE' if quiet else 'PASS_LOCAL_EVENT_TRANSFER_MODEL') if all(checks.values()) else 'FAIL_OR_INCOMPLETE','checks':checks,'errors':errors,'firmware':boot,'duration_after_selected_boot_s':duration,'explicit_preparation_boots':preparation_boots,'selected_boot_shift_s':shift,'counts':{k:len(v) for k,v in groups.items()},'quiet_scope':quiet,'exact_models':verified,'rejected_models':rejected,'responses':responses,'last_time_state':states[-1][1] if states else None,'hardware_precision_verified':False,'acoustic_recognition_verified':False,'coordinate':'FIRST zero-based PCM frame -> FIRST+1 completed-transfer progress; not acoustic arrival time'}
+ return {'status':('PASS_QUIET_PIPELINE_SCOPE' if quiet else 'PASS_LOCAL_EVENT_TRANSFER_MODEL') if all(checks.values()) else 'FAIL_OR_INCOMPLETE','checks':checks,'errors':errors,'firmware':boot,'duration_after_selected_boot_s':duration,'explicit_preparation_boots':preparation_boots,'selected_boot_shift_s':shift,'counts':{k:len(v) for k,v in groups.items()},'quiet_scope':quiet,'exact_models':verified,'rejected_models':rejected,'toa_exact_models':toa_verified,'toa_records':len(toa_results),'responses':responses,'last_time_state':states[-1][1] if states else None,'hardware_precision_verified':False,'acoustic_recognition_verified':False,'coordinate':'FIRST zero-based PCM frame -> FIRST+1 completed-transfer progress; not acoustic arrival time'}
 
 def analyze(prefix,preparation_boots,quiet=False,expected_firmware=None):
  run=json.loads(Path(str(prefix)+'-run.json').read_text(encoding='utf-8'))

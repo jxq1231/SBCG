@@ -14,6 +14,7 @@
 #define AUDIO_TIME_MAP_MIN_WINDOW_NS UINT64_C(100000000)
 #define AUDIO_TIME_MAP_MAX_WINDOW_NS UINT64_C(10000000000)
 #define AUDIO_TIME_MAP_MAX_SPAN_FRAMES UINT64_C(500000)
+#define AUDIO_TIME_MAP_Q16_ONE 65536U
 /* Outward-rounded millihertz limits around derived 47991.071 Hz +/-1%.
    Sanity limits only: neither instantaneous rate nor acoustic calibration. */
 #define AUDIO_TIME_MAP_MIN_RATE_MILLI_HZ UINT64_C(47511160)
@@ -56,8 +57,17 @@ typedef enum
     AUDIO_TIME_MAP_WINDOW,
     AUDIO_TIME_MAP_RATE,
     AUDIO_TIME_MAP_OUTSIDE,
-    AUDIO_TIME_MAP_RANGE
+    AUDIO_TIME_MAP_RANGE,
+    AUDIO_TIME_MAP_BAD_POSITION,
+    AUDIO_TIME_MAP_Q16_RANGE
 } AudioTimeMapStatus;
+
+/** @brief NDTR模型进度坐标的Q16子帧表示；frame为整数进度，fraction_q16为1/65536帧。 */
+typedef struct
+{
+    uint64_t frame;
+    uint16_t fraction_q16;
+} AudioTimeMapPosition;
 
 /* Pure function; no HAL, allocation, peripheral access or global state.
    Caller isolates a single BOOT/board before invoking this function: SESSION
@@ -85,5 +95,19 @@ AudioTimeMapStatus AudioTimeMap_Estimate(const AudioTimeMapAnchor *left,
                                         uint32_t target_session,
                                         uint64_t frame_position,
                                         AudioTimeMapResult *result);
+/**
+ * @brief   以整数帧+Q16子帧坐标估计被夹住的NDTR进度对应模型时间。
+ * @param   left/right 同板同启动域、同会话的只读锚点，不可为NULL。
+ * @param   target_session 非零目标会话，必须匹配两端。
+ * @param   position 非NULL只读Q16坐标；frame为整数进度，fraction_q16须小于65536。
+ * @param   result 非NULL可写输出；失败清零，成功给出纳秒中值及相位边界。
+ * @return  OK或既有/新增拒绝原因；Q16=0时逐项等价于AudioTimeMap_Estimate。
+ * @note    仅映射量化后的Q16坐标；一LSB的Q16分辨率不并入LO/HI，也不代表物理采样或声学精度。
+ */
+AudioTimeMapStatus AudioTimeMap_EstimateQ16(const AudioTimeMapAnchor *left,
+                                           const AudioTimeMapAnchor *right,
+                                           uint32_t target_session,
+                                           const AudioTimeMapPosition *position,
+                                           AudioTimeMapResult *result);
 
 #endif

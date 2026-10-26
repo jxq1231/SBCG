@@ -121,3 +121,116 @@ AudioTimeMapStatus AudioTimeMap_Estimate(const AudioTimeMapAnchor *left,
     result->valid = true;
     return AUDIO_TIME_MAP_OK;
 }
+
+/**
+ * @brief   以整数帧+Q16子帧坐标估计被夹住的NDTR进度对应模型时间。
+ * @param   left 左端只读锚点，不可为NULL。
+ * @param   right 右端只读锚点，不可为NULL，须与左端同板同启动域。
+ * @param   target_session 非零目标采集会话，必须匹配两端。
+ * @param   position 非NULL只读Q16坐标；fraction_q16须小于65536。
+ * @param   result 调用方可写结果，不可为NULL且不与输入重叠；失败清零。
+ * @return  OK表示模型输入有效；其余枚举说明拒绝原因。
+ * @note    Q16=0时与整数接口逐项一致；边界只覆盖量化坐标和锚点相位，
+ *          一Q16 LSB分辨率不并入边界，也不代表物理采样/声学精度。
+ */
+AudioTimeMapStatus AudioTimeMap_EstimateQ16(const AudioTimeMapAnchor *left,
+                                           const AudioTimeMapAnchor *right,
+                                           uint32_t target_session,
+                                           const AudioTimeMapPosition *position,
+                                           AudioTimeMapResult *result)
+{
+    uint64_t time_left_ns, time_right_ns, elapsed_ns;
+    uint64_t upper_left, upper_right, min_delta, max_delta;
+    uint64_t base, remainder, fraction_numerator, fraction_denominator;
+    uint64_t delta, denominator, early_ns, late_ns;
+
+    if (result == NULL)
+    {
+        return AUDIO_TIME_MAP_BAD_ARGUMENT;
+    }
+    memset(result, 0, sizeof *result);
+    if (left == NULL || right == NULL || position == NULL)
+    {
+        return AUDIO_TIME_MAP_BAD_ARGUMENT;
+    }
+    /* fraction_q16 is uint16_t and AUDIO_TIME_MAP_Q16_ONE==65536, so the
+       fixed-width representation cannot carry an out-of-range fraction. */
+    if (!ValidAnchor(left) || !ValidAnchor(right))
+    {
+        return AUDIO_TIME_MAP_INVALID_ANCHOR;
+    }
+    if (target_session == 0U || left->session != target_session ||
+        right->session != target_session)
+    {
+        return AUDIO_TIME_MAP_SESSION;
+    }
+    if (left->frame_hi == UINT64_MAX || right->frame_hi == UINT64_MAX ||
+        position->frame == UINT64_MAX)
+    {
+        return AUDIO_TIME_MAP_RANGE;
+    }
+    upper_left = left->frame_hi + 1U;
+    upper_right = right->frame_hi + 1U;
+    time_left_ns = (uint64_t)left->sec * NS_PER_SEC + left->nsec;
+    time_right_ns = (uint64_t)right->sec * NS_PER_SEC + right->nsec;
+    if (time_right_ns <= time_left_ns || right->frame_lo <= upper_left)
+    {
+        return AUDIO_TIME_MAP_ORDER;
+    }
+    elapsed_ns = time_right_ns - time_left_ns;
+    if (elapsed_ns < AUDIO_TIME_MAP_MIN_WINDOW_NS ||
+        elapsed_ns > AUDIO_TIME_MAP_MAX_WINDOW_NS)
+    {
+        return AUDIO_TIME_MAP_WINDOW;
+    }
+    min_delta = right->frame_lo - upper_left;
+    max_delta = upper_right - left->frame_lo;
+    if (max_delta > AUDIO_TIME_MAP_MAX_SPAN_FRAMES)
+    {
+        return AUDIO_TIME_MAP_RANGE;
+    }
+    if (min_delta * NS_PER_SEC_X_MILLI <
+            elapsed_ns * AUDIO_TIME_MAP_MIN_RATE_MILLI_HZ ||
+        max_delta * NS_PER_SEC_X_MILLI >
+            elapsed_ns * AUDIO_TIME_MAP_MAX_RATE_MILLI_HZ)
+    {
+        return AUDIO_TIME_MAP_RATE;
+    }
+    if (position->frame < upper_left || position->frame > right->frame_lo ||
+        (position->frame == right->frame_lo && position->fraction_q16 != 0U))
+    {
+        return AUDIO_TIME_MAP_OUTSIDE;
+    }
+
+    /* Lower edge: floor(elapsed * ((frame-u0) + q16/65536) / (u1-u0)). */
+    delta = position->frame - upper_left;
+    denominator = upper_right - upper_left;
+    base = (elapsed_ns * delta) / denominator;
+    remainder = (elapsed_ns * delta) % denominator;
+    fraction_numerator = remainder * AUDIO_TIME_MAP_Q16_ONE +
+                         elapsed_ns * (uint64_t)position->fraction_q16;
+    fraction_denominator = denominator * AUDIO_TIME_MAP_Q16_ONE;
+    early_ns = base + fraction_numerator / fraction_denominator;
+
+    /* Upper edge: ceil(elapsed * ((frame-l0) + q16/65536) / (l1-l0)). */
+    delta = position->frame - left->frame_lo;
+    denominator = right->frame_lo - left->frame_lo;
+    base = (elapsed_ns * delta) / denominator;
+    remainder = (elapsed_ns * delta) % denominator;
+    fraction_numerator = remainder * AUDIO_TIME_MAP_Q16_ONE +
+                         elapsed_ns * (uint64_t)position->fraction_q16;
+    fraction_denominator = denominator * AUDIO_TIME_MAP_Q16_ONE;
+    late_ns = base;
+    if (fraction_numerator != 0U)
+    {
+        late_ns += (fraction_numerator + fraction_denominator - 1U) /
+                   fraction_denominator;
+    }
+
+    result->model_lower_ns = time_left_ns + early_ns;
+    result->model_upper_ns = time_left_ns + late_ns;
+    result->estimate_ns = result->model_lower_ns +
+                         (result->model_upper_ns - result->model_lower_ns) / 2U;
+    result->valid = true;
+    return AUDIO_TIME_MAP_OK;
+}

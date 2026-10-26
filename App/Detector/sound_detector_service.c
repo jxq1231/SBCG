@@ -7,9 +7,7 @@
  * @note        仅串行前台，不调用BSP Begin/End、不保留样本指针或重组跨块PCM；无新IRQ/DMA/PTP时间查询。
  */
 #include "sound_detector_service.h"
-#ifdef SBCG_USE_SOUND_TIME
 #include "sound_event_time.h"
-#endif
 #include "BSP/bsp_console.h"
 #include "toa_estimator.h"
 #include <inttypes.h>
@@ -24,7 +22,8 @@
 #define AUDIO_RATE_HZ 48000U
 const SoundDetectorConfig SoundDetectorService_DefaultConfig={64U,256U,128U,2U,8U,24000U};
 typedef struct { SoundCandidate event; uint32_t completed_ms,sequence;
-                 uint64_t toa_anchor; double toa_fraction; bool toa_valid; } QueuedCandidate;
+                 uint64_t toa_anchor; double toa_fraction; bool toa_valid;
+                 SoundToaPosition toa; } QueuedCandidate;
 static SoundDetector current,working;
 static SoundDetectorServiceSnapshot diagnostics;
 static SoundCandidate staged[SOUND_DETECTOR_QUEUE_CAPACITY];
@@ -32,6 +31,7 @@ static QueuedCandidate queue[SOUND_DETECTOR_QUEUE_CAPACITY];
 static double staged_toa[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint64_t staged_toa_anchor[SOUND_DETECTOR_QUEUE_CAPACITY];
 static bool staged_toa_ok[SOUND_DETECTOR_QUEUE_CAPACITY];
+static SoundToaPosition staged_toa_position[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint32_t staged_total,staged_ms,last_event_ms,last_state_ms;
 static uint8_t staged_count,head,count;
 static bool active,stage_valid,boundary;
@@ -66,6 +66,29 @@ static void RecordProcessTime(uint32_t begin_ms)
 { const uint32_t elapsed=BSP_Console_GetTickMs()-begin_ms;
   if(elapsed>diagnostics.max_process_ms)diagnostics.max_process_ms=elapsed; }
 /**
+ * @brief 将窗口内双精度位置拆成绝对整数帧和Q16分数，不把绝对帧转double。
+ * @param anchor 窗口起点零基绝对PCM帧。
+ * @param fraction 估算器输出的窗口内位置，含整数部分。
+ * @param out 非NULL输出；成功为VALID，否则MISSING/INVALID。
+ * @return true为位置有效；false为NaN/Inf/负数/越窗/溢出。
+ * @note 仅使用窗口内相对位置做double拆分；绝对锚点用整数加法和减法上界检查。
+ */
+static bool QuantizeToa(uint64_t anchor,double fraction,SoundToaPosition *out)
+{
+    out->status=SOUND_TOA_MISSING;out->frame=0U;out->fraction_q16=0U;
+    /* NaN fails both comparisons; infinities/negative/窗口外值也被拒绝。 */
+    if(!(fraction>=0.0 && fraction<256.0)){out->status=SOUND_TOA_INVALID;return false;}
+    uint64_t integer=(uint64_t)fraction;
+    const double remainder=fraction-(double)integer;
+    uint32_t q16=(uint32_t)(remainder*65536.0+0.5);
+    if(q16==65536U){q16=0U;++integer;}
+    /* 事件服务还要把零基帧加1转模型进度；此处先保证两者都不溢出。 */
+    if(anchor>UINT64_MAX-integer-1U){out->status=SOUND_TOA_INVALID;return false;}
+    out->frame=anchor+integer;out->fraction_q16=(uint16_t)q16;
+    out->status=SOUND_TOA_VALID;return true;
+}
+
+/**
  * @brief 在Stage借用期内仅对当前块内的完整256帧候选窗调用原TOA估算器。
  * @param block 非NULL只读交错PCM借用描述符，样本仅在本次调用中读取。
  * @param event 非NULL只读暂存能量候选，onset_frame为会话内绝对帧号。
@@ -73,12 +96,13 @@ static void RecordProcessTime(uint32_t begin_ms)
  * @param channel 选定声道0或1。
  * @return 无返回值；不完整窗口或估算失败清暂存TOA有效性并计toa_miss，不丢能量候选。
  * @note 目标窗起点=max(onset−64,0)，缺左沿或右侧不足256帧时直接拒绝，不裁到块首、
- *       不补零、不重组跨块PCM。完整窗锚点随队列保存，Process按(锚点+分数)换算微秒。
+ *       不补零、不重组跨块PCM。完整窗锚点随队列保存，Q16副本供事件时间服务使用。
  */
 static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
     uint8_t slot,uint8_t channel)
 {
     staged_toa_ok[slot]=false;staged_toa[slot]=0.0;staged_toa_anchor[slot]=0U;
+    staged_toa_position[slot]=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U};
     uint64_t anchor=0U;
     if(event->onset_frame>TOA_LEFT_MARGIN)anchor=event->onset_frame-TOA_LEFT_MARGIN;
     if(anchor<block->first_frame){Add(&diagnostics.toa_miss,1U);return;}
@@ -95,6 +119,10 @@ static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
     }
     staged_toa[slot]=fraction;staged_toa_anchor[slot]=anchor;
     staged_toa_ok[slot]=true;Add(&diagnostics.toa_ok,1U);
+    /* 保留旧TOA_US的double来源；模型只接收固定Q16副本。 */
+    if(!QuantizeToa(anchor,fraction,&staged_toa_position[slot])){
+        staged_toa_ok[slot]=false;Add(&diagnostics.toa_invalid,1U);
+    }
 }
 /** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
 static void ResetHistory(void)
@@ -208,7 +236,8 @@ bool SoundDetectorService_Complete(bool accepted)
         if(count==SOUND_DETECTOR_QUEUE_CAPACITY){Add(&diagnostics.dropped,1U);continue;}
         const uint8_t tail=(uint8_t)((head+count)%SOUND_DETECTOR_QUEUE_CAPACITY);
         queue[tail]=(QueuedCandidate){staged[i],staged_ms,sequence,
-            staged_toa_anchor[i],staged_toa[i],staged_toa_ok[i]};++count;
+            staged_toa_anchor[i],staged_toa[i],staged_toa_ok[i],
+            staged_toa_position[i]};++count;
     }
     active=stage_valid=false;staged_count=0U;staged_total=0U;return true;
 }
@@ -266,7 +295,7 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
             item.event.peak_abs,item.event.clipped ? 1U:0U,toa_us));
 #ifdef SBCG_USE_SOUND_TIME
         /* 已归还并验证且已发布的元数据副本；时间服务不访问PCM。 */
-        (void)SoundEventTime_Submit(now_ms,item.sequence,&item.event);
+        (void)SoundEventTime_SubmitToa(now_ms,item.sequence,&item.event,&item.toa);
 #endif
     }
     if((uint32_t)(now_ms-last_state_ms)<STATE_LOG_PERIOD_MS){RecordProcessTime(begin_ms);return;}

@@ -66,6 +66,28 @@ def main():
                 print(f'{label} {option} {scenario}: exit={ran.returncode}\n' +
                       ran.stdout + ran.stderr, flush=True)
                 result = result or ran.returncode
+            if label == 'toa-boundaries':
+                handoff = out / f'toa-handoff_{option[1:]}.exe'
+                handoff_command = [compiler,'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
+                    '-DSBCG_USE_SOUND_TIME=1','-I',str(root/'App'),
+                    str(root/'Tests/SoundDetectorService/test_toa_handoff.c'),
+                    str(source),str(detector),'-o',str(handoff)]
+                built_handoff = subprocess.run(handoff_command,capture_output=True,text=True,timeout=30)
+                (out / f'toa-handoff_{option[1:]}_build.log').write_text(
+                    ('COMMAND: ' + subprocess.list2cmdline(handoff_command) + '\n' +
+                     built_handoff.stdout + built_handoff.stderr +
+                     f'\nexit={built_handoff.returncode}\n'), encoding='utf-8')
+                if built_handoff.returncode:
+                    print(built_handoff.stdout + built_handoff.stderr, flush=True)
+                    result = result or built_handoff.returncode
+                    continue
+                ran_handoff = subprocess.run([str(handoff)],capture_output=True,text=True,timeout=30)
+                (out / f'toa-handoff_{option[1:]}.log').write_text(
+                    ('COMMAND: ' + subprocess.list2cmdline([str(handoff)]) + '\n' +
+                     ran_handoff.stdout + ran_handoff.stderr +
+                     f'\nexit={ran_handoff.returncode}\n'), encoding='utf-8')
+                print(ran_handoff.stdout + ran_handoff.stderr, flush=True)
+                result = result or ran_handoff.returncode
     return result
 
 

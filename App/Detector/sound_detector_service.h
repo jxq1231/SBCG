@@ -18,6 +18,8 @@ typedef struct {
     uint32_t max_stage_ms,max_process_ms;
     /** @brief 子帧前沿过阈估算成功/失败次数；失败不改变候选内容，仅TOA_US为NA。 */
     uint32_t toa_ok,toa_miss;
+    /** @brief 局部估算成功但窗口位置无法量化为Q16/绝对帧溢出的次数。 */
+    uint32_t toa_invalid;
     uint8_t pending,channel;
     bool configured,armed,staging;
 } SoundDetectorServiceSnapshot;

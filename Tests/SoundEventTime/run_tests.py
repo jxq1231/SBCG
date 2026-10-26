@@ -20,6 +20,15 @@ built=subprocess.run(command,capture_output=True,text=True,timeout=30);print(bui
 if built.returncode:sys.exit(built.returncode)
 p=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30);print(p.stdout+p.stderr)
 if p.returncode:sys.exit(p.returncode)
+# Q16 window-TOA submission and independent SOUND_TOA_TIME record, both optimisation levels.
+for option in ('-O0','-O2'):
+ toa=out/('test_toa_time_'+option[1:]+'.exe')
+ toa_command=[shutil.which('gcc'),'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
+   '-DSBCG_USE_SOUND_TIME=1','-I',str(root/'App'),
+   str(root/'Tests/SoundEventTime/test_toa_time.c'),str(source),
+   str(root/'App/Audio/audio_time_map.c'),'-o',str(toa)]
+ subprocess.run(toa_command,check=True,timeout=30)
+ subprocess.run([str(toa)],check=True,timeout=30)
 bridge=out/'event_time_cli.exe'
 command[command.index(str(root/'Tests/SoundEventTime/test_event_time.c'))]=str(root/'Tests/SoundEventTime/reference_bridge.c')
 command[-1]=str(bridge)

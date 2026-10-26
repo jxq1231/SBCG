@@ -10,9 +10,27 @@
 #include "Audio/audio_time_anchor.h"
 #include "BSP/bsp_audio.h"
 #define SOUND_TIME_CAPACITY 4U
+#define SOUND_TOA_Q16_ONE 65536U
 typedef enum { SOUND_TIME_CLOCK, SOUND_TIME_STREAM } SoundTimeReset;
+/** @brief 窗口TOA状态；MISSING/INVALID不得产生模型时间，VALID表示坐标已量化。 */
+typedef enum { SOUND_TOA_MISSING = 0, SOUND_TOA_VALID, SOUND_TOA_INVALID } SoundToaStatus;
+/**
+ * @brief 检测器暂存的窗口内TOA副本。
+ * @note frame为估计前沿所在的零基绝对PCM帧floor；fraction_q16为1/65536帧的分数；
+ *       本结构不含PCM指针。送到事件服务后由该服务一次性加1转换为NDTR模型进度。
+ */
+typedef struct
+{
+    SoundToaStatus status;
+    uint64_t frame;
+    uint16_t fraction_q16;
+} SoundToaPosition;
 /** @brief uint32饱和累计；pending为当前固定队列长度，无DMA所有权。 */
-typedef struct { uint32_t queued,ok,rejected,dropped; uint8_t pending; } SoundEventTimeSnapshot;
+typedef struct {
+    uint32_t queued,ok,rejected,dropped;
+    uint32_t toa_queued,toa_ok,toa_rejected,toa_missing,toa_invalid;
+    uint8_t pending;
+} SoundEventTimeSnapshot;
 /** @brief 前台初始化并清队列；log可NULL停用，回调须返回前消费/复制临时字节；无返回值，不读硬件。 */
 void SoundEventTime_Init(void (*log)(const char *,int));
 /**
@@ -24,6 +42,19 @@ void SoundEventTime_Init(void (*log)(const char *,int));
  * @note 无PCM访问和日志；FIRST+1为模型坐标，confirmed仅用于元数据校验。
  */
 bool SoundEventTime_Submit(uint32_t now_ms,uint32_t sequence,const SoundCandidate *candidate);
+/**
+ * @brief 复制带固定窗口TOA的已验证候选到有界队列。
+ * @param now_ms 归还后的当前HAL毫秒，支持无符号回绕。
+ * @param sequence SOUND_CAND序号，非零严格递增且本启动内不复用。
+ * @param candidate 非NULL只读候选，返回后无需保留；FIRST不可UINT64_MAX。
+ * @param position 非NULL只读TOA副本；VALID坐标溢出时降级为INVALID，MISSING/INVALID原样报告。
+ * @return true为已排队；false为参数/序号/容量拒绝，计dropped。
+ * @note 旧$SOUND_TIME仍按FIRST+1输出；新增$SOUND_TOA_TIME只在VALID时输出模型，
+ *       缺失/非法时不回退到FIRST+1，也不访问PCM。
+ */
+bool SoundEventTime_SubmitToa(uint32_t now_ms,uint32_t sequence,
+                              const SoundCandidate *candidate,
+                              const SoundToaPosition *position);
 /**
  * @brief 接受由唯一锚点消费者分发的观测副本。
  * @param now_ms 取副本后的HAL毫秒。

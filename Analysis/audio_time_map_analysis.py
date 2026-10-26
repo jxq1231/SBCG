@@ -83,6 +83,49 @@ def reference(left, right, target_session, frame_position):
     return 0, 1, estimate_ns, lower_ns, upper_ns
 
 
+def reference_q16(left, right, target_session, frame_position, fraction_q16):
+    """Exact-rational Q16 model; q16=0 must equal reference() exactly.
+
+    Bounds target the quantized coordinate; the one-LSB Q16 resolution is not
+    folded into the interval (same convention as the C API).
+    """
+    if not (0 <= fraction_q16 < 65536):
+        return 9, 0, 0, 0, 0
+    def failure(status): return status, 0, 0, 0, 0
+    if not left.valid or not right.valid:
+        return failure(2)
+    if any(a.nsec >= 10**9 or a.frame_lo > a.frame_hi or
+           a.frame_hi-a.frame_lo > 4 for a in (left,right)):
+        return failure(2)
+    if not target_session or left.session != target_session or right.session != target_session:
+        return failure(3)
+    if any(a.frame_hi == UINT64_MAX for a in (left,right)) or frame_position == UINT64_MAX:
+        return failure(8)
+    t0, t1 = left.sec*10**9+left.nsec, right.sec*10**9+right.nsec
+    l0, u0 = left.frame_lo, left.frame_hi+1
+    l1, u1 = right.frame_lo, right.frame_hi+1
+    if t1 <= t0 or l1 <= u0:
+        return failure(4)
+    dt_ns = t1-t0
+    if not 100000000 <= dt_ns <= 10000000000:
+        return failure(5)
+    if u1-l0 > 500000:
+        return failure(8)
+    if (Fraction((l1-u0)*10**9,dt_ns) < Fraction(47511160,1000) or
+            Fraction((u1-l0)*10**9,dt_ns) > Fraction(48470982,1000)):
+        return failure(6)
+    if frame_position < u0 or frame_position > l1 or (frame_position == l1 and fraction_q16):
+        return failure(7)
+    lower_exact = Fraction(dt_ns*((frame_position-u0)*65536+fraction_q16),
+                           (u1-u0)*65536)
+    upper_exact = Fraction(dt_ns*((frame_position-l0)*65536+fraction_q16),
+                           (l1-l0)*65536)
+    lower_ns = t0+math.floor(lower_exact)
+    upper_ns = t0+math.ceil(upper_exact)
+    estimate_ns = (lower_ns+upper_ns)//2
+    return 0, 1, estimate_ns, lower_ns, upper_ns
+
+
 def sha256(data): return hashlib.sha256(data).hexdigest()
 
 

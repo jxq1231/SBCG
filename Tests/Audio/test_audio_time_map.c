@@ -102,6 +102,43 @@ int main(void)
     assert(AudioTimeMap_Estimate(&a, &b, 1U, 24000U, &result) == AUDIO_TIME_MAP_OK);
     assert(result.model_lower_ns <= result.estimate_ns && result.estimate_ns <= result.model_upper_ns);
     assert(result.model_upper_ns - result.model_lower_ns > 100000U);
+    /* Q16=0 must reproduce the integer model byte-for-byte. */
+    a = Anchor(100U, 100U, 1U, 0U);
+    b = Anchor(48100U, 48100U, 2U, 0U);
+    AudioTimeMapPosition position = {24100U, 0U};
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OK);
+    assert(result.model_lower_ns == UINT64_C(1499979166));
+    assert(result.model_upper_ns == UINT64_C(1500000000));
+    assert(result.estimate_ns == UINT64_C(1499989583));
+    /* Fractional target uses exact Q16 quotient/remainder arithmetic. */
+    position.fraction_q16 = 16384U;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OK);
+    assert(result.model_lower_ns == UINT64_C(1499984375));
+    assert(result.model_upper_ns == UINT64_C(1500005209));
+    assert(result.estimate_ns == UINT64_C(1499994792));
+    position.fraction_q16 = 32768U;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OK);
+    assert(result.estimate_ns == UINT64_C(1500000000));
+    position.fraction_q16 = 65535U;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OK);
+    assert(result.model_lower_ns == UINT64_C(1499999999));
+    assert(result.model_upper_ns == UINT64_C(1500020834));
+    /* Fraction at the right endpoint is outside; exact right endpoint is inside. */
+    position.frame = 48100U;
+    position.fraction_q16 = 1U;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OUTSIDE);
+    position.fraction_q16 = 0U;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OK);
+    assert(result.model_upper_ns == UINT64_C(2000000000));
+    /* Null position is an explicit bad argument; large absolute coordinates remain valid. */
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, NULL, &result) == AUDIO_TIME_MAP_BAD_ARGUMENT);
+    a = Anchor(UINT64_MAX - 100000U, UINT64_MAX - 100000U, UINT32_MAX - 1U, 700000000U);
+    b = Anchor(UINT64_MAX - 52000U, UINT64_MAX - 52000U, UINT32_MAX, 700000000U);
+    position.frame = UINT64_MAX - 76000U;
+    position.fraction_q16 = 12345U;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_OK);
+    position.frame = UINT64_MAX;
+    assert(AudioTimeMap_EstimateQ16(&a, &b, 1U, &position, &result) == AUDIO_TIME_MAP_RANGE);
     puts("audio_time_map: input rejection, phase bins, integer bounds and high-base tests PASS");
     return 0;
 }
