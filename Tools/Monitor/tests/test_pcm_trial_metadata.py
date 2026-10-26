@@ -52,6 +52,11 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(ref["frames"], 4800)
         self.assertEqual(ref["expected_onsets_s"], [0.01, 0.02])
         parsed = metadata.parse_serial_metadata([r["line"] for r in self.records()])
+        interleaved = metadata.parse_serial_metadata([
+            "$AUDIO,SEQ=46,STATE=RUN,RATE_HZ=48000$BOOT,FW=SBCG-M4.2-PCMCAP,"
+            "UID_W0=001A002D,UID_W1=30365105,UID_W2=36363631"])
+        self.assertEqual(interleaved["firmware"], "SBCG-M4.2-PCMCAP")
+        self.assertEqual(interleaved["uid"], "001A002D:30365105:36363631")
         self.assertEqual(parsed["firmware"], "SBCG-M4.2-PCMCAP")
         self.assertEqual(parsed["uid"], "001A002D:30365105:36363631")
         self.assertEqual(parsed["channel"], 0)

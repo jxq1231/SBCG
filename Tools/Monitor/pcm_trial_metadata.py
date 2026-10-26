@@ -11,7 +11,7 @@ import re
 import wave
 from pathlib import Path
 
-FIELD_LINE = re.compile(r"^\$([A-Z][A-Z0-9_]*),(.*)$")
+FIELD_LINE = re.compile(r"\$([A-Z][A-Z0-9_]*),([^$]*)")
 
 
 def sha256_path(path):
@@ -70,28 +70,25 @@ def parse_serial_metadata(lines):
            "rate_hz": None, "boot_line": None}
     for raw in lines:
         line = raw.strip()
-        match = FIELD_LINE.match(line)
-        if not match:
-            continue
-        tag, body = match.groups()
-        fields = parse_fields(body)
-        if tag == "BOOT":
-            out["firmware"] = fields.get("FW")
-            uid = [fields.get("UID_W0"), fields.get("UID_W1"),
-                   fields.get("UID_W2")]
-            if all(uid):
-                out["uid"] = ":".join(uid)
-            out["boot_line"] = line
-        elif tag == "CHIRP_INIT" and out["channel"] is None:
-            try:
-                out["channel"] = int(fields.get("CH"))
-            except (TypeError, ValueError):
-                pass
-        elif tag == "AUDIO" and out["rate_hz"] is None:
-            try:
-                out["rate_hz"] = int(fields.get("RATE_HZ"))
-            except (TypeError, ValueError):
-                pass
+        for tag, body in FIELD_LINE.findall(line):
+            fields = parse_fields(body)
+            if tag == "BOOT":
+                out["firmware"] = fields.get("FW")
+                uid = [fields.get("UID_W0"), fields.get("UID_W1"),
+                       fields.get("UID_W2")]
+                if all(uid):
+                    out["uid"] = ":".join(uid)
+                out["boot_line"] = line
+            elif tag == "CHIRP_INIT" and out["channel"] is None:
+                try:
+                    out["channel"] = int(fields.get("CH"))
+                except (TypeError, ValueError):
+                    pass
+            elif tag == "AUDIO" and out["rate_hz"] is None:
+                try:
+                    out["rate_hz"] = int(fields.get("RATE_HZ"))
+                except (TypeError, ValueError):
+                    pass
     return out
 
 
@@ -100,8 +97,7 @@ def count_sound_candidates(lines):
     out = []
     for row in lines:
         line = row.get("line", "") if isinstance(row, dict) else str(row)
-        match = FIELD_LINE.match(line.strip())
-        if match and match.group(1) == "SOUND_CAND":
+        if any(tag == "SOUND_CAND" for tag, _body in FIELD_LINE.findall(line)):
             out.append(row if isinstance(row, dict) else {"line": line})
     return out
 
