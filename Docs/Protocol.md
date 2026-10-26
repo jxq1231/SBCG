@@ -1,6 +1,6 @@
 # 串口观测与UDP应用协议
 
-> 2026-10-26 TOA口径补充：当前SOUND_CAND的TOA_US是会话采样轴按名义48000Hz换算的微秒，不是PTP域时刻或已校准物理到达。现有SOUND_TIME仍查询原能量候选整数onset+1，尚未使用子帧TOA。完整窗口不足或换算不可表示时应输出NA；局部估算成功计数不能代替输出/声学有效性。见[目标路线](Goal_Aligned_Roadmap_2026_10_26.md)。
+> 2026-10-26 TOA口径补充：`SOUND_CAND.TOA_US`仍是会话采样轴按名义48000Hz换算的微秒，不是PTP域时刻或已校准物理到达。`SOUND_TIME`继续查询原能量候选整数onset+1，保留旧语义；M4.3.1新增`SOUND_TOA_TIME`使用检测器固定窗口锚点+Q16子帧查询本地PTP模型。完整窗口不足、Q16非法或不夹锚时不产生成功TOA时间；局部估算成功计数不能代替输出/声学有效性。见[M4.3.1记录](Milestones/M4_3_1_Local_PTP_TOA_Time.md)。
 
 <!-- doc-status: current-interface; reviewed: 2026-10-23 -->
 
@@ -340,6 +340,18 @@ SBCG-M4.1-TIME-R1新增ASCII/CRLF、每行<256字节，无新UDP：
 - `SOUND_TIME_STATE`：QUEUED/OK/REJECT/DROPPED为uint32饱和累计，PENDING为0..4，LOCAL=1/SYNC=0。队满/非法提交计DROPPED；排队后失败计REJECT，不能将缺失结果补为0纳秒。
 
 固定4锚点/4候选；等待2500ms超时、末锚年龄>1500ms拒绝。校时/调频及采集断流清旧模型。R1本组合日志统一排队，每主循环最多发送一行；接收时间不是模型时间。模型仅为线性传输进度，区间不包含物理声学延迟或同步误差。见[M4.1.3实测](Milestones/M4_1_3_Sound_Event_Time.md)。
+
+
+## M4.3.1 固定窗口TOA本地PTP模型
+
+M4.3.1新增独立串口记录，旧`SOUND_TIME`语义不变；无新UDP、无CubeMX/硬件配置变化：
+
+- `SOUND_CAND`继续携带旧`TOA_US`（名义48k诊断，不是模型时间）。
+- `SOUND_TOA_TIME`成功：`SEQ/SESSION`为候选身份；`FRAME`为**NDTR模型进度整数坐标**（零基PCM窗口前沿floor后加1），`Q16`为1/65536帧分数；`STATUS=OK,CORE=0,L/R`为相邻源锚序号；`EST_NS/LO_NS/HI_NS`为本地PTP模型纳秒；`LOCAL=1,SYNC=0`。
+- 缺失/非法：`STATUS=TOA_MISSING`或`TOA_INVALID`，不带FRAME/Q16/L/R/模型时间；不会回退用FIRST+1冒充成功TOA。
+- 模型边界针对量化后的Q16坐标；一Q16 LSB分辨率不是物理采样/声学误差，也不把SYNC改为1。
+- `SOUND_TOA_STATE`：`QUEUED=...`为uint32饱和计数，`QUEUED`含旧整数路径；`OK/REJECT/MISSING/INVALID/DROPPED/PENDING`用于窗口TOA；每秒至多一条。
+- 旧`SOUND_TIME`仍按候选`FIRST+1`查询整数模型；两个记录的坐标、边界和适用性不能混用。见[M4.3.1记录](Milestones/M4_3_1_Local_PTP_TOA_Time.md)。
 
 
 ## U1 SDRAM启动及自检日志（SBCG-U1-SDRAM-R1）

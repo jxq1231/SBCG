@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.1固定窗口TOA→本地PTP模型软件完成（2026-10-26）。** 检测器`anchor+window_position`拆成整数帧+Q16后接入`AudioTimeMap_EstimateQ16`，旧`SOUND_TIME`（FIRST+1）保持，新增`$SOUND_TOA_TIME`/`$SOUND_TOA_STATE`；缺失/非法TOA明确失败，不回退FIRST+1。已通过Audio/SoundEventTime/SoundDetectorService/App/ChirpService主机回归、Q16=0旧结果逐项一致、Q16 Fraction和大帧测试、Debug/Release构建及audio layout。未烧录/未实物验收；下一软件增量为两板事件时间差UDP/配对基础，正式测距仍需标准声身份/质量。见[M4.3.1记录](Milestones/M4_3_1_Local_PTP_TOA_Time.md)。
+
 **P1受控采集的历史结果（2026-10-26）。** 原严格全10槽为音量12/15、D40 3/5、D50 5/5、D±30各4/5；随后复核发现全事件槽基址受背景捕获影响。播放窗粗覆盖及关联覆盖现在分别由工具输出，不能跨口径计算成功率。D20仍不足，D40-01缺capture而非SOUND候选；本轮工具修正已完成，无需重复旧采集或烧录。详见[P1记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)及[新工具记录](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)。
 
 **M4.2.5失败搜索诊断已硬件复验；标准音仍0/10。** A板运行`SBCG-M4.2-SEARCHDIAG`（Debug `c219af98…`）：24个完整任务全部LOW_CORR，最高raw相关0.773821<0.80，RMS2265–2302、N=257/V=257、LR/Z/I=0，MATCH0；10个高能量候选、7个高相关任务；RPT24/RLOST0，资源/日志/UI错误全0。数字WAV与模板相关1.0。诊断链已实机工作，失败在门限前相关度，不是搜索预算/范围/低RMS；独立只读复核PASS_WITH_RESERVATIONS（无阻塞，低风险流程/测试项）。下一步保存PCM/受控声学实验，不盲目降门限，识别/PTP/测距仍未验收。[M4.2.5复验](Milestones/M4_2_5_Active_Search_Diagnostics_2026_10_26.md)。
