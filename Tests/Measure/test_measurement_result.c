@@ -60,6 +60,17 @@ int main(void)
     older.id=1U;assert(!MeasurementResult_PublishRemote(&older,900U));
     assert(MeasurementResult_PublishRemote(&older,900U+MEASUREMENT_MAX_AGE_MS));
     assert(MeasurementResult_Get(900U+MEASUREMENT_MAX_AGE_MS,&out) && out.id==1U);
-    puts("PASS measurement result: id/age/temp version/direction/speed/range gating and remote ID");
+    /* Calibration offset/version are applied locally and preserved for remote display. */
+    MeasurementResult_Init(1000U);
+    MeasurementResult_SetCalibration(20,5U);
+    pair=Pair(true,1000000,80U,SOUND_DIRECTION_A);temp=Temp(true,343000U,7U);
+    assert(MeasurementResult_PublishPair(&pair,&temp,1001U));
+    assert(MeasurementResult_Get(1001U,&out) && out.distance_mm==363 &&
+           out.calibration_version==5U && out.calibration_offset_mm==20);
+    MeasurementResultSnapshot remote2=out;remote2.id=99U;
+    assert(MeasurementResult_PublishRemote(&remote2,1002U));
+    assert(MeasurementResult_Get(1002U,&out) && out.distance_mm==363 &&
+           out.calibration_version==5U && out.calibration_offset_mm==20);
+    puts("PASS measurement result: id/age/temp version/direction/speed/range/calibration and remote ID");
     return 0;
 }

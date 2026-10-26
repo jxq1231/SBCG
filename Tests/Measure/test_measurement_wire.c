@@ -10,7 +10,7 @@ static MeasurementResultSnapshot Result(void)
     return (MeasurementResultSnapshot){.status=MEASUREMENT_VALID,.valid=true,.id=123U,
         .distance_mm=456,.direction=SOUND_DIRECTION_A,.quality=88U,
         .sound_speed_mm_s=343000U,.temperature_version=5U,.temperature_valid=true,
-        .time_domain=1U};
+        .time_domain=1U,.calibration_version=6U,.calibration_offset_mm=-12};
 }
 int main(void)
 {
@@ -19,7 +19,8 @@ int main(void)
     assert(MeasurementWire_Decode(data,sizeof data,&decoded)==MEASUREMENT_WIRE_OK);
     assert(decoded.id==123U && decoded.distance_mm==456 && decoded.direction==SOUND_DIRECTION_A &&
            decoded.quality==88U && decoded.sound_speed_mm_s==343000U &&
-           decoded.temperature_version==5U && decoded.time_domain==1U);
+           decoded.temperature_version==5U && decoded.time_domain==1U &&
+           decoded.calibration_version==6U && decoded.calibration_offset_mm==-12);
     assert(MeasurementWire_Decode(data,27U,&decoded)==MEASUREMENT_WIRE_INVALID_LENGTH);
     data[0]='X';assert(MeasurementWire_Decode(data,sizeof data,&decoded)==MEASUREMENT_WIRE_INVALID_MAGIC);
     result=Result();result.valid=false;

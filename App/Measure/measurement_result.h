@@ -37,10 +37,15 @@ typedef struct
     uint32_t temperature_version;
     bool temperature_valid;
     uint32_t time_domain;
+    uint16_t calibration_version;
+    int16_t calibration_offset_mm;
 } MeasurementResultSnapshot;
 
 /** @brief 复位结果和ID；now_ms仅作时间基准，不读硬件。 */
 void MeasurementResult_Init(uint32_t now_ms);
+
+/** @brief 设置本地标定偏移/版本；距离发布前应用，远程结果保留原值。 */
+void MeasurementResult_SetCalibration(int32_t offset_mm,uint16_t version);
 
 /**
  * @brief 由配对结果生成权威测量；成功/拒绝都更新状态，返回是否VALID。

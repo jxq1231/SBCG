@@ -41,6 +41,10 @@ MeasurementWireStatus MeasurementWire_Encode(const MeasurementResultSnapshot *re
     PutU32(data+16,result->sound_speed_mm_s);
     PutU32(data+20,result->temperature_version);
     PutU32(data+24,result->time_domain);
+    data[28]=(uint8_t)(result->calibration_version>>8);
+    data[29]=(uint8_t)result->calibration_version;
+    data[30]=(uint8_t)((uint16_t)result->calibration_offset_mm>>8);
+    data[31]=(uint8_t)(uint16_t)result->calibration_offset_mm;
     return MEASUREMENT_WIRE_OK;
 }
 
@@ -73,5 +77,7 @@ MeasurementWireStatus MeasurementWire_Decode(const uint8_t *data, uint16_t lengt
     result->temperature_version=version;
     result->temperature_valid=true;
     result->time_domain=domain;
+    result->calibration_version=(uint16_t)(((uint16_t)data[28]<<8)|data[29]);
+    result->calibration_offset_mm=(int16_t)(((uint16_t)data[30]<<8)|data[31]);
     return MEASUREMENT_WIRE_OK;
 }

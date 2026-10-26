@@ -35,6 +35,7 @@
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
 | [M4.3.9结果周期刷新/计数](Milestones/M4_3_9_Result_Refresh.md) | 软件完成·无ACK/未烧录 | A每500ms重发同ID；B刷新2s；`$MEASURE_RESULT_STATE`计数 |
+| [M4.3.15 0.5m标定/温补](Milestones/M4_3_15_Calibration_Temperature.md) | 软件完成·触发/实测待验 | 500mm偏移/版本、MRES32携标定；A应用/B显示；未接按键/未烧录 |
 | [M4.3.14静默/瞬态门控](Milestones/M4_3_14_Quiet_Transient_Gate.md) | 软件完成·60s实测待验 | 预热/序列/静默3s/失域FAULT；单CHIRP不开放；未烧录 |
 | [M4.3.13权威结果MACK](Milestones/M4_3_13_Result_Ack.md) | 软件完成·硬件待验 | B回16B MACK；A同令牌ACK后停发；ACK计数；未烧录 |
 | [M4.3.12共同域双向握手](Milestones/M4_3_12_Domain_Handshake.md) | 软件完成·硬件待验 | DOMN REQ/ACK；A确认B严格合格后才放行；B未收到REQ不发事件；超时撤域 |

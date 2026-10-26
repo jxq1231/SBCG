@@ -12,6 +12,8 @@
 
 **最新M4.3.13结果MACK（2026-10-27）：** B接受权威MRES后回16字节MACK；A收到同令牌成功ACK才停止该ID刷新，ACK丢失继续500ms刷新；新增ACK计数。主机测试PASS，未烧录/未两板实测。[M4.3.13记录](Milestones/M4_3_13_Result_Ack.md)。
 
+**最新M4.3.15 0.5m标定/温补（2026-10-27）：** 新增500mm单点标定偏移/版本，A发布前应用，MRES32携带标定版本/偏移；温度声速继续参与距离。标定触发未接按键/界面，未实测/未烧录。[M4.3.15记录](Milestones/M4_3_15_Calibration_Temperature.md)。
+
 **最新M4.3.14静默/瞬态门控（2026-10-27）：** 新增1s预热/标准序列/3s静默撤销/失域FAULT状态机，单CHIRP不开放测量；主机测试PASS，未烧录/未60s实测。[M4.3.14记录](Milestones/M4_3_14_Quiet_Transient_Gate.md)。
 
 **最新M4.3.12共同域双向握手（2026-10-27）：** 新增DOMN REQ/ACK，A收到B有效ACK才确认域，B未收到A REQ不发事件；超时/FAULT撤域。主机测试PASS，未烧录/未示波器验收。[M4.3.12记录](Milestones/M4_3_12_Domain_Handshake.md)。

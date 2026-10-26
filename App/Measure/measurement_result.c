@@ -11,6 +11,8 @@
 
 static MeasurementResultSnapshot latest;
 static uint32_t next_id;
+static int32_t calibration_offset_mm;
+static uint16_t calibration_version;
 static const uint32_t NS_PER_SEC = 1000000000U;
 
 static uint64_t AbsDelta(int64_t value)
@@ -24,6 +26,14 @@ void MeasurementResult_Init(uint32_t now_ms)
     latest.captured_ms = now_ms;
     latest.status = MEASUREMENT_NONE;
     next_id = 0U;
+    calibration_offset_mm = 0;
+    calibration_version = 0U;
+}
+
+void MeasurementResult_SetCalibration(int32_t offset_mm,uint16_t version)
+{
+    calibration_offset_mm=offset_mm;
+    calibration_version=version;
 }
 
 bool MeasurementResult_PublishPair(const SoundPairResult *pair,
@@ -41,10 +51,14 @@ bool MeasurementResult_PublishPair(const SoundPairResult *pair,
     const uint64_t distance = (magnitude * temperature->sound_speed_mm_s +
                                NS_PER_SEC / 2U) / NS_PER_SEC;
     if (distance > MEASUREMENT_MAX_DISTANCE_MM) { return false; }
+    const int32_t corrected=(int32_t)distance+calibration_offset_mm;
+    if (corrected < 0 || corrected > (int32_t)MEASUREMENT_MAX_DISTANCE_MM) { return false; }
     latest.status = MEASUREMENT_VALID;
     latest.valid = true;
     latest.id = ++next_id;
-    latest.distance_mm = (int32_t)distance;
+    latest.distance_mm = corrected;
+    latest.calibration_version = calibration_version;
+    latest.calibration_offset_mm = (int16_t)calibration_offset_mm;
     latest.direction = pair->direction;
     latest.quality = pair->quality;
     latest.sound_speed_mm_s = temperature->sound_speed_mm_s;

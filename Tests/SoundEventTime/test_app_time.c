@@ -6,6 +6,7 @@
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Measure/measurement_gate.h"
+#include "Calibration/calibration.h"
 #include "Detector/standard_sequence.h"
 #include "Sync/time_domain.h"
 #include "BSP/bsp_board_identity.h"
@@ -125,6 +126,13 @@ bool MeasurementGate_CanPublish(const MeasurementGateSnapshot *s){(void)s;return
 bool MeasurementGate_TakeInvalidation(void){return false;}
 /** @brief App测试桩：复制空状态。 */
 void MeasurementGate_Get(MeasurementGateSnapshot *out){if(out)memset(out,0,sizeof *out);}
+
+/** @brief App测试桩：初始化标定。 */
+void Calibration_Init(void){}
+/** @brief App测试桩：读取零标定。 */
+void Calibration_Get(CalibrationSnapshot *out){if(out)memset(out,0,sizeof *out);}
+/** @brief App测试桩：设置结果标定。 */
+void MeasurementResult_SetCalibration(int32_t offset,uint16_t version){(void)offset;(void)version;}
 int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
  Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
  start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);

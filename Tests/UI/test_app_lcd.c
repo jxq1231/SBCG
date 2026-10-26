@@ -7,6 +7,7 @@
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Measure/measurement_gate.h"
+#include "Calibration/calibration.h"
 #include "Detector/standard_sequence.h"
 #include "Sync/time_domain.h"
 #include "BSP/bsp_board_identity.h"
@@ -137,6 +138,13 @@ bool MeasurementGate_CanPublish(const MeasurementGateSnapshot *s){(void)s;return
 bool MeasurementGate_TakeInvalidation(void){return false;}
 /** @brief App测试桩：复制空状态。 */
 void MeasurementGate_Get(MeasurementGateSnapshot *out){if(out)memset(out,0,sizeof *out);}
+
+/** @brief App测试桩：初始化标定。 */
+void Calibration_Init(void){}
+/** @brief App测试桩：读取零标定。 */
+void Calibration_Get(CalibrationSnapshot *out){if(out)memset(out,0,sizeof *out);}
+/** @brief App测试桩：设置结果标定。 */
+void MeasurementResult_SetCalibration(int32_t offset,uint16_t version){(void)offset;(void)version;}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);

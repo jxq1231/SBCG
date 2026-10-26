@@ -26,6 +26,7 @@
 #include "Detector/standard_sequence.h"
 #include "Detector/event_classifier.h"
 #include "Measure/measurement_gate.h"
+#include "Calibration/calibration.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -450,6 +451,9 @@ static void PublishMeasurement(const SoundPairResult *pair)
         MeasurementResult_Invalidate(now_ms);
         return;
     }
+    CalibrationSnapshot calibration;
+    Calibration_Get(&calibration);
+    MeasurementResult_SetCalibration(calibration.offset_mm,calibration.version);
     if(MeasurementResult_PublishPair(pair,&temperature,now_ms))
     { (void)MeasurementGate_OnMeasurement(now_ms); }
 }
@@ -622,6 +626,7 @@ void App_Init(void)
 #ifdef SBCG_USE_BOARD_IDENTITY
     MeasurementResult_Init(BSP_Console_GetTickMs());
     MeasurementGate_Init(BSP_Console_GetTickMs());
+    Calibration_Init();
     {
         const StandardSequenceConfig sequence_config={
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};

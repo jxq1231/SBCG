@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define MEASUREMENT_WIRE_BYTES 28U
+#define MEASUREMENT_WIRE_BYTES 32U
 #define MEASUREMENT_WIRE_VERSION 1U
 
 typedef enum
