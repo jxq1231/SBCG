@@ -1,7 +1,7 @@
 /**
  * @file        chirp_window.c
- * @brief       实现只读模板的统计预计算和单窗口去直流归一化相关。
- * @details     每次调用只计算一个窗口，工作量由上层候选搜索显式限制。
+ * @brief       实现只读模板统计、单窗口去直流相关及独立失败诊断。
+ * @details     每窗只做一趟点积；可选保留门限前相关，原匹配输出规则保持一致。
  * @note        CPU只读调用方已验证副本，不维护DMA所有权或访问硬件。
  */
 #include "chirp_window.h"
@@ -30,19 +30,23 @@ bool ChirpWindow_Init(ChirpWindowTemplate *out,const int16_t *samples,uint16_t f
 }
 
 /**
- * @brief 对单个连续窗口计算相关，过门限时返回窗口元数据。
+ * @brief 单趟统计窗口，分别提供原匹配输出和可选门限前诊断。
  * @param r 非NULL且已初始化的只读模板统计。
  * @param samples 非NULL已验证CPU副本，至少r.frames点，仅调用期间使用。
  * @param session 非零采集会话。
  * @param first 窗口绝对起点，末帧不得溢出。
  * @param config 非NULL只读门限配置；只使用RMS与相关度字段。
- * @param out 非NULL不重叠输出，失败清零；confirmed_frame为0，不是已确认事件。
+ * @param out 非NULL独占输出，失败清零；confirmed_frame固定0，不是已确认事件。
+ * @param diag 可NULL独占输出，参数非法时独立清零并标记INVALID；不保存输入指针。
  * @return true为窗口过门限；false为参数无效或未匹配。
- * @note 最多2400项直接点积；调用方控制每轮调用次数，不能在IRQ或未经验证DMA上调用。
+ * @note 两输出不与输入或彼此重叠；仅前台使用已验证CPU副本，不访问DMA。
+ *       最多2400项点积，低RMS仅在需要诊断时继续开方，不增加第二趟点积。
  */
-bool ChirpWindow_Score(const ChirpWindowTemplate *r,const int16_t *samples,
-    uint32_t session,uint64_t first,const ChirpMatcherConfig *config,ChirpMatch *out)
+bool ChirpWindow_ScoreWithDiagnostic(const ChirpWindowTemplate *r,const int16_t *samples,
+    uint32_t session,uint64_t first,const ChirpMatcherConfig *config,ChirpMatch *out,
+    ChirpWindowDiagnostic *diag)
 {
+    if(diag!=NULL)*diag=(ChirpWindowDiagnostic){0};
     if(out==NULL)return false;
     *out=(ChirpMatch){0};
     if(r==NULL || r->samples==NULL || r->frames<16U || r->frames>CHIRP_MATCHER_MAX_FRAMES ||
@@ -58,12 +62,40 @@ bool ChirpWindow_Score(const ChirpWindowTemplate *r,const int16_t *samples,
     }
     const uint64_t n=r->frames,minimum=config->min_rms_pcm;
     const uint64_t variance=n*squares-(uint64_t)(sum*sum);
-    if(variance==0U || variance<minimum*minimum*n*n)return false;
+    if(variance==0U){
+        if(diag!=NULL){diag->status=CHIRP_WINDOW_ZERO_VARIANCE;diag->clipped=clipped;}
+        return false;
+    }
+    const bool low_rms=variance<minimum*minimum*n*n;
+    if(low_rms && diag==NULL)return false;
     const int64_t numerator=(int64_t)n*dot-sum*r->sum;
     double score=fabs((double)numerator)/sqrt((double)variance*(double)r->variance);
     if(score>1.0)score=1.0;
-    if(score<(double)config->min_correlation)return false;
+    if(diag!=NULL){
+        *diag=(ChirpWindowDiagnostic){
+            low_rms ? CHIRP_WINDOW_LOW_RMS:
+                score<(double)config->min_correlation ? CHIRP_WINDOW_LOW_CORR:CHIRP_WINDOW_MATCH,
+            score,true,numerator<0,clipped,(uint16_t)sqrt((double)variance/(double)(n*n))};
+    }
+    if(low_rms || score<(double)config->min_correlation)return false;
     *out=(ChirpMatch){session,first,first+n-1U,0U,(float)score,
-        (uint16_t)sqrt((double)variance/(double)(n*n)),numerator<0,clipped};
+        diag!=NULL ? diag->rms_pcm:(uint16_t)sqrt((double)variance/(double)(n*n)),numerator<0,clipped};
     return true;
+}
+
+/**
+ * @brief 通过同一评分实现保留原接口的匹配与失败清零语义。
+ * @param r 非NULL已初始化只读模板统计，样本使用期不变。
+ * @param samples 非NULL完整CPU窗口，至少r.frames点，仅本次调用借用。
+ * @param session 非零采集会话。
+ * @param first 绝对窗口起点，末帧不得溢出uint64。
+ * @param config 非NULL有效门限，仅本次调用借用。
+ * @param out 非NULL独占输出，不与输入重叠；失败清零，confirmed_frame固定0。
+ * @return true表示通过原门限；false表示无匹配或非法参数。
+ * @note 不请求诊断，低RMS仍在开方前返回；不发布事件或访问硬件。
+ */
+bool ChirpWindow_Score(const ChirpWindowTemplate *r,const int16_t *samples,
+    uint32_t session,uint64_t first,const ChirpMatcherConfig *config,ChirpMatch *out)
+{
+    return ChirpWindow_ScoreWithDiagnostic(r,samples,session,first,config,out,NULL);
 }

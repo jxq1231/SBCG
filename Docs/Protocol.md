@@ -470,3 +470,23 @@ $AUDIO_PROFILE,TOTAL_MS=28,STAT_MS=15,SD_STAGE_MS=6,SD_PROC_MS=0,CH_STAGE_MS=1,C
 - 两套都是“最大轮”快照而非平均/分布；1ms分辨率，含SysTick抢占和诊断自身开销（每行最多一次UART发送）。`$PROFILE`/`$AUDIO_PROFILE`每5秒各最多一行，`$PROFILE`最长106字符、`$AUDIO_PROFILE`最长222字符（最坏），实测63/132，均<256；新增两行会轻微抬高其报告值。
 - **口径**：`OTHER_MS`仍包含`FLUSH_MS`（`LOOP=AUDIO+UI+OTHER`，不能再用OTHER加FLUSH）；`$PROFILE`的最大循环与`$AUDIO_PROFILE`的最大AudioCapture轮是两次独立最大值，不能互相求和。A2无A3诊断时实测LOOP38/42、AUDIO21/25、OTHER16；A3为LOOP40、AUDIO27、OTHER13/FLUSH12，A3未抬高最慢LOOP，但AUDIO增量可能含插桩开销，FLUSH12与诊断行发送时长一致，不能完全排除A3诊断自扰动；A4前应做关闭诊断的对照采集。
 - 正式口径：`OTHER_MS`/`FLUSH_MS`不能当纯CPU；`STAT_MS`等分段是墙钟差，不是指令周期或最坏时间；不得用单次最大值直接改动日志/业务策略。
+
+## M4.2.5 失败搜索诊断（SBCG-M4.2-SEARCHDIAG）
+
+本节为新增软件接口；旧BATCH固件不输出，当前实物状态以Project_State及本轮报告为准。门限、搜索范围、有效匹配CHIRP行保持原含义；CHIRP_INIT中DIAG=2标记此接口。只为完整搜索完成的任务增加一行，示例不是实测：
+
+```text
+$CHIRP_SEARCH,ID=20,SESSION=1,HINT=3000000,LO=2999808,HI=3000064,BEST=2999900,CORR_PPM=421000,RMS=600,CLIP=0,INV=0,EDGE=0,MATCH=0,WHY=LOW_CORR,N=257,V=257,LR=0,Z=0,I=0
+```
+
+- ID为当前启动内的uint32候选累计计数，拒绝任务会留下编号缺口，UINT32_MAX后饱和，不能单独作永久唯一身份；SESSION为uint32非零音频会话，仍须区分板卡/BOOT域。
+- HINT为该任务实际门控提示帧；LO/HI为被完整搜索的模板窗口起点范围（含端点）；BEST为所有相关可定义窗口的最高原始相关峰起点，均为uint64绝对PCM帧，不是声学到达时刻。原始峰使用double比较，同分取最早。
+- CORR_PPM为门限前abs去直流归一相关乘1000000并四舍五入，uint32、0..1000000；RMS为该raw峰窗的去直流PCM16幅值整数RMS，uint16、0..32768；CLIP/INV为0/1，分别表示该窗包含INT16_MIN/MAX和相关符号为负。
+- EDGE为位标记：0内部、1左边界、2右边界、3同时两端。触边只能提示覆盖风险，不能证明真实峰在范围外。
+- MATCH为整个任务是否存在通过现有RMS及相关门限的窗口；WHY是raw峰窗口的状态LOW_RMS/LOW_CORR/MATCH。两者独立：最高raw峰可能低RMS而另一个窗口通过，不得用raw峰代替原有效匹配best。
+- N/V/LR/Z/I为uint16窗口计数：总次数/正方差可评分次数/低RMS次数/零方差次数/非法次数；N=V+Z+I，LR<=V。当前每任务最多257窗、每次调用最多8窗；V包含低RMS窗口，相关恰为0仍可评分。
+- V=0时WHY=NO_VALID，BEST/CORR_PPM/RMS/CLIP/INV/EDGE为NA，不能当作相关0或有效帧0；Z/I区分无方差与非法输入。
+- 原CHIRP事件优先，同一调用最多输出一行，成功任务诊断在后续前台调用发送；不在ISR或Stage/Complete发送。CHIRP_DIAG追加RPT/RLOST两个uint32饱和计数：交给原日志回调的报告次数/流失效或防御性覆盖丢弃的待发报告数。RPT不是电脑已收到，应用队满仍查HEARTBEAT日志计数。
+- 搜索诊断最坏247B、CHIRP_DIAG追加后最坏252B（含CRLF），均小于256B；不新增PCM缓冲、DMA或硬件配置。新增格式化与UART排空有成本，需要独立实物复验，评分次数不变不能证明毫秒耗时不变。
+
+此接口仅用于定位本次真实音频0/10匹配，不提供PTP时间、物理到达精度或距离；不会将低于门限的raw峰作为有效CHIRP发布。

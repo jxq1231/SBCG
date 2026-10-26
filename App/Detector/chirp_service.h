@@ -1,7 +1,7 @@
 /**
  * @file        chirp_service.h
  * @brief       声明音频归还验证后的有界扫频候选搜索与诊断接口。
- * @details     唯一认领内复制声道，End后分批评分；扫描按完整64点批量推进，诊断区分丢弃原因、扫描/评分耗时、任务终结时延与调度间隔。
+ * @details     唯一认领内复制声道，End后分批评分；诊断包含完整搜索原始峰、窗口分类、丢弃原因和前台耗时。
  * @note        串行前台，无新IRQ/DMA，不调用Begin/End，不保存DMA指针。
  */
 #ifndef SBCG_CHIRP_SERVICE_H
@@ -22,6 +22,8 @@ typedef struct {
     uint32_t max_scan_ms,max_score_ms,max_process_gap_ms;
     uint32_t drop_expired,drop_history,drop_full,drop_range,drop_reset,completed_jobs;
     uint32_t max_complete_ms,max_drop_ms;
+    /** @brief SEARCH报告交给日志回调的次数及待发报告因覆盖/清历史丢失的次数，分别饱和；不代表PC确认。 */
+    uint32_t report_emitted,report_dropped;
     uint16_t last_scanned,last_scores,max_scanned,max_scores;
     uint8_t pending;
     bool configured,staging;

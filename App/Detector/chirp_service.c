@@ -1,7 +1,7 @@
 /**
  * @file        chirp_service.c
  * @brief       在已复制并通过End校验的音频上分批搜索固定扫频。
- * @details     沿用原有限搜索和缓存，扫描按完整64点批量推进，增加分类计数、分段HAL耗时及任务终结时延；状态与诊断交替，不增加周期日志行数。
+ * @details     沿用原有限搜索和缓存，独立保存未过门限原始峰及窗口分类；成功事件优先，完整搜索报告暂存标量且每轮至多发送一行。
  * @note        单前台所有权；复制缓冲不被DMA访问，Stage不相关/打印；不输出PTP时间或距离。
  */
 #include "chirp_service.h"
@@ -25,12 +25,24 @@ static int16_t copied[CHIRP_SERVICE_HISTORY_FRAMES+BSP_AUDIO_HALF_FRAMES];
 /* 活动任务完整输入独立于下一块复制，防止慢调度时搜索半途丢失数据。 */
 static int16_t job_samples[CHIRP_SERVICE_JOB_SAMPLES];
 typedef struct {
-    uint64_t next,last;
-    uint32_t completed_ms;
+    uint64_t first,next,last,hint,raw_first;
+    uint32_t completed_ms,id;
     ChirpMatch best;
-    bool matched;
+    ChirpWindowDiagnostic raw_best;
+    uint16_t total,valid,low_rms,zero,invalid;
+    bool matched,have_raw;
 } SearchJob;
+/** @brief 已完整评分任务的独立标量副本，不持有PCM、任务或DMA指针。 */
+typedef struct {
+    uint64_t hint,first,last,raw_first;
+    uint32_t id,session;
+    ChirpWindowDiagnostic raw_best;
+    uint16_t total,valid,low_rms,zero,invalid;
+    bool matched,have_raw;
+} SearchReport;
 static SearchJob jobs[JOB_CAPACITY];
+static SearchReport pending_report;
+static bool report_pending;
 static ChirpWindowTemplate reference;
 static SoundDetector gate;
 static ChirpServiceSnapshot state;
@@ -49,6 +61,9 @@ _Static_assert(sizeof copied==22528U,"Chirp CPU copy buffer size changed");
 _Static_assert(sizeof job_samples==5312U,"Chirp job snapshot size changed");
 _Static_assert(CHIRP_SERVICE_JOB_SAMPLES==CHIRP_TEMPLATE_FRAMES+
     CHIRP_SERVICE_SEARCH_BEFORE+CHIRP_SERVICE_SEARCH_AFTER,"Job input must cover entire search");
+/* 帧0截断后的最短搜索仍有65窗；待发成功报告的下一轮不能完成另一个任务。 */
+_Static_assert(CHIRP_SERVICE_SEARCH_AFTER+1U>CHIRP_SERVICE_SCORE_BUDGET,
+    "Single pending report must outlive at most one Process call");
 
 /** @brief 饱和增加非NULL计数value，amount为条数，无返回值，仅前台。 */
 static void Add(uint32_t *value,uint32_t amount)
@@ -101,6 +116,55 @@ static void Emit(const char *line,int length)
     if(logger!=NULL && length>0 && length<256)logger(line,length);
     else if(logger!=NULL)Add(&state.errors,1U);
 }
+/**
+ * @brief 将完整搜索的标量结果存入唯一待发槽。
+ * @param job 非NULL只读已完成任务，仅调用期间借用；输入不与报告槽重叠。
+ * @return 无返回值。
+ * @note 不打印、不改任务处置；防御性覆盖只计报告丢失，不计任务丢弃。
+ */
+static void StoreReport(const SearchJob *job)
+{
+    if(report_pending)Add(&state.report_dropped,1U);
+    pending_report=(SearchReport){.hint=job->hint,.first=job->first,.last=job->last,
+        .raw_first=job->raw_first,.id=job->id,.session=copied_session,.raw_best=job->raw_best,
+        .total=job->total,.valid=job->valid,.low_rms=job->low_rms,.zero=job->zero,
+        .invalid=job->invalid,.matched=job->matched,.have_raw=job->have_raw};
+    report_pending=true;
+}
+/**
+ * @brief 在前台格式化并交接唯一待发完整搜索报告。
+ * @return 无返回值。
+ * @note 调用前须report_pending；RPT只表示回调已获文本，队列或PC接收另行观察。
+ *       峰按double比较，ppm四舍五入；无正方差窗时峰字段均为NA。
+ */
+static void EmitReport(void)
+{
+    const SearchReport *r=&pending_report;
+    char hint[21],first[21],last[21],raw_first[21],peak[112],line[256];
+    Decimal(r->hint,hint);Decimal(r->first,first);Decimal(r->last,last);
+    const char *why="NO_VALID";
+    if(r->have_raw){
+        Decimal(r->raw_first,raw_first);
+        const unsigned edge=(r->raw_first==r->first ? 1U:0U)|(r->raw_first==r->last ? 2U:0U);
+        why=r->raw_best.status==CHIRP_WINDOW_LOW_RMS ? "LOW_RMS":
+            r->raw_best.status==CHIRP_WINDOW_MATCH ? "MATCH":"LOW_CORR";
+        (void)snprintf(peak,sizeof peak,"BEST=%s,CORR_PPM=%" PRIu32 ",RMS=%u,CLIP=%u,INV=%u,EDGE=%u",
+            raw_first,(uint32_t)(r->raw_best.correlation*1000000.0+0.5),
+            (unsigned)r->raw_best.rms_pcm,r->raw_best.clipped ? 1U:0U,
+            r->raw_best.inverted ? 1U:0U,edge);
+    }else{
+        (void)snprintf(peak,sizeof peak,"BEST=NA,CORR_PPM=NA,RMS=NA,CLIP=NA,INV=NA,EDGE=NA");
+    }
+    const int length=snprintf(line,sizeof line,
+        "$CHIRP_SEARCH,ID=%" PRIu32 ",SESSION=%" PRIu32 ",HINT=%s,LO=%s,HI=%s,%s,MATCH=%u,WHY=%s,"
+        "N=%u,V=%u,LR=%u,Z=%u,I=%u\r\n",r->id,r->session,hint,first,last,peak,
+        r->matched ? 1U:0U,why,(unsigned)r->total,(unsigned)r->valid,
+        (unsigned)r->low_rms,(unsigned)r->zero,(unsigned)r->invalid);
+    report_pending=false;
+    Emit(line,length);
+    if(logger!=NULL && length>0 && length<(int)sizeof line)Add(&state.report_emitted,1U);
+    else Add(&state.report_dropped,1U);
+}
 /** @brief 清采集/门控/队列历史，保留软件配置和诊断计数；无参数，无返回值，不读取PCM。 */
 static void ClearHistory(void)
 {
@@ -112,6 +176,7 @@ static void ClearHistory(void)
     }
     RecordDrop(DROP_RESET,count);head=count=0U;have_copy=false;prefix_count=scan_offset=0U;
     job_cached=false;
+    if(report_pending){report_pending=false;Add(&state.report_dropped,1U);}
     (void)SoundDetector_Reset(&gate);
 }
 /** @brief 取当前CPU副本最早有效绝对帧，无参数；调用前须have_copy。 */
@@ -131,7 +196,7 @@ bool ChirpService_Init(uint32_t now_ms,uint8_t channel,void (*log)(const char *,
 {
     state=(ChirpServiceSnapshot){0};logger=log;channel_index=channel;
     head=count=0U;have_copy=stage_valid=stage_contiguous=false;
-    job_cached=false;
+    job_cached=report_pending=false;pending_report=(SearchReport){0};
     have_process_time=diagnostic_next=false;last_process_ms=now_ms;
     prefix_count=scan_offset=0U;last_state_ms=now_ms;sequence=0U;
     const bool ready=ChirpWindow_Init(&reference,ChirpTemplate_PCM,CHIRP_TEMPLATE_FRAMES) &&
@@ -141,7 +206,7 @@ bool ChirpService_Init(uint32_t now_ms,uint8_t channel,void (*log)(const char *,
     char line[256];
     Emit(line,snprintf(line,sizeof line,
         "$CHIRP_INIT,RESULT=OK,CH=%u,TEMPLATE=2K6K50MS,SCAN=%u,SCORE=8,BEFORE=192,AFTER=64,"
-        "CACHE_FRAMES=2656,JOB_MS=1500,RMS=64,CORR_PPM=800000,GATE_RMS=128,PROFILE=EXPERIMENTAL,SYNC=0,DIAG=1\r\n",
+        "CACHE_FRAMES=2656,JOB_MS=1500,RMS=64,CORR_PPM=800000,GATE_RMS=128,PROFILE=EXPERIMENTAL,SYNC=0,DIAG=2\r\n",
         (unsigned)channel,(unsigned)CHIRP_SERVICE_SCAN_BUDGET));
     return true;
 }
@@ -214,8 +279,8 @@ static void Queue(const SoundCandidate *event)
         RecordDrop(DROP_RANGE,1U);return;
     }
     const uint8_t tail=(uint8_t)((head+count)%JOB_CAPACITY);
-    jobs[tail]=(SearchJob){.next=first,.last=event->onset_frame+CHIRP_SERVICE_SEARCH_AFTER,
-        .completed_ms=copied_ms};++count;
+    jobs[tail]=(SearchJob){.first=first,.next=first,.last=event->onset_frame+CHIRP_SERVICE_SEARCH_AFTER,
+        .hint=event->onset_frame,.id=state.candidates,.completed_ms=copied_ms};++count;
 }
 /**
  * @brief 对当前8192帧块分批扫描，按实际消费帧数推进绝对帧与扫描预算。
@@ -241,7 +306,7 @@ static void Scan(void)
     }
 }
 /**
- * @brief 评分至多8个窗口，完成或丢弃任务时记录终结时延，完成一个任务后复制结果给调用方。
+ * @brief 评分至多8个窗口，独立聚合原始峰与有效匹配，完成时保存标量报告及终结时延。
  * @param now_ms 最新HAL毫秒，任务1500ms过期。
  * @param publish 非NULL独占输出；返回true时含最高评分完整搜索结果。
  * @return true为一个任务完整匹配成功；false为未完成/未匹配。
@@ -270,10 +335,20 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
             memcpy(job_samples,copied+(uint32_t)offset,length*sizeof job_samples[0]);
             job_first=job->next;job_cached=true;
         }
-        ChirpMatch match;
-        const bool found=ChirpWindow_Score(&reference,job_samples+(uint32_t)(job->next-job_first),copied_session,
-            job->next,&ChirpMatcher_DefaultConfig,&match);
+        ChirpMatch match;ChirpWindowDiagnostic diagnostic;
+        const bool found=ChirpWindow_ScoreWithDiagnostic(&reference,
+            job_samples+(uint32_t)(job->next-job_first),copied_session,
+            job->next,&ChirpMatcher_DefaultConfig,&match,&diagnostic);
         ++state.last_scores;Add(&state.evaluations,1U);
+        ++job->total;
+        if(diagnostic.correlation_valid){
+            ++job->valid;
+            if(diagnostic.status==CHIRP_WINDOW_LOW_RMS)++job->low_rms;
+            if(!job->have_raw || diagnostic.correlation>job->raw_best.correlation){
+                job->raw_best=diagnostic;job->raw_first=job->next;job->have_raw=true;
+            }
+        }else if(diagnostic.status==CHIRP_WINDOW_ZERO_VARIANCE)++job->zero;
+        else ++job->invalid;
         if(found && (!job->matched || match.correlation>job->best.correlation)){
             job->best=match;job->matched=true;
         }
@@ -281,6 +356,7 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
             const bool matched=job->matched;
             /* 本服务没有观察搜索完成瞬间的采样游标，不填造confirmed_frame。 */
             if(matched){*publish=job->best;Add(&state.matches,1U);}
+            StoreReport(job);
             /* 在本次完成分支实时读取tick，时延包含本调用内已执行的扫描/评分，而非Process入口时刻。 */
             RecordLatency(BSP_Console_GetTickMs(),job->completed_ms,true);
             Add(&state.completed_jobs,1U);Pop(DROP_NONE);return matched;
@@ -290,7 +366,7 @@ static bool Search(uint32_t now_ms,ChirpMatch *publish)
     return false;
 }
 /**
- * @brief 在原音频归还后执行一次有限工作，并最多发送一行事件或状态。
+ * @brief 在原音频归还后执行一次有限工作，最多发送一行成功事件、完整搜索报告或周期状态。
  * @param now_ms 最新HAL毫秒，使用无符号差处理正常回绕。
  * @param snapshot 非NULL只读采集快照，本次调用不保留。
  * @return 无返回值。
@@ -334,6 +410,7 @@ void ChirpService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
             (uint32_t)(publish.correlation*1000000.0f+0.5f),(unsigned)publish.rms_pcm,
             publish.clipped ? 1U:0U,publish.inverted ? 1U:0U));return;
     }
+    if(report_pending){EmitReport();return;}
     if((uint32_t)(now_ms-last_state_ms)<STATE_PERIOD_MS)return;
     last_state_ms=now_ms;
     if(diagnostic_next){
@@ -342,10 +419,10 @@ void ChirpService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
             "$CHIRP_DIAG,SCAN_MS=%" PRIu32 ",SCORE_MS=%" PRIu32 ",GAP_MS=%" PRIu32
             ",TIMEOUT=%" PRIu32 ",HISTORY=%" PRIu32 ",FULL=%" PRIu32 ",RANGE=%" PRIu32
             ",RESET=%" PRIu32 ",DONE=%" PRIu32 ",DONE_MAX_MS=%" PRIu32
-            ",DROP_MAX_MS=%" PRIu32 "\r\n",state.max_scan_ms,state.max_score_ms,
+            ",DROP_MAX_MS=%" PRIu32 ",RPT=%" PRIu32 ",RLOST=%" PRIu32 "\r\n",state.max_scan_ms,state.max_score_ms,
             state.max_process_gap_ms,state.drop_expired,state.drop_history,state.drop_full,
             state.drop_range,state.drop_reset,state.completed_jobs,state.max_complete_ms,
-            state.max_drop_ms));return;
+            state.max_drop_ms,state.report_emitted,state.report_dropped));return;
     }
     diagnostic_next=true;
     Emit(line,snprintf(line,sizeof line,

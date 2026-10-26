@@ -63,7 +63,7 @@
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
 #if defined(SBCG_USE_CHIRP)
-#define APP_FIRMWARE_ID "SBCG-M4.2-BATCH"
+#define APP_FIRMWARE_ID "SBCG-M4.2-SEARCHDIAG"
 #elif defined(SBCG_USE_TOUCHGFX) && defined(SBCG_USE_RESET_DIAGNOSTIC)
 #define APP_FIRMWARE_ID "SBCG-U3.1-RESET"
 #elif defined(SBCG_USE_TOUCHGFX)

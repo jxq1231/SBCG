@@ -8,7 +8,7 @@ import sys
 ROOT=Path(__file__).resolve().parents[2]
 
 def main():
-    parent=ROOT/'Logs/Detector/M4_2_3_B';parent.mkdir(parents=True,exist_ok=True)
+    parent=ROOT/'Logs/Detector/M4_2_5_Search_Diagnostics';parent.mkdir(parents=True,exist_ok=True)
     out=Path(tempfile.mkdtemp(prefix='diagnostics-',dir=parent));print('TEST_OUTPUT',out,flush=True)
     service=['Tests/ChirpService/test_diagnostics.c','App/Detector/chirp_service.c',
              'App/Detector/chirp_window.c','App/Detector/chirp_matcher.c',
@@ -16,7 +16,13 @@ def main():
     flags=['-DSBCG_USE_CHIRP=1','-DSBCG_USE_SOUND_TIME=1','-DSBCG_USE_LWIP=1',
            '-DSBCG_USE_AUDIO=1','-DSBCG_USE_AUDIO_ANCHOR=1','-DSBCG_USE_AUDIO_MAP=1']
     for opt in ('-O0','-O2'):
-        for name,sources,extra in [('service',service,[]),('app',
+        for name,sources,extra in [('service',service,[]),
+            ('window',['Tests/ChirpService/test_window_diagnostics.c',
+                       'App/Detector/chirp_window.c','App/Detector/chirp_matcher.c',
+                       'App/Detector/chirp_template.c'],[]),
+            ('search',['Tests/ChirpService/test_search_diagnostics.c',
+                       'App/Detector/chirp_window.c','App/Detector/chirp_matcher.c',
+                       'App/Detector/chirp_template.c','App/Detector/sound_detector.c'],[]),('app',
             ['Tests/ChirpService/test_app_diagnostics.c','App/app_main.c'],flags),('app-direct',
             ['Tests/ChirpService/test_app_diagnostics.c','App/app_main.c'],
             [flag for flag in flags if flag!='-DSBCG_USE_SOUND_TIME=1'])]:
