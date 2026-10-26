@@ -188,7 +188,6 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
             SoundPairResult invalid = {0};
             invalid.valid = false;
             invalid.status = SOUND_PAIR_AMBIGUOUS;
-            invalid.time_domain = manager->config.max_tdoa_ns == 0U ? 0U : 0U;
             for (uint8_t i = 0U; i < manager->count[0]; ++i) { used_a[i] = true; }
             for (uint8_t j = 0U; j < manager->count[1]; ++j) { used_b[j] = true; }
             Increment(&manager->stats.ambiguous);
