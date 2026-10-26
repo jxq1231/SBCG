@@ -33,6 +33,7 @@
 | [TOA可信边界修复](Milestones/TOA_Trusted_Boundaries_2026_10_26.md) | 软件验证通过·未烧录 | 完整窗/NA、21字节输出与数值转换安全，不代表前沿精度改善 |
 | [单板可信验证计划](Plans/2026-10-26_Goal_Aligned_Review/task_plan.md) | 已完成·复核与软件修复记录 | TOA窗口护栏、已有实验纠偏及验证范围，不重复实施 |
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
+| [M4.3.2事件配对/距离纯核心](Milestones/M4_3_2_Pair_Distance_Core.md) | 纯软件核心完成·网络/硬件待接 | 乱序/重复/歧义/质量/时间域门控，d=c|Δt|与A/B方向，36字节线协议；未接UDP/未烧录 |
 | [M4.3.1固定窗口TOA本地PTP模型](Milestones/M4_3_1_Local_PTP_TOA_Time.md) | 软件完成·硬件待验 | Q16=0旧兼容、TOA缺失/非法不冒充成功、旧SOUND_TIME保留；新增SOUND_TOA_TIME；未烧录 |
 | [M4.2.6 PCM捕获](Milestones/M4_2_6_Candidate_PCM_Capture.md) | 已有实物数据·识别待改进 | 保留在线/离线一致性与旧同步采集缺口，勿按捕获文件数算识别率 |
 | [标准音真实播放](Milestones/M4_2_Active_Chirp_Trial_2026_10_26.md) | 识别未通过·资源范围通过 | 10次实际刺激、0匹配、完整性及下一诊断目标 |

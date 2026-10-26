@@ -33,7 +33,7 @@
 
 ## 其他修改和测试，哪些应复用
 
-当前审计基线代码为`c27e5e7`（P0复核修复提交）。独立P0复核`Logs/Detector/TOA_Replay/P0_review/review.json`=PASS_WITH_RESERVATIONS；修复后基准`Logs/Detector/TOA_Replay/20261026T110943/`（两版）/`20261026T111047/`（三版）。M4.2.5诊断、M4.2.6候选PCM/UDP、M4.2.7-A/B TOA都已经推进；不再重复烧录旧c219af诊断版。能量段起跳修正`db441e0`、尖峰门控`5471919`和回放工具审查修复`74e563e`已入库；全事件回放审计见[审计与后续规划](Plans/2026-10-26_PCM_Event_Replay_Audit.md)。 P1受控采集已完成音量与距离/方向首批（[记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)）；严格工具全10槽音量12/15、D40 3/5、D±30各4/5，[只读复核](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)按播放窗修正为音量15/15、D40 4/5、D50 6/6、D+30 6/6、D−30 5/5，差异来自播放前/后背景污染槽统计；D20/D40-01真缺，下一步修工具事件分类/槽锚定，不先改算法。 M4.3.1固定窗口TOA→本地PTP模型软件已完成（[记录](Milestones/M4_3_1_Local_PTP_TOA_Time.md)），旧SOUND_TIME保留、Q16/TOA缺失显式处理；下一软件增量为两板事件时间差UDP/配对，不跳过标准声身份与质量。
+当前审计基线代码为`c27e5e7`（P0复核修复提交）。独立P0复核`Logs/Detector/TOA_Replay/P0_review/review.json`=PASS_WITH_RESERVATIONS；修复后基准`Logs/Detector/TOA_Replay/20261026T110943/`（两版）/`20261026T111047/`（三版）。M4.2.5诊断、M4.2.6候选PCM/UDP、M4.2.7-A/B TOA都已经推进；不再重复烧录旧c219af诊断版。能量段起跳修正`db441e0`、尖峰门控`5471919`和回放工具审查修复`74e563e`已入库；全事件回放审计见[审计与后续规划](Plans/2026-10-26_PCM_Event_Replay_Audit.md)。 P1受控采集已完成音量与距离/方向首批（[记录](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md)）；严格工具全10槽音量12/15、D40 3/5、D±30各4/5，[只读复核](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)按播放窗修正为音量15/15、D40 4/5、D50 6/6、D+30 6/6、D−30 5/5，差异来自播放前/后背景污染槽统计；D20/D40-01真缺，下一步修工具事件分类/槽锚定，不先改算法。 M4.3.1固定窗口TOA→本地PTP模型与M4.3.2两板事件配对/距离纯核心均已完成软件验证（[记录](Milestones/M4_3_1_Local_PTP_TOA_Time.md)、[M4.3.2](Milestones/M4_3_2_Pair_Distance_Core.md)）；尚未接实际UDP/两板/烧录，标准声身份与质量不可跳过。
 
 可以复用：DMA唯一Begin/End和连续帧编号、已有PTP锚点、优化后的有界搜索、真实PCM捕获/重组、温度服务、TouchGFX状态页。在线/离线对同一捕获的相关峰数值与位置一致，是捕获/评分一致性的有效证据，不必再反复证明数字模板相关1.0。
 
