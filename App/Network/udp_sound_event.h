@@ -1,0 +1,31 @@
+/**
+ * @file        udp_sound_event.h
+ * @brief       两板声音事件UDP发布、接收与配对结果输出（仅NO_SYS前台）。
+ * @details     使用固定36字节事件线协议；本模块不做PTP同步，只校验来源IP/端口、事件侧和配对门控。
+ * @note        事件时间必须是本地PTP模型时间；共同时间域由上层同步状态提供，调用方不得伪造。
+ */
+#ifndef SBCG_UDP_SOUND_EVENT_H
+#define SBCG_UDP_SOUND_EVENT_H
+
+#include "Measure/sound_pair.h"
+#include "BSP/board_identity.h"
+#include <stdbool.h>
+#include <stdint.h>
+
+typedef void (*UDPSoundEvent_Log)(const char *line, int length);
+
+/** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
+bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,
+                        uint32_t (*tick)(void), UDPSoundEvent_Log log);
+
+/** @brief 重试绑定、推进配对并限速输出结果/状态；主循环调用。 */
+void UDPSoundEvent_Process(uint32_t now_ms);
+
+/** @brief 发布一个本板事件；未绑定/链路不可用/编码失败返回false并计数。 */
+bool UDPSoundEvent_Send(uint32_t now_ms, const SoundEventRecord *event);
+
+/** @brief 复制发送/接收/配对计数；NULL不操作。 */
+void UDPSoundEvent_GetSnapshot(SoundPairSnapshot *pair, uint32_t *tx_ok, uint32_t *tx_err,
+                               uint32_t *rx_ok, uint32_t *rx_bad, uint32_t *foreign);
+
+#endif

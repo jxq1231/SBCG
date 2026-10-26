@@ -4,6 +4,7 @@
 #undef main
 #include "BSP/bsp_sdram.h"
 #include "Detector/sound_event_time.h"
+#include "Network/udp_sound_event.h"
 #include "BSP/bsp_board_identity.h"
 #include "Sync/time_sync.h"
 static BoardIdentityProfile identity;
@@ -18,6 +19,17 @@ void SoundEventTime_Init(void(*log)(const char*,int)){assert(log);}
 void SoundEventTime_Observe(uint32_t n,const AudioTimeAnchorObservation*out){assert(n==tick_ms&&out);}
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot*out){*out=(BSP_AudioSnapshot){0};++tick_ms;}
 void SoundEventTime_Process(uint32_t n,const BSP_AudioSnapshot*out){assert(n==tick_ms&&out);}
+/** @brief App测试桩：无待取窗口TOA事件，返回false。 */
+bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event){if(event)memset(event,0,sizeof *event);return false;}
+/** @brief App测试桩：初始化UDP事件服务不访问网络。 */
+bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *profile,
+                        uint32_t (*tick)(void),UDPSoundEvent_Log log)
+{(void)now;(void)profile;(void)tick;(void)log;return true;}
+/** @brief App测试桩：不推进UDP事件配对。 */
+void UDPSoundEvent_Process(uint32_t now){(void)now;}
+/** @brief App测试桩：不发送UDP事件。 */
+bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+
 static unsigned sdram_init_calls,sdram_steps,sdram_enabled;
 static BSP_SdramSnapshot sdram;
 bool BSP_SDRAM_Init(void)

@@ -8,6 +8,7 @@
 #include "../App/test_app_main.c"
 #undef main
 #include "Detector/sound_event_time.h"
+#include "Network/udp_sound_event.h"
 /** @brief 空锚点源，out借用不写，返回false。 */
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){(void)out;return false;}
 /** @brief 未投递锚点的桩，参数借用不保存，无返回值。 */
@@ -20,6 +21,17 @@ void SoundEventTime_Observe(uint32_t now,const AudioTimeAnchorObservation *out){
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out){*out=(BSP_AudioSnapshot){0};}
 /** @brief 前台事件桩，不读PCM或输出日志，无返回值。 */
 void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot *out){(void)now;(void)out;}
+/** @brief App测试桩：无待取窗口TOA事件，返回false。 */
+bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event){if(event)memset(event,0,sizeof *event);return false;}
+/** @brief App测试桩：初始化UDP事件服务不访问网络。 */
+bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *profile,
+                        uint32_t (*tick)(void),UDPSoundEvent_Log log)
+{(void)now;(void)profile;(void)tick;(void)log;return true;}
+/** @brief App测试桩：不推进UDP事件配对。 */
+void UDPSoundEvent_Process(uint32_t now){(void)now;}
+/** @brief App测试桩：不发送UDP事件。 */
+bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+
 /** @brief 验证诊断字段及原有排队语义，成功返回0。 */
 int main(void)
 {

@@ -21,6 +21,7 @@
 #endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
+#include "Network/udp_sound_event.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -103,6 +104,9 @@
 #define APP_FIRMWARE_ID "SBCG-M1.1"
 #endif
 #define APP_HEARTBEAT_PERIOD_MS 1000U
+/* Diagnostic-only common event domain until the synchronized time-domain service exists.
+   Both boards use the same constant, so this is NOT a claim of PTP synchronization. */
+#define APP_SOUND_EVENT_DIAGNOSTIC_DOMAIN 1U
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
 /* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。 */
@@ -428,6 +432,14 @@ void App_Init(void)
     AudioTimeMapMonitor_Init(SendLine);
 #ifdef SBCG_USE_SOUND_TIME
     SoundEventTime_Init(SendLine);
+#ifdef SBCG_USE_BOARD_IDENTITY
+    if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
+                            BSP_Console_GetTickMs, SendLine))
+    {
+        static const char error[] = "$SOUND_EVENT_INIT,RESULT=INIT_ERROR\r\n";
+        SendLine(error, (int)(sizeof(error) - 1U));
+    }
+#endif
 #endif
 #endif
     CodecMonitor_Init(BSP_Console_GetTickMs(), SendLine);
@@ -547,6 +559,29 @@ void App_Process(void)
         BSP_AudioSnapshot snapshot;
         BSP_Audio_GetSnapshot(&snapshot);
         SoundEventTime_Process(BSP_Console_GetTickMs(),&snapshot);
+        /* Diagnostic event publishing: identity/time-domain are supplied by App,
+           but this constant domain is not a PTP sync or formal measurement claim. */
+        SoundEventTimeEvent notice;
+        while (SoundEventTime_TakeEvent(&notice))
+        {
+#ifdef SBCG_USE_BOARD_IDENTITY
+            const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
+            if (event_profile == NULL) { break; }
+            SoundEventRecord event = {0};
+            event.valid = true;
+            event.type = SOUND_EVENT_CHIRP;
+            event.quality = 100U;
+            event.side = event_profile->role == BOARD_ROLE_A ? SOUND_SIDE_A : SOUND_SIDE_B;
+            event.time_domain = APP_SOUND_EVENT_DIAGNOSTIC_DOMAIN;
+            event.session = notice.session;
+            event.sequence = notice.sequence;
+            event.time_ns = notice.time_ns;
+            (void)UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
+#else
+            (void)notice;
+#endif
+        }
+        UDPSoundEvent_Process(BSP_Console_GetTickMs());
     }
 #elif defined(SBCG_USE_AUDIO_MAP)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
