@@ -82,6 +82,30 @@ int main(void)
         CHECK(ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,back,&fraction));
         CHECK(fabs(fraction-28.65)<0.1);
     }
+    /* 能量包络起跳：三节递增斜坡（斜率100/200/600，尾部截顶32767），幅值峰在尾部，
+       但能量段起点回溯到首节，跨阈插值固定在样本44(4000)与45(4200)之间。 */
+    {
+        int16_t back[256];memset(back,0,sizeof back);
+        for(unsigned i=10U;i<40U;++i)back[i]=(int16_t)((long)(i-9)*100L);         /* 100..3000 */
+        for(unsigned i=40U;i<80U;++i)back[i]=(int16_t)((long)(i-39)*200L+3000L);  /* 3200..11200 */
+        for(unsigned i=80U;i<256U;++i){const long v=(long)(i-79)*600L+11200L;
+            back[i]=(int16_t)(v>32767L?32767L:v);}                                /* 11800..截顶 */
+        fraction=0.0;
+        CHECK(ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,back,&fraction));
+        CHECK(fabs(fraction-44.475)<0.01);
+    }
+    /* 能量包络对软起振正弦突发：起跳点定位到首段包络，插值落在样本15与16之间。 */
+    {
+        const double pi=3.141592653589793;
+        int16_t osc[256];memset(osc,0,sizeof osc);
+        for(unsigned i=16U;i<256U;++i){
+            const double phase=2.0*pi*2000.0*(double)i/48000.0;
+            osc[i]=(int16_t)(14000.0*fabs(sin(phase))+0.5);
+        }
+        fraction=-1.0;
+        CHECK(ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,osc,&fraction));
+        CHECK(fraction>10.0 && fraction<30.0);
+    }
     /* 单点尖峰不足连续过阈段 -> 拒绝 */
     {
         int16_t back[256];memset(back,0,sizeof back);back[50]=30000;

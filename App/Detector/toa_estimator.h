@@ -38,11 +38,13 @@ bool ToaEstimator_Estimate(const ToaEstimatorConfig *config,
                            const int16_t *samples, double *out_fraction);
 
 /**
- * @brief 栅格无关的峰值回溯前沿配置。
- * @note  搜索窗64..512点；从窗内峰值逐样本向左找最后一段连续阈值以上段的起点，
- *        再用 lo/start 样本对线性插值出子帧前沿，输出相对samples[0]的位置。
- *        run_samples为连续过阈样本数2..8，抑制单点尖峰误触；该位置与调用方
- *        候选窗起点(如64帧门控栅格)无依赖，适合作为绝对前沿锚点。
+ * @brief 能量包络起跳的栅格无关前沿配置。
+ * @note  搜索窗32..512点；按5点短窗平方能量求Emax，取窗内最左的>=Emax/8能量段
+ *        起点作为突发粗起点（直达波优先；直达与更强回声之间能量凹低于Emax/8时，
+ *        旧实现会把锚点落到回声段，跨轮回放跳动可达±1.9ms），再从粗起点向左找最后
+ *        一个低于幅值阈值的样本，向右取首个真实跨阈样本对线性插值出子帧前沿。
+ *        run_samples为连续过阈样本数2..8，抑制单点尖峰误触；该位置与调用方候选窗
+ *        起点(如64帧门控栅格)无依赖，适合作为绝对前沿锚点。
  */
 typedef struct {
     uint16_t window_frames;
@@ -55,13 +57,14 @@ typedef struct {
 extern const ToaBackwardConfig ToaBackward_DefaultConfig;
 
 /**
- * @brief   从峰值向左回溯定位连续过阈前沿，返回相对samples[0]的子帧位置。
+ * @brief   基于能量包络起跳定位直达前沿，返回相对samples[0]的子帧位置。
  * @param   config 非NULL有效配置，只读。
  * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本调用借用。
  * @param   out_fraction 非NULL输出；成功为前沿插值位置，失败保持原值。
  * @return  true为找到连续前沿；false为参数非法、无峰值、整窗已过阈或连续段不足。
- * @note    与旧Estimate的正向线性插值不同，本接口基于峰回溯，不依赖候选窗栅格；
- *          峰可出现在窗内任意位置，前沿为最后一段连续过阈的起点到其前一样本插值。
+ * @note    与旧Estimate的正向线性插值不同，本接口先用能量包络粗定位窗内最左能量段
+ *          起点再做样本级过阈插值，直达波优先，避免幅度大于直达波的多径回声峰被直接
+ *          选作锚点；峰可出现在窗内任意位置，输出不依赖调用方候选窗栅格。
  */
 bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
                                    const int16_t *samples, double *out_fraction);

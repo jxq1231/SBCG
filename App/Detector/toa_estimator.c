@@ -59,15 +59,30 @@ bool ToaEstimator_Estimate(const ToaEstimatorConfig *config,
     }
     return false;
 }
+/** @brief 计算samples前frames点中i处的5点短窗平方能量，越界样本按0计，单位(PCM值)^2。 */
+static uint64_t ToaEnergyAt(const int16_t *samples,uint16_t frames,int32_t i)
+{
+    uint64_t energy=0U;
+    for(int32_t j=i-2;j<=i+2;++j){
+        if(j<0 || j>=(int32_t)frames){continue;}
+        const int32_t v=samples[j];
+        energy+=(uint64_t)(v<0 ? -v:v)*(uint64_t)(v<0 ? -v:v);
+    }
+    return energy;
+}
 /**
- * @brief   从峰值向左回溯定位连续过阈前沿（栅格无关）。
- * @param   config 非NULL有效配置，只读；window_frames 64..512，run_samples 2..8。
+ * @brief   能量包络起跳定位直达前沿，栅格无关。
+ * @param   config 非NULL有效配置，只读；window_frames 32..512，run_samples 2..8。
  * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本调用借用。
  * @param   out_fraction 非NULL输出；成功为前沿插值位置，失败保持原值。
  * @return  true为找到连续前沿；false为参数非法、无峰值、整窗已过阈或连续段不足。
- * @note    阈值=max(threshold_pcm, peak/relative_scale)；峰起向左的最后一段连续
- *          过阈样本的起点与前一低于阈样本做线性插值，输出相对samples[0]的位置，
- *          与门控候选窗的64帧栅格无关。
+ * @note    幅值阈值=max(threshold_pcm, peak/relative_scale)，peak为窗内绝对幅值峰。
+ *          定位分三步：1)按5点短窗平方能量求窗内能量最大值Emax；2)取窗内最左的
+ *          >=Emax/8能量段起点作为突发粗起点（直达波优先，回声段整体在此阈值下与
+ *          直达段连通或位于其后；旧实现沿能量峰向左只找包含段的起点，直达与更强
+ *          回声间能量凹低于Emax/8时会把锚点落到回声段，跨轮回放产生±1.9ms跳动）；
+ *          3)自粗起点向左找最后一个低于幅值阈值的样本，再向右取首个真实跨阈样本对
+ *          线性插值出子帧前沿。输出相对samples[0]的位置，与门控候选窗的64帧栅格无关。
  */
 bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
                                    const int16_t *samples, double *out_fraction)
@@ -88,18 +103,41 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
         if(relative>limit){limit=relative;}
     }
     if(limit==0U){return false;}
+    const uint16_t frames=config->window_frames;
+    uint64_t emax=0U;
+    for(uint16_t i=0U;i<frames;++i){
+        const uint64_t energy=ToaEnergyAt(samples,frames,(int32_t)i);
+        if(energy>emax){emax=energy;}
+    }
+    if(emax==0U){return false;}
+    const uint64_t elimit=emax>>3U;  /* Emax/8：低门槛让直达+多径回波连成整段 */
+    uint16_t seg_start=0U;
+    for(uint16_t i=0U;i<frames;++i){
+        if(ToaEnergyAt(samples,frames,(int32_t)i)>=elimit){seg_start=i;break;}
+    }
+    /* 旧实现只沿能量最大位置向左找包含段的起点；当直达波与更强回声之间存在低于
+       Emax/8 的能量凹时会把锚点落在回声段，跨轮回调相位使段起点±1.9ms 跳动。
+       改为取窗内最左的 >=Emax/8 段起点：直接锚定首个能量突起（直达波），稳定。 */
     int32_t below=-1;
-    for(int32_t i=(int32_t)idx_peak;i>=0;--i){
+    for(int32_t i=(int32_t)seg_start;i>=0;--i){
         const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
         if(magnitude<limit){below=i;break;}
     }
-    if(below<0){return false;}  /* 峰到窗首整段已过阈，前沿在窗外 */
+    if(below<0){return false;}  /* 段起点到窗首整段已过阈，前沿在窗外 */
     const uint16_t start=(uint16_t)(below+1);
-    if((uint16_t)(idx_peak-start+1U)<config->run_samples){return false;}
-    const double hi=(double)(samples[start]<0 ? -(int32_t)samples[start]:samples[start]);
-    const double lo=(double)(samples[below]<0 ? -(int32_t)samples[below]:samples[below]);
+    if((int32_t)idx_peak-(int32_t)start+1<config->run_samples){return false;}
+    int32_t cross=(int32_t)start;
+    while((int32_t)cross<frames)
+    {
+        const uint32_t magnitude=(uint32_t)(samples[cross]<0 ? -(int32_t)samples[cross]:samples[cross]);
+        if(magnitude>=limit){break;}
+        ++cross;
+    }
+    if((int32_t)cross>=frames){return false;}  /* 起跳段内无可跨阈样本 */
+    const double hi=(double)(samples[cross]<0 ? -(int32_t)samples[cross]:samples[cross]);
+    const double lo=(double)(samples[cross-1]<0 ? -(int32_t)samples[cross-1]:samples[cross-1]);
     if(hi<=lo){return false;}
-    const double fraction=(double)below+(double)((uint32_t)limit-lo)/(hi-lo);
+    const double fraction=(double)(cross-1)+(double)((uint32_t)limit-lo)/(hi-lo);
     *out_fraction=fraction;
     return true;
 }
