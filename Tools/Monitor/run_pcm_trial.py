@@ -8,6 +8,7 @@ a log with host-second offsets. Host results never imply hardware PASS.
 import argparse
 import json
 import socket
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import udp_chirp_capture as capture  # noqa: E402
+import pcm_trial_metadata as metadata  # noqa: E402
 
 SND_FILENAME_NODEFAULT_ASYNC = 0x20003  # SND_FILENAME | SND_NODEFAULT | SND_ASYNC
 
@@ -32,6 +34,21 @@ def main():
                         help="serial log path prefix (writes <prefix>.jsonl)")
     parser.add_argument("--volume", type=int, default=None, metavar="0-100",
                         help="set Windows wave-out master volume for this playback (restored after)")
+    parser.add_argument("--controlled", action="store_true",
+                        help="require BOOT/UID/image/channel/rate/WAV-reference metadata")
+    parser.add_argument("--image", type=Path,
+                        default=ROOT / "build" / "Debug" / "SBCG.elf",
+                        help="local image used for the recorded SHA256")
+    parser.add_argument("--image-sha256", default=None,
+                        help="override flashed-image SHA256 (64 hex chars)")
+    parser.add_argument("--expected-fw", default="SBCG-M4.2-PCMCAP")
+    parser.add_argument("--reference-manifest", type=Path,
+                        default=ROOT / "Data" / "Audio" / "candidate_manifest.json")
+    parser.add_argument("--reset", action="store_true",
+                        help="controlled reset before capture (openocd, no flash)")
+    parser.add_argument("--openocd-config", type=Path,
+                        default=ROOT / ".vscode" / "openocd-stm32f746.cfg")
+    parser.add_argument("--stlink-serial", default="066EFF3832394D3457253156")
     args = parser.parse_args()
 
     import serial
@@ -68,6 +85,22 @@ def main():
     stream.open()
 
     started = time.monotonic()
+    reset_result = None
+    if args.reset:
+        reset_cmd = ["openocd", "-f", str(args.openocd_config),
+                     "-c", f"adapter serial {args.stlink_serial}",
+                     "-c", "init; reset run; exit"]
+        try:
+            reset = subprocess.run(reset_cmd, capture_output=True, text=True,
+                                   timeout=30)
+            reset_result = {"command": reset_cmd, "returncode": reset.returncode,
+                            "stdout": reset.stdout[-2000:],
+                            "stderr": reset.stderr[-2000:]}
+            if reset.returncode != 0:
+                failures.append(f"reset: rc {reset.returncode}")
+        except Exception as error:
+            reset_result = {"command": reset_cmd, "error": str(error)}
+            failures.append(f"reset:{error}")
     played = False
     end = started + args.prelude + 22.0 + args.tail
     play_span = None
@@ -120,15 +153,32 @@ def main():
             print(f"wave volume restored to 0x{wave_volume_restore:08x}", flush=True)
         except Exception as error:
             print(f"volume restore failed: {error}", flush=True)
-    (Path(str(args.serial) + ".jsonl")).write_text(
-        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in serial_records),
-        encoding="utf-8")
+    serial_text = "".join(
+        json.dumps(r, ensure_ascii=False) + "\n" for r in serial_records)
+    (Path(str(args.serial) + ".jsonl")).write_text(serial_text, encoding="utf-8")
+    # The offline ledger/replay tool consumes Logs/Chirp/<trial>/run.jsonl;
+    # write the canonical copy for every controlled trial automatically.
+    canonical = ROOT / "Logs" / "Chirp" / args.trial
+    canonical.mkdir(parents=True, exist_ok=True)
+    (canonical / "run.jsonl").write_text(serial_text, encoding="utf-8")
+    manifest, metadata_errors = metadata.build_manifest(
+        image_path=args.image, image_sha256=args.image_sha256,
+        expected_fw=args.expected_fw, wav=args.wav,
+        manifest_path=args.reference_manifest, serial_records=serial_records,
+        play_span=play_span, prelude_s=args.prelude, tail_s=args.tail,
+        expected_channel=0)
+    if args.controlled:
+        failures.extend(f"metadata:{error}" for error in metadata_errors)
     summary = {"status": "COMPLETED", "trial": args.trial, "tag": args.tag,
                "received": assembly.received, "completed": assembly.completed,
                "duplicates": assembly.duplicates, "play_span": play_span,
-               "serial_lines": len(serial_records), "failures": failures}
+               "serial_lines": len(serial_records), "failures": failures,
+               "controlled": args.controlled, "reset": reset_result,
+               "metadata": manifest}
     (out / "trial_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "trial_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False), flush=True)
     if failures:
         print("TRIAL_FAILURES", failures, flush=True)
