@@ -1,10 +1,16 @@
 # 当前项目状态
 
-<!-- doc-status: current-state; reviewed: 2026-10-26 -->
+<!-- doc-status: current-state; reviewed: 2026-10-27 -->
 
-更新：2026-10-26。本文仅描述现在；历史实验按需查[文档状态表](Document_Status.md)及`Milestones/`，不重复执行旧计划。
+更新：2026-10-27。当前入口以本节为准；历史实验按需查[文档状态表](Document_Status.md)及`Milestones/`，不重复执行旧计划。
 
 ## 当前工作
+
+**M4.3.25双板PPS共同窗口1800秒长稳已通过串口观察。** 沿用A/B现有`f369aae6...`镜像，未烧录；两板共同启动后采集1830秒，严格窗口内A为1799条QUALIFIED，B为1100条QUALIFIED、683条RATE_REQUALIFY、15条启动阶段UNQUALIFIED。FAULTS/RECOVERIES/MISSED/ERRORS始终0，首次建域后无VALID=0记录；相对BOOT约15.25秒建立同一令牌。完整性、窗口和统计见[本次验收](Milestones/M4_3_25_PPS_30min_Stability.md)。
+
+已有[示波器10次读数](Milestones/M4_3_22_PPS_Scope.md)最大235ns，满足10µs；未校探头偏斜，不推断10ns精度，本轮不复测。当前唯一后续目标是标准WAV的双板音频闭合：STANDARD_SEQUENCE、SOUND_PAIR、权威结果与两屏实际观察仍待验证。无有效配对前不开展多点距离结论；不改测量时间契约，CLAP不纳入本轮正式验收，0.5m标定仍缺板端触发入口。
+
+### 历史P1软件口径（已交付，不是当前待实施项）
 
 **当前已完成P1播放阶段分类与固定参考分槽的软件验证。** 基于ad8ef66增加主机分析口径，保留旧全量诊断为`legacy_all_events`，另列播放窗的捕获日志覆盖、唯一SOUND→capture→PCM覆盖和各版本数值TOA覆盖；不以最小TOA重锚。53项相关主机测试通过，五个原cohort旧诊断/TOA数值逐项兼容；两个扩展trial的四条prelude格式错误仍严格FAIL。五个旧run、原始采集、估算器、采集工具及51条用户改动均保留，本轮无硬件操作。验证及新run位置见[P1工具实施记录](Milestones/P1_ReadOnly_Analysis_2026_10_26.md)。
 

@@ -1,10 +1,12 @@
 # 文档状态与阅读索引
 
-<!-- doc-status: current-document-index; reviewed: 2026-10-26 -->
+<!-- doc-status: current-document-index; reviewed: 2026-10-27 -->
 
 审计日期：2026-10-23。已检查原有 **57份仓库自有Markdown**：顶层历史方案20份、历史验收23份，其余入口/资源/规则/模板14份。第三方Drivers/Middlewares许可与说明、构建输出、Logs内实验快照不作为项目进度文档，不改写。新文档随本轮登记。
 
 ## 防止重复实施
+
+**当前入口（2026-10-27）：[M4.3.25双板PPS共同1800秒长稳](Milestones/M4_3_25_PPS_30min_Stability.md)已通过串口状态/计数观察。** 两板故障/漏计/错误/恢复均0，建域后无VALID=0记录。已有示波器10次max235ns按原范围保留，不复测；本轮后续只做标准声音频闭合，STANDARD_SEQUENCE/配对/两屏距离尚未通过。下面P1、单A及短时记录均按各自版本保留，不作为当前重做指令；不改测量时间契约，CLAP不纳入正式验收。
 
 最新目标复核入口：[两板距离/方向与提高项路线](Goal_Aligned_Roadmap_2026_10_26.md)。M4.2.6已有实物PCM、M4.2.7有单板TOA；不能继续按旧诊断计划重复烧录。整体精度未过，部分稳定槽不是验收；B2估算器修正已由后续提交`db441e0`/`5471919`入库，按软件/实际窗口分层解释。
 
@@ -26,6 +28,7 @@
 
 | 文件 | 状态 | 何时阅读 |
 | --- | --- | --- |
+| [M4.3.25 PPS共同30分钟长稳](Milestones/M4_3_25_PPS_30min_Stability.md) | 串口观察PASS·1800秒共同窗口 | 严格BOOT边界、A/B状态计数、DOMAIN、证据哈希与外部精度边界；现行同步状态入口 |
 | [面向提高项的目标路线](Goal_Aligned_Roadmap_2026_10_26.md) | 当前任务书复核与优先级 | 最终几何、已完成/未完成、单A能做什么、每步帮助哪个指标 |
 | [全事件对账与TOA离线回放计划](Plans/2026-10-26_PCM_Event_Replay_Plan.md) | 已完成+审查修复+审计 | 九轮输入、版本未知、关联歧义、完整窗、真实C回放及分层通过条件；审计与后续规划见[链接](Plans/2026-10-26_PCM_Event_Replay_Audit.md)；P0独立复核`Logs/Detector/TOA_Replay/P0_review/review.json`（PASS_WITH_RESERVATIONS，F1/F2/F3/F5已修，`c27e5e7`；修复后run `20261026T110943/111047`）；[里程碑](Milestones/PCM_Event_Replay_2026_10_26.md) |
 | [P1受控声学采集](Milestones/P1_Controlled_Acoustic_Capture_2026_10_26.md) | 原始采集与旧口径归档·物理精度未验 | 旧严格音量12/15、D40 3/5、D50 5/5、D±30各4/5按原run保留；新分层口径见工具记录，不混算 |
