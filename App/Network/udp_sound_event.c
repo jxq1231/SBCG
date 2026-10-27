@@ -30,7 +30,7 @@ static UDPSoundEvent_AckSink ack_sink;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
-static uint32_t last_bind_ms, last_state_ms;
+static uint32_t last_bind_ms, last_state_ms, last_bind_log_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
 static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
 static uint32_t ack_tx_ok, ack_tx_err, ack_rx_ok, ack_rx_bad;
@@ -155,9 +155,37 @@ static void TryBind(uint32_t now_ms)
     last_bind_ms=now_ms;
     if(!netif_is_up(&gnetif) || !netif_is_link_up(&gnetif))return;
     service_pcb=udp_new();
-    if(service_pcb==NULL){Increment(&init_errors);return;}
-    if(udp_bind(service_pcb,netif_ip_addr4(&gnetif),UDP_SOUND_EVENT_BOARD_PORT)!=ERR_OK)
-    {udp_remove(service_pcb);service_pcb=NULL;Increment(&init_errors);return;}
+    if(service_pcb==NULL)
+    {
+        Increment(&init_errors);
+        if(emit!=NULL && (uint32_t)(now_ms-last_bind_log_ms)>=1000U)
+        {
+            last_bind_log_ms=now_ms;
+            char line[96];
+            const int length=snprintf(line,sizeof line,
+                "$SOUND_EVENT_BIND,RESULT=NEW_FAIL\r\n");
+            emit(line,length);
+        }
+        return;
+    }
+    const err_t bind_error=udp_bind(service_pcb,netif_ip_addr4(&gnetif),
+                                    UDP_SOUND_EVENT_BOARD_PORT);
+    if(bind_error!=ERR_OK)
+    {
+        udp_remove(service_pcb);service_pcb=NULL;Increment(&init_errors);
+        if(emit!=NULL && (uint32_t)(now_ms-last_bind_log_ms)>=1000U)
+        {
+            last_bind_log_ms=now_ms;
+            const ip_addr_t *local=netif_ip_addr4(&gnetif);
+            const uint32_t ip=local!=NULL?(uint32_t)ip4_addr_get_u32(ip_2_ip4(local)):0U;
+            char line[128];
+            const int length=snprintf(line,sizeof line,
+                "$SOUND_EVENT_BIND,RESULT=BIND_FAIL,ERR=%d,LOCAL_IP=%08" PRIX32
+                "\r\n",(int)bind_error,ip);
+            emit(line,length);
+        }
+        return;
+    }
     udp_bind_netif(service_pcb,&gnetif);
     udp_recv(service_pcb,Receive,NULL);
 }
