@@ -35,6 +35,7 @@
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
 | [M4.3.9结果周期刷新/计数](Milestones/M4_3_9_Result_Refresh.md) | 软件完成·无ACK/未烧录 | A每500ms重发同ID；B刷新2s；`$MEASURE_RESULT_STATE`计数 |
+| [M4.3.20 B域连续性](Milestones/M4_3_20_B_Domain_Continuity.md) | 软件完成·A绑定失败/待复验 | B TRACKING+有界RATE不再掉域；run04 A事件UDP bind失败未验证 |
 | [事件阻断修复计划](Plans/2026-10-27_Event_Blockers_Fix.md) | 软件完成·未烧录 | 配对3000ms、跨块2400帧分类、App回归；首次2秒/标定/CLAP另列 |
 | [M4.3.19 app_main结果接线测试](Milestones/M4_3_19_App_UDP_Integration.md) | 主机完成·UDP边界桩 | App发送/ACK/序号回退/退避/域撤销；非真实UDP/未烧录 |
 | [M4.3.18结果P2修复](Milestones/M4_3_18_Result_P2_Fixes.md) | 软件完成·集成测试仍缺 | 失败500ms退避；重复ACK不误判；MRES标定一致性 |

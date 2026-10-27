@@ -18,8 +18,8 @@ int main(void)
     TimeDomain_Update(&s);TimeDomain_Get(&out);assert(out.valid && out.id==1U);
     s.faulted=true;TimeDomain_Update(&s);TimeDomain_Get(&out);assert(!out.valid && out.id==0U);
     s=Sync(BOARD_ROLE_B,true,false,true,false);
-    TimeDomain_Update(&s);TimeDomain_Get(&out);assert(!out.valid);
-    s.internal_locked=true;TimeDomain_Update(&s);TimeDomain_Get(&out);assert(out.valid && out.id==1U);
+    TimeDomain_Update(&s);TimeDomain_Get(&out);assert(out.valid && out.id==1U);
+    s.internal_locked=true;TimeDomain_Update(&s);TimeDomain_Get(&out);assert(out.valid);
     s.offset_valid=false;TimeDomain_Update(&s);TimeDomain_Get(&out);assert(!out.valid);
     s=Sync(BOARD_ROLE_UNCONFIGURED,true,false,true,true);
     TimeDomain_Update(&s);TimeDomain_Get(&out);assert(!out.valid);
@@ -41,7 +41,7 @@ int main(void)
     pps.configured=true;pps.qualified=true;pps.faulted=false;pps.state=PPS_SERVICE_QUALIFIED;
     TimeDomain_UpdateWithPps(&b,&pps);TimeDomain_Get(&out);assert(out.valid);
     pps.state=PPS_SERVICE_RATE_REQUALIFY;TimeDomain_UpdateWithPps(&b,&pps);
-    TimeDomain_Get(&out);assert(!out.valid);
+    TimeDomain_Get(&out);assert(out.valid);
     TimeDomain_UpdateWithPps(&b,NULL);TimeDomain_Get(&out);assert(out.valid);
     TimeDomain_UpdateWithPps(NULL,&pps);TimeDomain_Get(&out);assert(!out.valid);
     /* A-derived token is shared with B; invalidation retains it for re-lock. */

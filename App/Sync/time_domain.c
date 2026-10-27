@@ -67,12 +67,17 @@ static void UpdateCore(const TimeSyncSnapshot *sync,const PpsServiceSnapshot *pp
     bool valid=true;
     if(sync->role==BOARD_ROLE_B)
     {
-        valid=sync->offset_valid && sync->internal_locked;
+        /* TRACKING still has a fresh offset; internal lock toggles during
+           normal frequency updates and must not tear down the event domain. */
+        valid=sync->offset_valid;
     }
     if(pps!=NULL)
     {
+        /* RATE_REQUALIFY is a bounded internal requalification interval and
+           keeps PPS output/qualified=1; rejecting it makes the domain flap. */
         valid=valid && pps->configured && !pps->faulted &&
-              pps->state==PPS_SERVICE_QUALIFIED;
+              (pps->state==PPS_SERVICE_QUALIFIED ||
+               pps->state==PPS_SERVICE_RATE_REQUALIFY);
     }
     local_valid=valid;
     if(!valid)peer_seen=false;
