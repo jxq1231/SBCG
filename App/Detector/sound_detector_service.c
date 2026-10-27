@@ -1,10 +1,10 @@
 /**
  * @file        sound_detector_service.c
  * @brief       在PCM唯一借用中暂存检测，归还验证成功后发布有界本地帧候选。
- * @details     工作副本隔离未验证PCM，固定两级4条队列；失败/断流清历史，限速发送并统计损失。
+ * @details     工作副本隔离未验证PCM，固定两级4条队列；分类等待完整2400帧，失败/断流清历史。
  *              TOA仅使用当前借用块内完整256帧窗口；窗口不完整时保留能量候选并输出NA。
  *              名义微秒发布前检查数值及uint64范围，十进制缓冲可容纳20位及结尾字符。
- * @note        仅串行前台，不调用BSP Begin/End、不保留样本指针或重组跨块PCM；无新IRQ/DMA/PTP时间查询。
+ * @note        仅串行前台；双2400点CPU自有尾部缓存经End提交，不保留DMA指针，无新IRQ/DMA/PTP时间查询。
  */
 #include "sound_detector_service.h"
 #include "sound_event_time.h"
@@ -14,6 +14,7 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #define BLOCK_MAX_AGE_MS 250U
 #define STREAM_MAX_AGE_MS 1000U
 #define EVENT_LOG_PERIOD_MS 250U
@@ -21,14 +22,25 @@
 #define TOA_SEARCH_WINDOW 256U
 #define TOA_LEFT_MARGIN 64U
 #define AUDIO_RATE_HZ 48000U
+#define CLASSIFY_FRAMES 2400U
 const SoundDetectorConfig SoundDetectorService_DefaultConfig={64U,256U,128U,2U,8U,24000U};
 typedef struct { SoundCandidate event; uint32_t completed_ms,sequence;
                  uint64_t toa_anchor; double toa_fraction; bool toa_valid;
-                 SoundToaPosition toa; } QueuedCandidate;
+                 SoundToaPosition toa; bool class_ready; } QueuedCandidate;
 static SoundDetector current,working;
 static SoundDetectorServiceSnapshot diagnostics;
 static SoundCandidate staged[SOUND_DETECTOR_QUEUE_CAPACITY];
 static QueuedCandidate queue[SOUND_DETECTOR_QUEUE_CAPACITY];
+static QueuedCandidate queue_working[SOUND_DETECTOR_QUEUE_CAPACITY];
+/* CPU独占，不与DMA共享；启动不清NOLOAD数据，有效标记只在整尾部写满且End成功后提交。 */
+static int16_t sound_class_pcm[2][CLASSIFY_FRAMES]
+    __attribute__((section(".SoundClassSection"),aligned(32)));
+static uint64_t class_first_frame,staged_class_first_frame;
+static uint32_t class_session,staged_class_session;
+static uint8_t class_committed_slot;
+static bool class_history_valid;
+static bool staged_class_ready[SOUND_DETECTOR_QUEUE_CAPACITY];
+_Static_assert(sizeof sound_class_pcm==9600U,"classification PCM reservation must be 9600 bytes");
 static double staged_toa[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint64_t staged_toa_anchor[SOUND_DETECTOR_QUEUE_CAPACITY];
 static bool staged_toa_ok[SOUND_DETECTOR_QUEUE_CAPACITY];
@@ -90,28 +102,43 @@ static bool QuantizeToa(uint64_t anchor,double fraction,SoundToaPosition *out)
 }
 
 /**
- * @brief 从候选onset后的PCM窗口提取波形/包络/过零趋势分类，供后续类型与质量门控。
+ * @brief 仅在候选onset后的完整2400帧可得时执行原波形分类。
  * @param block 非NULL当前借用块，样本仅本次读取。
- * @param event 非NULL能量候选，onset为块内绝对帧。
- * @param slot 暂存槽位；失败写UNKNOWN/quality0。
- * @note 最多读取2400帧(50ms)；不足480帧不分类；不保留PCM指针、不改变能量候选。
+ * @param event 非NULL工作候选，仅更新event_class/quality，onset为会话内绝对帧。
+ * @return true为分类完成或窗口永不可得（UNKNOWN）；false为等待后继块。
+ * @note 当前块完整窗直接借用；跨块窗只拼已提交尾部和当前PCM到未提交槽，不保留PCM指针。
+ *       起点已丢失或坐标溢出时不伪造窗口，保留UNKNOWN能量诊断；TOA不使用此缓存。
  */
-static void ClassifyCandidate(const BSP_AudioBlock *block,const SoundCandidate *event,
-                              uint8_t slot)
+static bool ClassifyCandidate(const BSP_AudioBlock *block,SoundCandidate *event)
 {
-    staged[slot].event_class=EVENT_CLASS_UNKNOWN;staged[slot].quality=0U;
-    if(event->onset_frame<block->first_frame)return;
-    const uint64_t local=event->onset_frame-block->first_frame;
-    if(local>=block->frame_count)return;
-    const uint64_t available=block->frame_count-local;
-    const uint16_t frames=(uint16_t)(available>2400U?2400U:available);
-    if(frames<480U)return;
-    /* 只读本块PCM分类；显式去掉DMA缓冲的volatile限定，不保留指针。 */
-    const int16_t *first=(const int16_t *)&block->samples[2U*(size_t)local+diagnostics.channel];
+    event->event_class=EVENT_CLASS_UNKNOWN;event->quality=0U;
+    if(event->session!=block->session || event->onset_frame>UINT64_MAX-CLASSIFY_FRAMES)return true;
+    const uint64_t end_frame=event->onset_frame+CLASSIFY_FRAMES;
+    const uint64_t block_end=block->first_frame+block->frame_count;
+    if(event->onset_frame<block->first_frame &&
+        (boundary || !class_history_valid || class_session!=block->session ||
+         event->onset_frame<class_first_frame ||
+         block->first_frame-class_first_frame!=CLASSIFY_FRAMES))return true;
+    if(end_frame>block_end)return false;
+    const int16_t *first;
+    uint16_t stride;
+    if(event->onset_frame>=block->first_frame){
+        const size_t local=(size_t)(event->onset_frame-block->first_frame);
+        first=(const int16_t *)&block->samples[2U*local+diagnostics.channel];stride=2U;
+    }else{
+        int16_t *scratch=sound_class_pcm[1U-class_committed_slot];
+        const uint16_t prefix=(uint16_t)(block->first_frame-event->onset_frame);
+        const size_t history_offset=(size_t)(event->onset_frame-class_first_frame);
+        for(uint16_t i=0U;i<prefix;++i)
+            scratch[i]=sound_class_pcm[class_committed_slot][history_offset+i];
+        for(uint16_t i=prefix;i<CLASSIFY_FRAMES;++i)
+            scratch[i]=block->samples[2U*(size_t)(i-prefix)+diagnostics.channel];
+        first=scratch;stride=1U;
+    }
     EventClassResult classified;
-    (void)EventClassifier_ClassifyStrided(first,2U,frames,&classified);
-    staged[slot].event_class=(uint8_t)classified.type;
-    staged[slot].quality=classified.quality;
+    (void)EventClassifier_ClassifyStrided(first,stride,CLASSIFY_FRAMES,&classified);
+    event->event_class=(uint8_t)classified.type;event->quality=classified.quality;
+    return true;
 }
 
 /**
@@ -158,6 +185,7 @@ static void ResetHistory(void)
 #endif
     if(current.have_input || count!=0U || active)Add(&diagnostics.resets,1U);
     (void)SoundDetector_Reset(&current);DropQueue();active=stage_valid=false;staged_count=0U;staged_total=0U;
+    class_history_valid=false;
 }
 /**
  * @brief 初始化实验配置、工作副本和发送限速。
@@ -173,6 +201,8 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
 {
     diagnostics=(SoundDetectorServiceSnapshot){0};diagnostics.channel=channel;
     head=count=staged_count=0U;staged_total=0U;active=stage_valid=boundary=false;
+    class_history_valid=false;class_committed_slot=0U;
+    class_first_frame=staged_class_first_frame=0U;class_session=staged_class_session=0U;
     emit_line=log;last_event_ms=last_state_ms=now_ms;
     const bool valid=SoundDetector_Init(&current,config);
     diagnostics.configured=valid && channel<2U && log!=NULL;
@@ -191,8 +221,8 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
  * @param now_ms 当前HAL毫秒，校验完成块年龄。
  * @param block 非NULL借用描述符，仅本次调用访问其中PCM。
  * @return true为暂存完成，false为元数据/生命周期错误，之后都须Complete。
- * @note 工作副本推进全部8192帧；每次从交错PCM抽取最多64点到128字节局部缓冲，不新增整块
- *       单声道BSS，不保存PCM指针，不改已提交计数或状态。
+ * @note 工作副本推进全部8192帧；先补旧候选完整分类窗，最后复制本块末2400点到未提交NOLOAD槽。
+ *       未提交槽也用于跨块分类拼接；不修改已提交PCM/队列，不保存DMA指针。
  */
 bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
 {
@@ -209,6 +239,13 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
         block->first_frame!=current.last_frame+1U);
     if(boundary)(void)SoundDetector_Reset(&working);
     const uint32_t begin_ms=BSP_Console_GetTickMs();
+    memcpy(queue_working,queue,sizeof queue);
+    if(!boundary){
+        for(uint8_t i=0U;i<count;++i){
+            QueuedCandidate *item=&queue_working[(head+i)%SOUND_DETECTOR_QUEUE_CAPACITY];
+            if(!item->class_ready)item->class_ready=ClassifyCandidate(block,&item->event);
+        }
+    }
     int16_t batch[SOUND_DETECTOR_BATCH_MAX_FRAMES];
     uint32_t offset=0U;
     while(offset<block->frame_count)
@@ -230,12 +267,17 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
                 const uint8_t slot=staged_count;
                 staged[slot]=event;
                 EstimateToa(block,&event,slot,diagnostics.channel);
-                ClassifyCandidate(block,&event,slot);
+                staged_class_ready[slot]=ClassifyCandidate(block,&staged[slot]);
                 ++staged_count;
             }
         }
         else if(result!=SOUND_DETECTOR_NONE){RecordStageTime(begin_ms);return false;}
     }
+    const uint32_t tail_offset=block->frame_count-CLASSIFY_FRAMES;
+    for(uint16_t i=0U;i<CLASSIFY_FRAMES;++i)
+        sound_class_pcm[1U-class_committed_slot][i]=
+            block->samples[2U*(size_t)(tail_offset+i)+diagnostics.channel];
+    staged_class_first_frame=block->first_frame+tail_offset;staged_class_session=block->session;
     RecordStageTime(begin_ms);
     stage_valid=true;return true;
 }
@@ -255,6 +297,9 @@ bool SoundDetectorService_Complete(bool accepted)
         SoundEventTime_Invalidate(SOUND_TIME_STREAM);
 #endif
     }
+    else memcpy(queue,queue_working,sizeof queue);
+    class_committed_slot=(uint8_t)(1U-class_committed_slot);
+    class_first_frame=staged_class_first_frame;class_session=staged_class_session;class_history_valid=true;
     current=working;Add(&diagnostics.valid_blocks,1U);
     uint32_t sequence=diagnostics.candidates;
     Add(&diagnostics.candidates,staged_total);Add(&diagnostics.dropped,staged_total-staged_count);
@@ -265,7 +310,7 @@ bool SoundDetectorService_Complete(bool accepted)
         const uint8_t tail=(uint8_t)((head+count)%SOUND_DETECTOR_QUEUE_CAPACITY);
         queue[tail]=(QueuedCandidate){staged[i],staged_ms,sequence,
             staged_toa_anchor[i],staged_toa[i],staged_toa_ok[i],
-            staged_toa_position[i]};++count;
+            staged_toa_position[i],staged_class_ready[i]};++count;
     }
     active=stage_valid=false;staged_count=0U;staged_total=0U;return true;
 }
@@ -303,7 +348,7 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
         head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;Add(&diagnostics.dropped,1U);
     }
     char line[256];
-    if(count!=0U && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
+    if(count!=0U && queue[head].class_ready && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
     {
         const QueuedCandidate item=queue[head];head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;
         last_event_ms=now_ms;char first[21],confirmed[21],toa_us[21]="NA";

@@ -1,6 +1,6 @@
 # M4.3 双板事件链阻断修复
 
-<!-- doc-status: implementation-in-progress; reviewed: 2026-10-27 -->
+<!-- doc-status: implementation-complete-software-tests-pass; reviewed: 2026-10-27 -->
 
 **范围：** 用户确认本轮仅修复三个已复现阻断。基线 `26c511e`；原有
 `Drivers/BSP/Components/lan8742/LICENSE.txt` 删除保留，不混入提交。
@@ -26,19 +26,19 @@
 
 ## 2. 完整分类窗跨块交接
 
-- [ ] 新增真实检测服务测试，先复现同一50ms chirp在块尾误判。
-- [ ] 在 `App/Detector/sound_detector_service.c/.h` 使用固定2400帧已验证历史和
+- [x] 新增真实检测服务测试，先复现同一50ms chirp在块尾误判。
+- [x] 在 `App/Detector/sound_detector_service.c/.h` 使用固定2400帧已验证历史和
   Stage工作区，仅完整2400帧才调用原分类器；不足时有界等待后继块。
-- [ ] `cmake/linker/stm32f746_audio.ld` 增加CPU独占NOLOAD `.SoundClassSection`：
+- [x] `cmake/linker/stm32f746_audio.ld` 增加CPU独占NOLOAD `.SoundClassSection`：
   两个2400帧PCM16缓冲共9600字节，从 `0x20024400` 起保留10KiB，堆移至实际段末；
   不放入接近上限的DTCM，不与DMA共享，不添加缓存维护调用。
-- [ ] `Tools/Monitor/check_audio_layout.py` 及 `tests/test_audio_layout.py` 验证新段、
+- [x] `Tools/Monitor/check_audio_layout.py` 及 `tests/test_audio_layout.py` 验证新段、
   对象/边界符号、堆起点及与已有音频/捕获/静态区的隔离；保留原有布局检查。
-- [ ] 元数据、PCM尾部和分类结果均在真实 End 成功后提交；拒绝/断流/换会话清旧历史。
-- [ ] 未就绪队首不越序；等待也受原1秒候选年龄限制，超龄明确计入丢弃。
-- [ ] 不改变分类阈值、TOA估算算法和现有TOA完整窗/MISSING语义，不补零、不拼接不连续PCM。
-- [ ] 覆盖单块/跨块相位、跨块确认、双声道、End拒绝、gap/session/超龄以及队列边界。
-- [ ] 适配旧测试的候选等待时序，保留其所有权/TOA边界断言；运行检测/音频/事件时间回归，
+- [x] 元数据、PCM尾部和分类结果均在真实 End 成功后提交；拒绝/断流/换会话清旧历史。
+- [x] 未就绪队首不越序；等待也受原1秒候选年龄限制，超龄明确计入丢弃。
+- [x] 不改变分类阈值、TOA估算算法和现有TOA完整窗/MISSING语义，不补零、不拼接不连续PCM。
+- [x] 覆盖单块/跨块相位、跨块确认、双声道、End拒绝、gap/session/超龄以及队列边界。
+- [x] 适配旧测试的候选等待时序，保留其所有权/TOA边界断言；运行检测/音频/事件时间回归，
   Debug/Release及布局检查，独立审查后提交。
 
 ## 3. 应用回归接口

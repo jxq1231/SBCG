@@ -152,6 +152,9 @@ bool ResultExchange_ShouldSend(const ResultExchangeState *s,uint32_t now,uint32_
 /** @brief App测试桩：记录发送。 */
 void ResultExchange_MarkSent(ResultExchangeState *s,uint32_t now,uint32_t id)
 {(void)s;(void)now;(void)id;}
+
+/** @brief App测试桩：设置/撤销当前声音事件域。 */
+void UDPSoundEvent_SetTimeDomain(uint32_t id){(void)id;}
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);

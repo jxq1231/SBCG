@@ -1,4 +1,4 @@
-"""Validate the linked DMA buffer, startup clearing and newlib heap; host only."""
+"""Validate DMA/CPU audio reservations, startup clearing and heap; host only."""
 import argparse
 from pathlib import Path
 import re
@@ -26,13 +26,35 @@ def audio_layout_checks(symbols, sections):
               symbols["_sbss"][0] <= symbols["_ebss"][0],
               "startup data copying and BSS clearing stay below audio")
         heap = symbols["_end"][0]
-        check(heap >= finish and symbols["end"][0] == heap and
+        class_kind, class_start, _, class_size, class_flags = sections[".SoundClassSection"]
+        class_finish = class_start + class_size
+        check(class_kind == "NOBITS" and "A" in class_flags and "W" in class_flags,
+              "classification PCM is CPU-owned writable NOLOAD storage")
+        check(class_start == 0x20024400 and class_start % 32 == 0 and class_size == 9600 and
+              class_finish <= 0x20026C00,
+              "two 2400-frame classification buffers fit the separate 10 KiB reservation")
+        check(symbols["sound_class_pcm"] == (class_start, class_size),
+              "classification PCM object fills its section")
+        check(symbols["__sound_class_start__"][0] == class_start and
+              symbols["__sound_class_end__"][0] == class_finish,
+              "classification reservation symbols match its section")
+        capture_kind, capture_start, _, capture_size, capture_flags = sections[".ChirpCaptureSection"]
+        check(capture_kind == "NOBITS" and "A" in capture_flags and "W" in capture_flags and
+              capture_start == 0x20020000 and capture_size == 17088 and
+              symbols["__chirp_capture_start__"][0] == capture_start and
+              symbols["__chirp_capture_end__"][0] == capture_start + capture_size and
+              capture_start + capture_size <= class_start,
+              "existing chirp capture remains separate from classification PCM")
+        check(heap >= class_finish and symbols["end"][0] == heap and
               heap + symbols["_Min_Heap_Size"][0] <= symbols["_sstack"][0],
-              "newlib heap starts after audio and fits below MSP")
+              "newlib heap starts after all audio reservations and fits below MSP")
         check(symbols["_estack"][0] == 0x20048000 and
               symbols["_estack"][0] - symbols["_sstack"][0] >= 4096,
               "at least 4 KiB stack remains below fixed network memory")
         for name, (_, address, _, length, attrs) in sections.items():
+            if name != ".SoundClassSection" and "A" in attrs and length:
+                check(address + length <= class_start or address >= class_finish,
+                      f"{name} does not overlap classification PCM")
             if name != ".AudioDmaSection" and "A" in attrs and length:
                 check(address + length <= start or address >= finish,
                       f"{name} does not overlap audio DMA")

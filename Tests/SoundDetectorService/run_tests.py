@@ -16,9 +16,11 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase', choices=('RED', 'GREEN'), default='GREEN')
+    parser.add_argument('--classification-only', action='store_true',
+                        help='Only run the complete-window classification regression')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
-    out = root / 'Logs/Detector/TOA_Boundary_Fix' / f'{args.phase}_{time.time_ns()}'
+    out = root / 'Logs/Detector/Event_Blockers_20261027/classification' / f'{args.phase}_{time.time_ns()}'
     out.mkdir(parents=True)
     print(f'Evidence: {out}', flush=True)
     compiler = shutil.which('gcc')
@@ -34,6 +36,33 @@ def main():
                  'long-decimal', 'invalid-numbers')
     result = 0
     for option in ('-O0', '-O2'):
+        class_exe = out / f'classification_{option[1:]}.exe'
+        class_command = [compiler, '-std=c11', option, '-Wall', '-Wextra', '-Werror',
+            '-pedantic', '-DSBCG_USE_SOUND_TIME=1', '-I', str(root / 'App'),
+            str(root / 'Tests/SoundDetectorService/test_classification_boundaries.c'),
+            str(source), str(detector), str(classifier),
+            '-Wl,--wrap=EventClassifier_Classify',
+            '-Wl,--wrap=EventClassifier_ClassifyStrided', '-lm', '-o', str(class_exe)]
+        built_class = subprocess.run(class_command, capture_output=True, text=True, timeout=30)
+        class_build_log = ('COMMAND: ' + subprocess.list2cmdline(class_command) + '\n' +
+            built_class.stdout + built_class.stderr + f'\nexit={built_class.returncode}\n')
+        (out / f'classification_{option[1:]}_build.log').write_text(class_build_log, encoding='utf-8')
+        if built_class.returncode:
+            print(class_build_log, flush=True)
+            result = result or built_class.returncode
+        else:
+            for class_scenario in ('boundaries', 'sweep'):
+                class_run_command = [str(class_exe), class_scenario]
+                ran_class = subprocess.run(class_run_command, capture_output=True, text=True, timeout=240)
+                class_run_log = ('COMMAND: ' + subprocess.list2cmdline(class_run_command) + '\n' +
+                    ran_class.stdout + ran_class.stderr + f'\nexit={ran_class.returncode}\n')
+                (out / f'classification_{option[1:]}_{class_scenario}.log').write_text(
+                    class_run_log, encoding='utf-8')
+                print(f'classification {option} {class_scenario}: exit={ran_class.returncode}\n' +
+                    ran_class.stdout + ran_class.stderr, flush=True)
+                result = result or ran_class.returncode
+        if args.classification_only:
+            continue
         for label, filename, real_toa, instrument in (
                 ('toa-boundaries', 'test_toa_boundaries.c', False, False),
                 ('service', 'test_service.c', True, False),

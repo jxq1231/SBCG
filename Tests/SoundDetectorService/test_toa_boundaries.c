@@ -4,7 +4,7 @@
  * @details     真实能量检测器生成候选；估算器替身只记录调用及完整窗内容，确定性检出
  *              块尾不足或跨块缺左沿时的错误调用，同时验证候选保留、End拒绝及后续恢复；
  *              完整窗另覆盖名义微秒越界/非有限数拒绝及长十进制日志不损坏帧号。
- * @note        纯主机测试，不链接真实估算器；本服务当前不重组跨块PCM，不补零伪造前沿。
+ * @note        纯主机测试，不链接真实估算器；分类允许CPU尾部拼窗，TOA仍不跨块重组或补零。
  */
 #include "Detector/sound_detector_service.h"
 #include "Detector/toa_estimator.h"
@@ -128,6 +128,15 @@ static void Deliver(uint64_t first_frame,uint32_t completed_ms,bool accepted)
     borrowed=false;CHECK(SoundDetectorService_Complete(accepted)==accepted);
 }
 
+/** @brief 用连续静默后继块补全分类，first为后继首帧；仅分类解锁，禁止重算原TOA，无返回值。 */
+static void ContinueClassification(uint64_t first)
+{
+    SoundDetectorService_Process(100U,&health);CHECK(candidate_logs==0U);
+    const unsigned calls=estimator_calls;
+    memset(pcm,0,sizeof pcm);Deliver(first,170U,true);
+    CHECK(estimator_calls==calls);
+}
+
 /**
  * @brief 输出调用次数和候选，便于RED/GREEN证据确认失败确由估算器错误调用导致。
  * @param label 当前测试情形的非NULL短名。
@@ -145,6 +154,7 @@ static void Trace(const char *label)
 static void TestPartialTail(void)
 {
     Setup(0U);Tone(8064U,8192U);Deliver(0U,0U,true);
+    ContinueClassification(8192U);
     SoundDetectorService_Process(250U,&health);Trace("partial-tail");
     CHECK(estimator_calls==0U);
     CHECK(Snap().candidates==1U && Snap().toa_ok==0U && Snap().toa_miss==1U);
@@ -158,6 +168,7 @@ static void TestCompleteBoundary(void)
 {
     for(unsigned channel=0U;channel<2U;++channel){
         Setup(channel);Tone(8000U,8192U);ExpectWindow(7936U);Deliver(0U,0U,true);
+        ContinueClassification(8192U);
         SoundDetectorService_Process(250U,&health);Trace("complete-boundary");
         CHECK(estimator_calls==1U && Snap().toa_ok==1U && Snap().toa_miss==0U);
         CHECK(Snap().candidates==1U && candidate_logs==1U);
@@ -200,11 +211,12 @@ static void TestRejectedAndRecovery(void)
 static void TestMissingAndRecovery(void)
 {
     Setup(0U);Tone(8064U,8192U);Deliver(0U,0U,true);
+    ContinueClassification(8192U);
     SoundDetectorService_Process(250U,&health);
     CHECK(strstr(last_candidate,",TOA_US=NA\r\n")!=NULL);
     /* 已提交候选保留原冷却规则；三个连续静默块跨过24000帧后才允许再次布防。 */
     memset(pcm,0,sizeof pcm);
-    Deliver(8192U,300U,true);Deliver(16384U,470U,true);Deliver(24576U,640U,true);
+    Deliver(16384U,470U,true);Deliver(24576U,640U,true);
     CHECK(Snap().armed && estimator_calls==0U);
     memset(pcm,0,sizeof pcm);Tone(1024U,1280U);ExpectWindow(960U);
     Deliver(32768U,810U,true);SoundDetectorService_Process(1060U,&health);Trace("missing-recovery");
@@ -233,6 +245,7 @@ static void TestLongDecimal(void)
 {
     Setup(0U);Tone(8000U,8192U);ExpectWindow(7936U);
     Deliver(UINT64_C(480000000000000),0U,true);
+    ContinueClassification(UINT64_C(480000000008192));
     SoundDetectorService_Process(250U,&health);Trace("long-decimal");
     CHECK(estimator_calls==1U && Snap().toa_ok==1U && Snap().toa_miss==0U);
     CHECK(Snap().candidates==1U && candidate_logs==1U);
@@ -253,7 +266,8 @@ static void TestInvalidNumbers(void)
         "positive-inf-toa","negative-inf-toa","too-large-toa"};
     for(unsigned i=0U;i<sizeof fractions/sizeof fractions[0];++i){
         Setup(0U);estimator_fraction=fractions[i];Tone(8000U,8192U);ExpectWindow(7936U);
-        Deliver(0U,0U,true);SoundDetectorService_Process(250U,&health);Trace(labels[i]);
+        Deliver(0U,0U,true);ContinueClassification(8192U);
+        SoundDetectorService_Process(250U,&health);Trace(labels[i]);
         CHECK(estimator_calls==1U && Snap().toa_ok==1U && Snap().toa_miss==0U);
         CHECK(Snap().candidates==1U && candidate_logs==1U);
         CHECK(strstr(last_candidate,",TOA_US=NA\r\n")!=NULL);

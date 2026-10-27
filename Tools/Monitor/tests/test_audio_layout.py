@@ -14,10 +14,17 @@ class AudioLayoutTests(unittest.TestCase):
                         "__audio_dma_start__": (0x20010000, 0),
                         "__audio_dma_end__": (0x20020000, 0),
                         "_edata": (0x20000100, 0), "_sbss": (0x20000100, 0),
-                        "_ebss": (0x20005000, 0), "_end": (0x20020000, 0),
-                        "end": (0x20020000, 0), "_Min_Heap_Size": (512, 0),
+                        "_ebss": (0x20005000, 0), "_end": (0x20026980, 0),
+                        "end": (0x20026980, 0), "_Min_Heap_Size": (512, 0),
+                        "__chirp_capture_start__": (0x20020000, 0),
+                        "__chirp_capture_end__": (0x200242C0, 0),
+                        "sound_class_pcm": (0x20024400, 9600),
+                        "__sound_class_start__": (0x20024400, 0),
+                        "__sound_class_end__": (0x20026980, 0),
                         "_sstack": (0x20047000, 0), "_estack": (0x20048000, 0)}
         self.sections = {".AudioDmaSection": ("NOBITS", 0x20010000, 0, 65536, "WA"),
+                         ".ChirpCaptureSection": ("NOBITS", 0x20020000, 0, 17088, "WA"),
+                         ".SoundClassSection": ("NOBITS", 0x20024400, 0, 9600, "WA"),
                          ".bss": ("NOBITS", 0x20000100, 0, 0x4F00, "WA"),
                          ".data": ("PROGBITS", 0x20000000, 0, 256, "WA")}
 
@@ -54,7 +61,44 @@ class AudioLayoutTests(unittest.TestCase):
         self.assertFalse(self.good())
 
     def test_unexpected_static_storage_cannot_enter_runtime_heap(self):
-        self.sections[".future_static"] = ("NOBITS", 0x20021000, 0, 64, "WA")
+        self.sections[".future_static"] = ("NOBITS", 0x200269A0, 0, 64, "WA")
+        self.assertFalse(self.good())
+
+    def test_missing_classification_section_fails(self):
+        del self.sections[".SoundClassSection"]
+        self.assertFalse(self.good())
+
+    def test_classification_requires_noload_exact_address_size_and_flags(self):
+        for kind, address, size, flags in (("PROGBITS", 0x20024400, 9600, "WA"),
+                ("NOBITS", 0x20024420, 9600, "WA"),
+                ("NOBITS", 0x20024400, 9598, "WA"),
+                ("NOBITS", 0x20024400, 9600, "A")):
+            with self.subTest(kind=kind, address=address, size=size, flags=flags):
+                self.sections[".SoundClassSection"] = (kind, address, 0, size, flags)
+                self.assertFalse(self.good())
+
+    def test_classification_object_and_boundary_symbols_match(self):
+        for symbol, value in (("sound_class_pcm", (0x20024402, 9598)),
+                ("__sound_class_start__", (0x20024420, 0)),
+                ("__sound_class_end__", (0x20026960, 0))):
+            with self.subTest(symbol=symbol):
+                original = self.symbols[symbol]
+                self.symbols[symbol] = value
+                self.assertFalse(self.good())
+                self.symbols[symbol] = original
+
+    def test_heap_must_follow_classification_pcm(self):
+        for address in (0x200242C0, 0x20024400, 0x2002697F):
+            self.symbols["_end"] = self.symbols["end"] = (address, 0)
+            self.assertFalse(self.good())
+
+    def test_other_allocated_section_cannot_overlap_classification_pcm(self):
+        self.sections[".other"] = ("NOBITS", 0x20024420, 0, 64, "WA")
+        self.assertFalse(self.good())
+
+    def test_capture_cannot_overlap_classification_pcm(self):
+        self.sections[".ChirpCaptureSection"] = ("NOBITS", 0x20020000, 0, 0x4420, "WA")
+        self.symbols["__chirp_capture_end__"] = (0x20024420, 0)
         self.assertFalse(self.good())
 
     def test_missing_symbol_and_small_stack_fail(self):
