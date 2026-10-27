@@ -492,6 +492,39 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
         (void)UDPSoundEvent_SendMeasurementAck(now,result->id,result->time_domain);
     }
 }
+#if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
+static uint32_t last_temperature_send_ms;
+/**
+ * @brief A板按1Hz把当前有效温度/版本共享给B板。
+ * @param now_ms 当前HAL毫秒，无符号差支持回绕。
+ * @return 无返回值；只在A角色、温度有效且链路可用时发送，失败下一轮重试。
+ */
+static void ShareTemperature(uint32_t now_ms)
+{
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    if((uint32_t)(now_ms-last_temperature_send_ms)<1000U)return;
+    last_temperature_send_ms=now_ms;
+    TemperatureSnapshot temperature;
+    TemperatureService_GetSnapshot(now_ms,&temperature);
+    if(temperature.valid)(void)UDPSoundEvent_SendTemperature(now_ms,&temperature);
+}
+/**
+ * @brief B板消费A板共享温度，更新本地显示的远程温度缓存。
+ * @param message 本次接收到的非NULL共享温度消息，返回后不保留指针。
+ * @return 无返回值；非法字段由TemperatureService_SetRemote拒绝。
+ */
+static void ApplySharedTemperature(const TemperatureWireMessage *message)
+{
+    if(message==NULL)return;
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_B)return;
+    (void)TemperatureService_SetRemote(BSP_Console_GetTickMs(),
+        message->temperature_milli_c,message->sound_speed_mm_s,
+        message->version,message->source==TEMPERATURE_SOURCE_MANUAL);
+}
+#endif
+
 /**
  * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
  * @param now_ms 当前HAL毫秒，无符号差支持回绕。
@@ -669,6 +702,7 @@ void App_Init(void)
         UDPSoundEvent_SetMeasurementSink(PublishRemoteMeasurement);
         UDPSoundEvent_SetDomainSink(HandleDomainMessage);
         UDPSoundEvent_SetAckSink(HandleMeasurementAck);
+        UDPSoundEvent_SetTemperatureSink(ApplySharedTemperature);
     }
 #endif
 #endif
@@ -757,6 +791,9 @@ void App_Process(void)
 #endif
     TemperatureService_Process(BSP_Console_GetTickMs());
     TemperatureConsole_Process(BSP_Console_GetTickMs());
+#if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
+    ShareTemperature(BSP_Console_GetTickMs());
+#endif
 #ifdef SBCG_USE_BOARD_SYNC
     /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
     TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());

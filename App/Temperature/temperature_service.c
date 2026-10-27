@@ -28,6 +28,10 @@ _Static_assert(sizeof("$TEMP,STATE=HOLD_LAST,VERSION=4294967295,"
     "T_MILLI_C=-20000,RH_MILLI_PCT=95000,C_MM_S=367660,"
     "AGE_MS=4294967295,FRESH=0,LAST=PRIMING\r\n") <= TEMP_LINE_CAPACITY,
     "temperature status exceeds UART line bound");
+_Static_assert(sizeof("$TEMP,STATE=REMOTE,VERSION=4294967295,T_MILLI_C=-20000,"
+    "C_MM_S=367660,AGE_MS=4294967295,FRESH=1,LAST=REMOTE,MODE=AUTO,"
+    "SOURCE=BOARD_A\r\n") <= TEMP_LINE_CAPACITY,
+    "remote temperature status exceeds UART line bound");
 
 /** @brief 前台温度采集及格式诊断的饱和计数；不含UART传输错误。 */
 typedef struct
@@ -49,7 +53,10 @@ typedef struct
     const char *last;
     uint32_t init_ms, last_attempt_ms, low_start_ms, last_log_ms;
     uint32_t valid_ms, version, sound_speed_mm_s;
+    uint32_t remote_ms, remote_version, remote_speed_mm_s;
+    int32_t remote_temperature_milli_c;
     bool enabled, ready, attempted, waiting, primed, have_value, fresh, manual;
+    bool remote_valid, remote_manual;
 } TemperatureService;
 
 static TemperatureService service;
@@ -88,15 +95,53 @@ void TemperatureService_GetSnapshot(uint32_t now_ms, TemperatureSnapshot *out)
     memset(out, 0, sizeof *out);
     out->manual = service.manual;
     out->version = service.version;
-    out->valid = service.enabled && service.have_value
+    const bool local_valid = service.enabled && service.have_value
         && (service.manual || (service.fresh
             && (uint32_t)(now_ms - service.valid_ms) < TEMP_STALE_MS));
+    out->valid = local_valid;
     if (service.have_value)
     {
         out->age_ms = now_ms - service.valid_ms;
         out->temperature_milli_c = service.sample.temperature_milli_c;
         out->sound_speed_mm_s = service.sound_speed_mm_s;
     }
+    if (local_valid) { return; }
+    /* B板本地DHT被UID白名单禁用；只显示A板共享值，不伪造本地样本。 */
+    if (!service.enabled && service.remote_valid &&
+        (uint32_t)(now_ms - service.remote_ms) < TEMP_STALE_MS)
+    {
+        out->manual = service.remote_manual;
+        out->version = service.remote_version;
+        out->valid = true;
+        out->age_ms = now_ms - service.remote_ms;
+        out->temperature_milli_c = service.remote_temperature_milli_c;
+        out->sound_speed_mm_s = service.remote_speed_mm_s;
+    }
+}
+
+bool TemperatureService_SetRemote(uint32_t now_ms, int32_t temperature_milli_c,
+                                  uint32_t sound_speed_mm_s, uint32_t version,
+                                  bool manual)
+{
+    uint32_t expected_speed;
+    if(version==0U ||
+       temperature_milli_c<TEMP_MIN_MILLI_C || temperature_milli_c>TEMP_MAX_MILLI_C ||
+       !SoundSpeed_Calculate(temperature_milli_c,&expected_speed) ||
+       sound_speed_mm_s!=expected_speed)
+    { return false; }
+    /* 缓存仍新鲜时拒绝旧版本；A重启后旧缓存超龄才接受新版本。 */
+    if(service.remote_valid &&
+       (uint32_t)(now_ms-service.remote_ms)<TEMP_STALE_MS &&
+       version<service.remote_version)
+    { return false; }
+    service.remote_valid=true;
+    service.remote_manual=manual;
+    service.remote_temperature_milli_c=temperature_milli_c;
+    service.remote_speed_mm_s=sound_speed_mm_s;
+    service.remote_version=version;
+    service.remote_ms=now_ms;
+    service.last="REMOTE";
+    return true;
 }
 
 /**
@@ -270,6 +315,21 @@ static void log_status(uint32_t now_ms)
     /* One status and one statistics line per elapsed second, without catchup.
      * Call only with the bus released so blocking UART cannot extend low. */
     service.last_log_ms = now_ms;
+    if (!service.enabled && service.remote_valid)
+    {
+        const uint32_t remote_age=now_ms-service.remote_ms;
+        state=remote_age>=TEMP_STALE_MS?"STALE":"REMOTE";
+        length=snprintf(line,sizeof line,
+            "$TEMP,STATE=%s,VERSION=%" PRIu32 ",T_MILLI_C=%" PRId32
+            ",C_MM_S=%" PRIu32 ",AGE_MS=%" PRIu32
+            ",FRESH=%u,LAST=REMOTE,MODE=%s,SOURCE=BOARD_A\r\n",
+            state,service.remote_version,service.remote_temperature_milli_c,
+            service.remote_speed_mm_s,remote_age,
+            (unsigned)(remote_age<TEMP_STALE_MS),
+            service.remote_manual?"MANUAL":"AUTO");
+        emit_line(line,length);
+        return;
+    }
     if (!service.enabled) { state = "DISABLED"; }
     else if (service.manual) { state = "MANUAL"; }
     else if (!service.have_value) { state = "UNREADY"; }

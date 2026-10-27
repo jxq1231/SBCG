@@ -5,6 +5,7 @@
  * @note        仅替换LwIP收发，不替换UDP服务或配对算法，不代表实物网络验收。
  */
 #include "Network/udp_sound_event.h"
+#include "Network/temperature_wire.h"
 #include "Network/sound_event_wire.h"
 #include "lwip/udp.h"
 #include "lwip/netif.h"
@@ -30,6 +31,7 @@ static unsigned pair_count;
 static uint32_t adopted_domain;
 static DomainMessage received_domain;
 static MeasurementAck received_ack;
+static TemperatureWireMessage received_temperature;
 static uint32_t tick_ms;
 
 struct udp_pcb *udp_new(void) { return &fake_pcb; }
@@ -57,6 +59,8 @@ static void DomainSink(const DomainMessage *message)
 { received_domain=*message; }
 static void AckSink(const MeasurementAck *ack)
 { received_ack=*ack; }
+static void TemperatureSink(const TemperatureWireMessage *message)
+{ received_temperature=*message; }
 static uint32_t Tick(void) { return tick_ms; }
 
 static void ReceiveBytes(const uint8_t *wire,uint16_t length)
@@ -100,6 +104,35 @@ static void TestDelayedPeer(const BoardIdentityProfile *profile)
         UDPSoundEvent_Process(tick_ms);
         assert(pair_count==before+1U && paired.valid && paired.delta_ns==1000000U);
     }
+}
+
+/** @brief 验证A发送/B接收共享温度，且温度不依赖声音事件域。 */
+static void TestTemperatureShare(void)
+{
+    BoardIdentityProfile a,b;
+    memset(&a,0,sizeof a);memset(&b,0,sizeof b);
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_Process(100U);
+    UDPSoundEvent_SetTemperatureSink(TemperatureSink);
+    TemperatureSnapshot temperature={0};
+    temperature.valid=true;temperature.temperature_milli_c=23500;
+    temperature.sound_speed_mm_s=345541U;temperature.version=7U;
+    assert(UDPSoundEvent_SendTemperature(100U,&temperature));
+    TemperatureWireMessage decoded;
+    assert(TemperatureWire_Decode(sent,TEMPERATURE_WIRE_BYTES,&decoded));
+    assert(decoded.temperature_milli_c==23500 && decoded.version==7U);
+    uint8_t temp_wire[TEMPERATURE_WIRE_BYTES];
+    TemperatureWireMessage expected={true,TEMPERATURE_SOURCE_AUTO,23500,345541U,7U};
+    assert(TemperatureWire_Encode(&expected,temp_wire,sizeof temp_wire));
+    assert(UDPSoundEvent_Init(200U,&b,Tick,Log));
+    UDPSoundEvent_SetTemperatureSink(TemperatureSink);
+    UDPSoundEvent_Process(200U);
+    ReceiveBytes(temp_wire,TEMPERATURE_WIRE_BYTES);
+    assert(received_temperature.valid && received_temperature.version==7U);
+    assert(received_temperature.temperature_milli_c==23500);
 }
 
 /**
@@ -342,6 +375,7 @@ int main(void)
            received_ack.time_domain==0x12345678U);
     ack_wire[0]='X';
     assert(MeasurementAck_Decode(ack_wire,sizeof ack_wire,&received_ack)==MEASUREMENT_ACK_WIRE_INVALID_MAGIC);
+    TestTemperatureShare();
     TestDelayedPeer(&profile);
     TestExpiryAndWrap(&profile);
     TestDomainBoundary(&profile);

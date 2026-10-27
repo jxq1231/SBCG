@@ -353,6 +353,34 @@ static void manual_selection_and_auto_recovery(void)
     CHECK(value.manual && value.valid);
 }
 
+static void remote_temperature_display(void)
+{
+    uint32_t other[3] = {TEMP_TEST_UID_W0, TEMP_TEST_UID_W1, TEMP_TEST_UID_W2 ^ 1U};
+    TemperatureSnapshot value;
+    reset(0U);
+    TemperatureService_Init(0U, other, log_line);
+    TemperatureService_Process(1000U);
+    contains(status_line, "STATE=DISABLED");
+    CHECK(TemperatureService_SetRemote(1001U, 23500, 345541U, 7U, false));
+    TemperatureService_GetSnapshot(1002U, &value);
+    CHECK(value.valid && !value.manual && value.version == 7U);
+    CHECK(value.temperature_milli_c == 23500 && value.sound_speed_mm_s == 345541U);
+    CHECK(!TemperatureService_SetRemote(1003U, 23500, 345541U, 6U, false));
+    CHECK(!TemperatureService_SetRemote(1004U, 23500, 345540U, 8U, false));
+    CHECK(TemperatureService_SetRemote(1005U, 23500, 345541U, 7U, false));
+    TemperatureService_Process(2000U);
+    contains(status_line, "STATE=REMOTE,VERSION=7,T_MILLI_C=23500");
+    contains(status_line, "C_MM_S=345541,AGE_MS=995,FRESH=1,LAST=REMOTE");
+    contains(status_line, "SOURCE=BOARD_A");
+    TemperatureService_GetSnapshot(16006U, &value);
+    CHECK(!value.valid);
+    CHECK(TemperatureService_SetRemote(17000U, 23500, 345541U, 6U, false));
+    TemperatureService_GetSnapshot(17001U, &value);
+    CHECK(value.valid && value.version == 6U);
+    TemperatureService_Process(18000U);
+    contains(status_line, "STATE=REMOTE,VERSION=6");
+}
+
 int main(void)
 {
     manual_selection_and_auto_recovery();
@@ -363,6 +391,7 @@ int main(void)
     hold_stale_and_two_frame_recovery();
     failure_reasons_and_counters();
     tick_wrap_delayed_loop_and_long_idle();
+    remote_temperature_display();
     reset(0U);
     TemperatureService_Init(0U,allowed_uid,log_line);
     TemperatureService_Process(1000U);

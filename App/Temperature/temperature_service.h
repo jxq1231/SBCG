@@ -81,8 +81,22 @@ bool TemperatureService_UseAuto(void);
  * @param   now_ms 当前HAL毫秒计数；使用无符号差处理常规32位回绕。
  * @param   out 可写快照；NULL直接返回，非NULL先清零；有历史值时可携带valid=false的旧温度。
  * @return  无返回值。
- * @note    仅前台；自动值需fresh且年龄小于15秒，手动值不随年龄失效；调用方先判断valid。
+ * @note    仅前台；A本地值优先；B本地DHT禁用时使用15秒内的A共享值；调用方先判断valid。
  */
 void TemperatureService_GetSnapshot(uint32_t now_ms, TemperatureSnapshot *out);
+
+/**
+ * @brief   B板接收A板共享温度，更新远程温度缓存。
+ * @param now_ms 接收时的HAL毫秒计数，使用无符号差处理回绕。
+ * @param temperature_milli_c 共享毫摄氏度，必须落在配置范围内。
+ * @param sound_speed_mm_s 共享声速，必须大于0且与本地整数公式一致。
+ * @param version A板温度版本，必须非0；旧版本在缓存仍新鲜时拒绝。
+ * @param manual A板来源是否为手动设温。
+ * @return true表示已应用；false表示范围/声速/版本/角色拒绝。
+ * @note 仅B板使用；该接口不使能DHT、不改变A板本地温度，不代替温度版本一致性校验。
+ */
+bool TemperatureService_SetRemote(uint32_t now_ms, int32_t temperature_milli_c,
+                                  uint32_t sound_speed_mm_s, uint32_t version,
+                                  bool manual);
 
 #endif

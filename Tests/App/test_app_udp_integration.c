@@ -85,6 +85,10 @@ void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink s){(void)s;}
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink s){(void)s;}
 void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink s){(void)s;}
 void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink s){(void)s;}
+
+void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink){(void)sink;}
+bool UDPSoundEvent_SendTemperature(uint32_t now,const TemperatureSnapshot *temperature)
+{(void)now;(void)temperature;return true;}
 /** @brief 观察主动DOMAIN发送；now为毫秒、token为域，DHT低态禁止调用，成功返回true。 */
 bool UDPSoundEvent_SendDomainRequest(uint32_t now,uint32_t token)
 {(void)now;(void)token;assert(!temperature_low);++domain_requests;return true;}
@@ -93,6 +97,10 @@ bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
 {(void)now;(void)id;(void)domain;return true;}
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out)
 {(void)now;if(out){*out=(TemperatureSnapshot){0};out->valid=true;out->sound_speed_mm_s=343000U;out->version=1U;}}
+
+bool TemperatureService_SetRemote(uint32_t now,int32_t temperature_milli_c,
+                                  uint32_t sound_speed_mm_s,uint32_t version,bool manual)
+{(void)now;(void)temperature_milli_c;(void)sound_speed_mm_s;(void)version;(void)manual;return true;}
 
 /** @brief 用A身份初始化真实App及原有主机外设桩；无参数、无返回值。 */
 static void InitApp(void)

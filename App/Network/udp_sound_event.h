@@ -11,6 +11,7 @@
 #include "Measure/measurement_result.h"
 #include "Network/domain_wire.h"
 #include "Network/measurement_ack.h"
+#include "Network/temperature_wire.h"
 #include "BSP/board_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,6 +46,12 @@ typedef void (*UDPSoundEvent_MeasurementSink)(const MeasurementResultSnapshot *r
 void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink);
 /** @brief A板向B板发送权威结果；仅A角色/已绑定/有效结果。 */
 bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *result);
+/** @brief B板接收共享温度的消费者；消息仅本次回调有效。 */
+typedef void (*UDPSoundEvent_TemperatureSink)(const TemperatureWireMessage *message);
+/** @brief 安装共享温度消费者；NULL丢弃。 */
+void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink);
+/** @brief A板发送当前有效温度；仅A角色/已绑定/链路可用/字段有效。 */
+bool UDPSoundEvent_SendTemperature(uint32_t now_ms,const TemperatureSnapshot *temperature);
 
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,

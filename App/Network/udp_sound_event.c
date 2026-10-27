@@ -9,6 +9,7 @@
 #include "Detector/sound_event_timing.h"
 #include "sound_event_wire.h"
 #include "measurement_wire.h"
+#include "temperature_wire.h"
 #include "udp_config.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
@@ -27,6 +28,7 @@ static UDPSoundEvent_ResultSink result_sink;
 static UDPSoundEvent_EventSink event_sink;
 static UDPSoundEvent_DomainSink domain_sink;
 static UDPSoundEvent_AckSink ack_sink;
+static UDPSoundEvent_TemperatureSink temperature_sink;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
@@ -34,6 +36,8 @@ static uint32_t last_bind_ms, last_state_ms, last_bind_log_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
 static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
 static uint32_t ack_tx_ok, ack_tx_err, ack_rx_ok, ack_rx_bad;
+static uint32_t temperature_tx_ok, temperature_tx_err;
+static uint32_t temperature_rx_ok, temperature_rx_bad;
 static bool configured;
 static SoundPairConfig pair_config;
 static uint32_t current_time_domain;
@@ -78,6 +82,21 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet==NULL)return;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_SOUND_EVENT_BOARD_PORT)
     {Increment(&foreign);pbuf_free(packet);return;}
+    if(packet->tot_len==TEMPERATURE_WIRE_BYTES)
+    {
+        uint8_t data[TEMPERATURE_WIRE_BYTES];
+        if(pbuf_copy_partial(packet,data,sizeof data,0)!=sizeof data)
+        {Increment(&temperature_rx_bad);pbuf_free(packet);return;}
+        pbuf_free(packet);
+        if(local_profile.role!=BOARD_ROLE_B)
+        {Increment(&temperature_rx_bad);return;}
+        TemperatureWireMessage message;
+        if(!TemperatureWire_Decode(data,sizeof data,&message))
+        {Increment(&temperature_rx_bad);return;}
+        if(temperature_sink!=NULL){temperature_sink(&message);}
+        Increment(&temperature_rx_ok);
+        return;
+    }
     if(packet->tot_len==MEASUREMENT_ACK_BYTES)
     {
         uint8_t ack_data[MEASUREMENT_ACK_BYTES];
@@ -216,6 +235,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     result_tx_ok=result_tx_err=result_rx_ok=result_rx_bad=0U;
     domain_sequence=0U;
     ack_tx_ok=ack_tx_err=ack_rx_ok=ack_rx_bad=0U;
+    temperature_tx_ok=temperature_tx_err=temperature_rx_ok=temperature_rx_bad=0U;
     configured=true;return true;
 }
 /**
@@ -355,6 +375,34 @@ bool UDPSoundEvent_SendMeasurementAck(uint32_t now_ms,uint32_t measurement_id,
     pbuf_free(packet);
     if(err!=ERR_OK){Increment(&ack_tx_err);return false;}
     Increment(&ack_tx_ok);return true;
+}
+/** @brief 安装B板共享温度消费者；NULL丢弃。 */
+void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink)
+{
+    temperature_sink=sink;
+}
+/** @brief A板发送当前有效温度；失败只计入共享温度通道计数，不污染事件计数。 */
+bool UDPSoundEvent_SendTemperature(uint32_t now_ms,const TemperatureSnapshot *temperature)
+{
+    (void)now_ms;
+    if(!configured || service_pcb==NULL || local_profile.role!=BOARD_ROLE_A ||
+       temperature==NULL || !temperature->valid ||
+       !netif_is_link_up(&gnetif))
+    {Increment(&temperature_tx_err);return false;}
+    TemperatureWireMessage message={true,
+        temperature->manual?TEMPERATURE_SOURCE_MANUAL:TEMPERATURE_SOURCE_AUTO,
+        temperature->temperature_milli_c,temperature->sound_speed_mm_s,
+        temperature->version};
+    uint8_t data[TEMPERATURE_WIRE_BYTES];
+    if(!TemperatureWire_Encode(&message,data,sizeof data))
+    {Increment(&temperature_tx_err);return false;}
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&temperature_tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&temperature_tx_err);return false;}
+    Increment(&temperature_tx_ok);return true;
 }
 /** @brief 推进绑定、配对和1Hz状态/结果输出；无返回值。 */
 void UDPSoundEvent_Process(uint32_t now_ms)

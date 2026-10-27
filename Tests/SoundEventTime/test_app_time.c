@@ -53,6 +53,10 @@ void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink){(void)sink;}
 /** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
 
+bool TemperatureService_SetRemote(uint32_t now,int32_t temperature_milli_c,
+                                  uint32_t sound_speed_mm_s,uint32_t version,bool manual)
+{(void)now;(void)temperature_milli_c;(void)sound_speed_mm_s;(void)version;(void)manual;return true;}
+
 /** @brief App测试桩：标准序列初始化不访问硬件。 */
 bool StandardSequence_Init(StandardSequence *s,const StandardSequenceConfig *c){(void)s;(void)c;return true;}
 /** @brief App测试桩：不检测周期序列。 */
@@ -103,6 +107,10 @@ void TimeDomain_Tick(uint32_t now){(void)now;}
 
 /** @brief App测试桩：安装MACK消费者。 */
 void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink){(void)sink;}
+
+void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink){(void)sink;}
+bool UDPSoundEvent_SendTemperature(uint32_t now,const TemperatureSnapshot *temperature)
+{(void)now;(void)temperature;return true;}
 /** @brief App测试桩：B发送MACK。 */
 bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
 {(void)now;(void)id;(void)domain;return true;}

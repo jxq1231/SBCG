@@ -19,6 +19,8 @@ cmd += [str(ROOT/'Tests/Udp/test_udp_sound_event.c'),
         str(ROOT/'App/Network/measurement_wire.c'),
         str(ROOT/'App/Network/domain_wire.c'),
         str(ROOT/'App/Network/measurement_ack.c'),
+        str(ROOT/'App/Network/temperature_wire.c'),
+        str(ROOT/'App/Temperature/sound_speed.c'),
         str(ROOT/'App/Measure/sound_pair.c'),
         '-o',str(out/'test_udp_sound_event.exe')]
 built=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
