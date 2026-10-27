@@ -28,6 +28,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.27 TOA跨块硬件验证（2026-10-27）。** 镜像13184660在手机固定播放时，标准声期间`$SOUND_CAND TOA_US`全部有值，块尾NA消失；稳定配对316/316/318/317/315/318/318/315/317mm，均值316.7mm、样本σ≈1.22mm；温度修正后屏幕约317～320mm，与观察一致。见[M4.3.27记录](Milestones/M4_3_27_TOA_Run08.md)。
+
 **M4.3.26 TOA跨块补窗（2026-10-27）。** 块尾TOA候选改为等待下一连续块，用已提交CPU尾部+当前块拼完整256帧；无后继块1秒过期，不伪造NA。主机测试通过；实物短验中标准声期间`$SOUND_CAND`不再出现`TOA_US=NA`，稳定配对321/320/317/320/319/320/320/323mm，仍有高度/反射异常388mm。见[M4.3.26记录](Milestones/M4_3_26_TOA_Cross_Block.md)。
 
 **M4.3.25 A/B温度共享与B屏显示（2026-10-27）。** 新增20字节TEMP UDP（复用5009 PCB），A按1Hz发布温度/声速/版本；B `TemperatureService_SetRemote`接收并让UI显示A温度，无需第二只DHT11。实物：A/B均T_MILLI_C=23500、C_MM_S=345541，B `$TEMP STATE=REMOTE`、UI `TEMP_VALID=1`。见[M4.3.25记录](Milestones/M4_3_25_Temperature_Share.md)。
