@@ -80,6 +80,25 @@ static void Report(uint32_t now_ms, const BSP_TouchGFXDisplaySnapshot *lcd)
         valid ? state.page.temperature_milli_c : 0, valid ? state.page.sound_speed_mm_s : 0U,
         state.data_generation, max_update_ms);
     if (length > 0 && (size_t)length < sizeof line) { emit_line(line, length); }
+    const bool has_measurement = state.page.measurement_status == 1U;
+    const bool fresh_measurement = state.page.measurement_valid;
+    const char *measurement_state = fresh_measurement ? "VALID" :
+        has_measurement ? "STALE" :
+        state.page.measurement_status == 2U ? "REJECTED" : "NONE";
+    const char *direction = state.page.measurement_direction == 1U ? "A" :
+        state.page.measurement_direction == 2U ? "B" : "UNKNOWN";
+    const uint32_t measurement_age_ms = has_measurement ?
+        (uint32_t)(state.page.captured_ms - state.page.measurement_captured_ms) : 0U;
+    char range_line[256];
+    const int range_length = snprintf(range_line, sizeof range_line,
+        "$UI_RANGE,SCHEMA=1,REV=NA,ID=%" PRIu32 ",STATE=%s,MM=%" PRId32
+        ",DIR=%s,AGE_MS=%" PRIu32 ",HAS_VALUE=%u,FRESH=%u\r\n",
+        state.page.measurement_id, measurement_state,
+        has_measurement ? state.page.distance_mm : 0, direction, measurement_age_ms,
+        has_measurement ? 1U : 0U, fresh_measurement ? 1U : 0U);
+    if (range_length > 0 && (size_t)range_length < sizeof range_line) {
+        emit_line(range_line, range_length);
+    }
 }
 
 /**

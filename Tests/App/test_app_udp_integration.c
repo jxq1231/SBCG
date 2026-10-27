@@ -219,6 +219,22 @@ static void TestDomainDuringDhtLow(void)
     temperature_low=false;
 }
 
+/** @brief 验证首对高质量CHIRP在标准序列确认前可临时显示；无参数、无返回值。 */
+static void TestProvisionalFirstResult(void)
+{
+    InitApp();SetDomain(0x1234U,10U);
+    ProcessApp(100U,1U);
+    ProcessApp(1100U,2U); /* 两次事件尚未形成3次标准序列 */
+    next_pair=(SoundPairResult){0};next_pair.valid=true;next_pair.status=SOUND_PAIR_OK;
+    next_pair.time_domain=0x1234U;next_pair.delta_ns=1000000U;
+    next_pair.direction=SOUND_DIRECTION_A;next_pair.quality=95U;
+    pair_pending=true;ProcessApp(1200U,0U);
+    MeasurementResultSnapshot result;
+    assert(MeasurementResult_Get(1200U,&result));
+    assert(result.direction==SOUND_DIRECTION_A);
+    puts("PASS provisional first result: high-quality first pair displays before 3-event sequence");
+}
+
 /** @brief 运行App结果交换及域同步测试；无参数，成功返回0。 */
 int main(void)
 {
@@ -258,6 +274,7 @@ int main(void)
     assert(result_sends==before);
     TestAppDomainWiring();
     TestDomainDuringDhtLow();
+    TestProvisionalFirstResult();
     puts("PASS app+UDP boundary: send/ACK/restart resend, failure throttle, domain before events/process, wrong/null pair rejected, A/B session reset, timeout, DHT-low revoke/restore");
     return 0;
 }

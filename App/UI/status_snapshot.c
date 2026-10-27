@@ -61,8 +61,11 @@ void UI_StatusSnapshot_Read(uint32_t now_ms, UI_StatusSnapshot *out)
         audio.hal_error==0U && audio.dma_error==0U && audio.dropped_blocks==0U;
     SoundDetectorServiceSnapshot detector; SoundDetectorService_GetSnapshot(&detector);
     if (detector.configured) { out->candidates=detector.candidates; }
-    MeasurementResultSnapshot measurement;
-    if(MeasurementResult_Get(now_ms,&measurement) && measurement.valid){
+    MeasurementResultSnapshot measurement={0};
+    const bool measurement_fresh=MeasurementResult_Get(now_ms,&measurement);
+    out->measurement_captured_ms=measurement.captured_ms;
+    out->measurement_status=(uint8_t)measurement.status;
+    if(measurement_fresh && measurement.valid){
         out->measurement_valid=true;
         out->distance_mm=measurement.distance_mm;
         out->measurement_direction=measurement.direction==SOUND_DIRECTION_A?1U:

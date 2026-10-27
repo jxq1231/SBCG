@@ -82,7 +82,7 @@ typedef struct
     uint32_t pair_timeout_ms;      /**< 未配对事件保留时间。 */
 } SoundPairConfig;
 
-/** @brief 配对/距离输出；invalid结果用于显式报告拒绝原因。 */
+/** @brief 配对/距离输出；invalid结果用于显式报告拒绝原因；A/B会话和源时刻仅被动复制。 */
 typedef struct
 {
     bool valid;
@@ -92,8 +92,12 @@ typedef struct
     SoundDirection direction;
     uint8_t quality;               /**< A/B质量较小值。 */
     uint32_t time_domain;
+    uint32_t a_session;
     uint32_t a_sequence;
+    uint32_t b_session;
     uint32_t b_sequence;
+    uint64_t a_time_ns;
+    uint64_t b_time_ns;
     uint32_t sound_speed_mm_s;
 } SoundPairResult;
 

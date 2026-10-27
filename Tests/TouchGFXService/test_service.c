@@ -55,7 +55,21 @@ uint32_t BSP_Console_GetTickMs(void)
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot*out){*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=7};}
 /** @brief 检查有界机器日志并保存最近一行；@param s 本次有效文本，不保存地址。@param n 字节长度。@return 无返回值。 */
 static char last_log[256];
-static void Log(const char*s,int n){assert(n>0&&n<256&&s[n-2]=='\r'&&s[n-1]=='\n');assert(strstr(s,"BACKEND=TOUCHGFX"));assert(strstr(s,"UPDATE_MS="));memcpy(last_log,s,(size_t)n);last_log[n]=0;++logs;}
+static void Log(const char*s,int n)
+{
+ assert(n>0&&n<256&&s[n-2]=='\r'&&s[n-1]=='\n');
+ if(strstr(s,"$UI_RANGE"))
+ {
+  assert(strstr(s,"SCHEMA=1")&&strstr(s,"ID=")&&strstr(s,"STATE="));
+ }
+ else
+ {
+  assert(strstr(s,"BACKEND=TOUCHGFX"));
+  assert(strstr(s,"UPDATE_MS="));
+  memcpy(last_log,s,(size_t)n);last_log[n]=0;
+ }
+ ++logs;
+}
 /** @brief 执行一次前台。@param n 测试毫秒。@param allow DHT许可。@return 无返回值。 */
 static void Step(uint32_t n,bool allow){tick=n;UI_TouchGFX_Process(n,allow);}
 /** @brief 在真实入口桩内部注入显示错误。@return 无返回值。 */

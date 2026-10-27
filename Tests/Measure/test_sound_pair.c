@@ -23,6 +23,10 @@ int main(void)
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_OK);
     assert(result.valid && result.distance_mm==343U && result.direction==SOUND_DIRECTION_A);
     assert(result.delta_ns==1000000 && result.quality==80U);
+    /* O1被动元数据必须逐字段来自输入，不能改变原有配对决定。 */
+    assert(result.a_session==1U && result.b_session==1U);
+    assert(result.a_sequence==1U && result.b_sequence==1U);
+    assert(result.a_time_ns==1000000000U && result.b_time_ns==1001000000U);
     b.time_ns=999000000U;
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_OK);
     assert(result.direction==SOUND_DIRECTION_B && result.distance_mm==343U);
@@ -31,6 +35,7 @@ int main(void)
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_TYPE && !result.valid);
     b=Event(SOUND_SIDE_B,2U,1001000000U);b.time_domain=8U;
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_DOMAIN);
+    assert(!result.valid && result.b_sequence==2U && result.b_time_ns==1001000000U);
     b=Event(SOUND_SIDE_B,2U,1001000000U);b.quality=49U;
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_QUALITY);
     b=Event(SOUND_SIDE_B,2U,1041000000U);

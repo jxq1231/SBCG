@@ -41,6 +41,52 @@ typedef struct
     int16_t calibration_offset_mm;
 } MeasurementResultSnapshot;
 
+/** @brief 结果观测决策；只用于诊断，不改变发布规则。 */
+typedef enum
+{
+    MEASUREMENT_DECISION_NONE = 0,
+    MEASUREMENT_DECISION_ACCEPT,
+    MEASUREMENT_DECISION_REJECT_INVALID,
+    MEASUREMENT_DECISION_REJECT_TEMPERATURE,
+    MEASUREMENT_DECISION_REJECT_RANGE,
+    MEASUREMENT_DECISION_REJECT_OUTLIER,
+    MEASUREMENT_DECISION_INVALIDATE,
+    MEASUREMENT_DECISION_REMOTE_ACCEPT
+} MeasurementDecision;
+
+/**
+ * @brief 最近一次测量决策的只读诊断副本。
+ * @details schema=1：raw/pair/温补/标定/稳定器成员分别记录；不能把这些字段当成独立硬件精度。
+ * @note 由MeasurementResult_PublishPair/Invalidate/PublishRemote更新，前台可随时复制。
+ */
+typedef struct
+{
+    uint8_t schema;
+    uint32_t sequence;
+    MeasurementDecision decision;
+    MeasurementStatus status;
+    uint32_t now_ms;
+    uint32_t measurement_id;
+    uint32_t pair_time_domain;
+    uint32_t a_session;
+    uint32_t a_sequence;
+    uint32_t b_session;
+    uint32_t b_sequence;
+    uint64_t a_time_ns;
+    uint64_t b_time_ns;
+    uint64_t source_common_ns;
+    int64_t raw_delta_ns;
+    uint32_t pair_distance_mm;
+    uint32_t temperature_distance_mm;
+    int32_t corrected_mm;
+    int32_t published_mm;
+    uint8_t stable_count;
+    int32_t stable_mm[5];
+    uint32_t quality;
+    uint32_t temperature_version;
+    uint32_t sound_speed_mm_s;
+} MeasurementDiagnosticsSnapshot;
+
 /** @brief 复位结果和ID；now_ms仅作时间基准，不读硬件。 */
 void MeasurementResult_Init(uint32_t now_ms);
 
@@ -71,5 +117,8 @@ void MeasurementResult_Invalidate(uint32_t now_ms);
 
 /** @brief 复制结果；超龄时valid=false但status可保留REJECTED/VALID供诊断。 */
 bool MeasurementResult_Get(uint32_t now_ms, MeasurementResultSnapshot *out);
+
+/** @brief 复制最近一次测量决策诊断；NULL不操作，返回值表示有可用副本。 */
+bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out);
 
 #endif

@@ -41,6 +41,19 @@ SoundPairStatus SoundPair_Compute(const SoundPairConfig *config,
 {
     if (result == NULL) { return SOUND_PAIR_BAD_ARGUMENT; }
     ClearResult(result);
+    /* 诊断元数据按输入复制；即使后续拒绝也保留，不能改变原决定。 */
+    if (a != NULL)
+    {
+        result->a_session = a->session;
+        result->a_sequence = a->sequence;
+        result->a_time_ns = a->time_ns;
+    }
+    if (b != NULL)
+    {
+        result->b_session = b->session;
+        result->b_sequence = b->sequence;
+        result->b_time_ns = b->time_ns;
+    }
     if (!ConfigValid(config) || a == NULL || b == NULL)
     { result->status = SOUND_PAIR_BAD_ARGUMENT; return result->status; }
     if (!a->valid || !b->valid || a->type == SOUND_EVENT_INVALID ||

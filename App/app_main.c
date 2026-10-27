@@ -440,9 +440,109 @@ static void ServiceDomain(uint32_t now_ms)
     }
 }
 /**
+ * @brief 将64位有符号数格式化为十进制文本，避免不同C库的printf长度修饰差异。
+ * @param value 待格式化值。
+ * @param out 至少24字节调用方缓冲，函数写入NUL结尾文本。
+ * @return 无返回值；不保留指针。
+ */
+static void FormatSigned64(int64_t value,char *out)
+{
+    if(out==NULL)return;
+    uint64_t magnitude=value<0?(uint64_t)(-(value+1))+1U:(uint64_t)value;
+    char digits[21];uint8_t count=0U;
+    do{digits[count++]=(char)('0'+(magnitude%10U));magnitude/=10U;}while(magnitude!=0U&&count<sizeof digits);
+    uint8_t pos=0U;if(value<0)out[pos++]='-';
+    while(count!=0U)out[pos++]=digits[--count];
+    out[pos]='\0';
+}
+
+/**
+ * @brief 将64位无符号数格式化为十进制文本，避免不同C库的printf长度修饰差异。
+ * @param value 待格式化值。
+ * @param out 至少24字节调用方缓冲，函数写入NUL结尾文本。
+ * @return 无返回值；不保留指针。
+ */
+static void FormatUnsigned64(uint64_t value,char *out)
+{
+    if(out==NULL)return;
+    char digits[21];uint8_t count=0U;
+    do{digits[count++]=(char)('0'+(value%10U));value/=10U;}while(value!=0U&&count<sizeof digits);
+    uint8_t pos=0U;
+    while(count!=0U)out[pos++]=digits[--count];
+    out[pos]='\0';
+}
+
+/** @brief 将观测决策枚举转成稳定短标签；未知值返回UNKNOWN。 */
+static const char *RangeDecisionName(MeasurementDecision decision)
+{
+    switch(decision)
+    {
+    case MEASUREMENT_DECISION_ACCEPT:return "ACCEPT";
+    case MEASUREMENT_DECISION_REJECT_INVALID:return "INVALID";
+    case MEASUREMENT_DECISION_REJECT_TEMPERATURE:return "TEMP";
+    case MEASUREMENT_DECISION_REJECT_RANGE:return "RANGE";
+    case MEASUREMENT_DECISION_REJECT_OUTLIER:return "OUTLIER";
+    case MEASUREMENT_DECISION_INVALIDATE:return "INVALIDATE";
+    case MEASUREMENT_DECISION_REMOTE_ACCEPT:return "REMOTE";
+    default:return "NONE";
+    }
+}
+
+/**
+ * @brief 输出一次配对决策的被动观测；不改变测量、门控或网络状态。
+ * @param pair 可NULL只读配对结果；非NULL时记录原始元数据。
+ * @param temperature 可NULL温度快照，仅用于温补距离诊断。
+ * @param reason 调用点短原因，不能为空。
+ * @param formal 是否已形成标准序列正式路径。
+ * @param provisional 是否为临时首显路径。
+ * @return 无返回值；长行按同一SEQ拆成DECISION/DISTANCE两条。
+ */
+static void LogRangeDecision(const SoundPairResult *pair,const TemperatureSnapshot *temperature,
+                             const char *reason,bool formal,bool provisional)
+{
+    if(pair==NULL)return;
+    MeasurementDiagnosticsSnapshot diag;
+    (void)MeasurementResult_GetDiagnostics(&diag);
+    uint32_t temperature_mm=0U;
+    int32_t corrected_mm=0;
+    if(temperature!=NULL && temperature->valid && temperature->sound_speed_mm_s!=0U)
+    {
+        const uint64_t magnitude=pair->delta_ns<0?
+            (uint64_t)(-(pair->delta_ns+1))+1U:(uint64_t)pair->delta_ns;
+        temperature_mm=(uint32_t)((magnitude*temperature->sound_speed_mm_s+
+            UINT64_C(500000000))/UINT64_C(1000000000));
+        corrected_mm=(int32_t)temperature_mm+diag.corrected_mm-(int32_t)diag.temperature_distance_mm;
+    }
+    char raw_ns[24];
+    FormatSigned64(pair->delta_ns,raw_ns);
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length=snprintf(line,sizeof line,
+        "$RANGE_DECISION,SCHEMA=1,SEQ=%" PRIu32 ",DOMAIN=%" PRIu32
+        ",A_SESS=%" PRIu32 ",A_SEQ=%" PRIu32 ",B_SESS=%" PRIu32 ",B_SEQ=%" PRIu32
+        ",RAW_NS=%s,DEC=%s,REASON=%s,ID=%" PRIu32 ",FORMAL=%u,PROV=%u\r\n",
+        diag.sequence,pair->time_domain,pair->a_session,pair->a_sequence,
+        pair->b_session,pair->b_sequence,raw_ns,
+        RangeDecisionName(diag.decision),reason,diag.measurement_id,
+        formal?1U:0U,provisional?1U:0U);
+    if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
+    char detail[APP_LOG_LINE_CAPACITY];
+    const int detail_length=snprintf(detail,sizeof detail,
+        "$RANGE_DISTANCE,SCHEMA=1,SEQ=%" PRIu32 ",PAIR_MM=%" PRIu32
+        ",TEMP_MM=%" PRIu32 ",CORR_MM=%" PRId32 ",PUB_MM=%" PRId32
+        ",STBL_CNT=%u,STBL0=%" PRId32 ",STBL1=%" PRId32 ",STBL2=%" PRId32
+        ",STBL3=%" PRId32 ",STBL4=%" PRId32 ",QUAL=%u,SPEED=%" PRIu32 "\r\n",
+        diag.sequence,pair->distance_mm,temperature_mm,corrected_mm,diag.published_mm,
+        (unsigned)diag.stable_count,diag.stable_mm[0],diag.stable_mm[1],diag.stable_mm[2],
+        diag.stable_mm[3],diag.stable_mm[4],(unsigned)pair->quality,
+        temperature!=NULL?temperature->sound_speed_mm_s:0U);
+    if(detail_length>0 && (size_t)detail_length<sizeof detail)SendLine(detail,detail_length);
+}
+
+/**
  * @brief 仅将当前有效共同域的配对结果交给权威测量缓存。
  * @param pair 本次调用有效的只读配对结果；NULL或非当前域时撤销测量。
  * @return 无返回值；仍须通过标准序列、测量门控及温度资格，不修改外设。
+ * @note O1只增加被动日志；原发布分支、返回值和调用顺序保持。
  */
 static void PublishMeasurement(const SoundPairResult *pair)
 {
@@ -458,16 +558,33 @@ static void PublishMeasurement(const SoundPairResult *pair)
     MeasurementGateSnapshot gate;
     MeasurementGate_Get(&gate);
     if(pair==NULL || !domain.valid || domain.id==0U || pair->time_domain!=domain.id ||
-       !sequence.detected || sequence.quality<50U ||
-       !MeasurementGate_CanPublish(&gate)){
+       !temperature.valid || temperature.sound_speed_mm_s==0U ||
+       pair->quality<50U){
+        LogRangeDecision(pair,&temperature,"INPUT",false,false);
+        MeasurementResult_Invalidate(now_ms);
+        return;
+    }
+    const bool formal=sequence.detected && sequence.quality>=50U &&
+        MeasurementGate_CanPublish(&gate);
+    /* 官方要求首声2秒内显示：首对高质量CHIRP允许临时结果；标准序列确认后升级。 */
+    const bool provisional=!formal && sequence.quality>=50U &&
+        pair->quality>=90U &&
+        (gate.state==MEASUREMENT_GATE_WAIT ||
+         gate.state==MEASUREMENT_GATE_CAND ||
+         gate.state==MEASUREMENT_GATE_MEASURED);
+    if(!formal && !provisional)
+    {
+        LogRangeDecision(pair,&temperature,"GATE",false,false);
         MeasurementResult_Invalidate(now_ms);
         return;
     }
     CalibrationSnapshot calibration;
     Calibration_Get(&calibration);
     MeasurementResult_SetCalibration(calibration.offset_mm,calibration.version);
-    if(MeasurementResult_PublishPair(pair,&temperature,now_ms))
-    { (void)MeasurementGate_OnMeasurement(now_ms); }
+    const bool published=MeasurementResult_PublishPair(pair,&temperature,now_ms);
+    LogRangeDecision(pair,&temperature,
+        formal?"FORMAL":(provisional?"PROVISIONAL":"PUBLISH"),formal,provisional);
+    if(published && formal) { (void)MeasurementGate_OnMeasurement(now_ms); }
 }
 /**
  * @brief B板接收A板权威结果；共同域不匹配或非B角色时丢弃，不重算距离。
@@ -526,6 +643,35 @@ static void ApplySharedTemperature(const TemperatureWireMessage *message)
 #endif
 
 /**
+ * @brief 1Hz输出A板当前权威结果和本地年龄；只读，不刷新网络或业务年龄。
+ * @param now_ms 当前HAL毫秒，无符号差支持回绕。
+ * @return 无返回值；无结果时保留NONE/REJECTED状态。
+ */
+static void LogRangeResult(uint32_t now_ms)
+{
+    MeasurementResultSnapshot result;
+    const bool fresh=MeasurementResult_Get(now_ms,&result);
+    MeasurementDiagnosticsSnapshot diag;
+    (void)MeasurementResult_GetDiagnostics(&diag);
+    const char *state=fresh?"VALID":
+        (result.status==MEASUREMENT_VALID?"STALE":
+         (result.status==MEASUREMENT_REJECTED?"REJECTED":"NONE"));
+    const char *direction=result.direction==SOUND_DIRECTION_A?"A":
+        (result.direction==SOUND_DIRECTION_B?"B":"UNKNOWN");
+    const uint32_t age_ms=now_ms-result.captured_ms;
+    char source_ns[24];
+    FormatUnsigned64(diag.source_common_ns,source_ns);
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length=snprintf(line,sizeof line,
+        "$RANGE_RESULT,SCHEMA=1,REV=NA,ID=%" PRIu32 ",STATE=%s,MM=%" PRId32
+        ",DIR=%s,SRC_NS=%s,AGE_MS=%" PRIu32 ",HAS_VALUE=%u,FRESH=%u,EVIDENCE=PROXY\r\n",
+        result.id,state,result.status==MEASUREMENT_VALID?result.distance_mm:0,
+        direction,source_ns,age_ms,
+        result.status==MEASUREMENT_VALID?1U:0U,fresh?1U:0U);
+    if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
+}
+
+/**
  * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
  * @param now_ms 当前HAL毫秒，无符号差支持回绕。
  * @return 无返回值；同ID最多每500ms重发，ID变化立即发送。
@@ -534,6 +680,12 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A){return;}
+    static uint32_t last_range_log_ms;
+    if((uint32_t)(now_ms-last_range_log_ms)>=1000U)
+    {
+        last_range_log_ms=now_ms;
+        LogRangeResult(now_ms);
+    }
     MeasurementResultSnapshot result;
     if(!MeasurementResult_Get(now_ms,&result)){return;}
     TimeDomainSnapshot domain;

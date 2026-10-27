@@ -28,6 +28,8 @@ typedef struct {
  uint8_t measurement_direction; /* 0 unknown, 1 A side, 2 B side. */
  uint8_t measurement_quality;   /* 0..100 when measurement_valid. */
  uint32_t measurement_id;
+ uint32_t measurement_captured_ms; /* 最近测量快照的HAL毫秒，仅诊断年龄。 */
+ uint8_t measurement_status;       /* MeasurementStatus整数副本，0 none/1 valid/2 rejected. */
 } UI_StatusSnapshot;
 /** @brief 由调用方拥有的NUL结尾ASCII文本；后续中文字体由TouchGFX视图负责。 */
 typedef struct {

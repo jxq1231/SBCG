@@ -81,6 +81,7 @@ bool UDPSoundEvent_SendResult(uint32_t now,const MeasurementResultSnapshot *resu
 bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,uint32_t now){(void)result;(void)now;return false;}
 /** @brief App测试桩：不读取权威结果。 */
 bool MeasurementResult_Get(uint32_t now,MeasurementResultSnapshot *out){(void)now;(void)out;return false;}
+bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out){(void)out;return false;}
 
 /** @brief App测试桩：设置A域令牌。 */
 void TimeDomain_InitWithId(uint32_t id){(void)id;}

@@ -24,9 +24,16 @@ int main(void)
     assert(MeasurementResult_Get(100U,&out) && out.valid && out.id==1U);
     assert(out.distance_mm==343 && out.direction==SOUND_DIRECTION_A &&
            out.quality==80U && out.sound_speed_mm_s==343000U && out.temperature_version==7U);
+    MeasurementDiagnosticsSnapshot diag;
+    assert(MeasurementResult_GetDiagnostics(&diag));
+    assert(diag.schema==1U && diag.decision==MEASUREMENT_DECISION_ACCEPT &&
+           diag.measurement_id==1U &&
+           diag.raw_delta_ns==1000000 && diag.published_mm==343);
     assert(!MeasurementResult_Get(100U+MEASUREMENT_MAX_AGE_MS,&out) && !out.valid);
     /* No temperature => cannot publish formal distance. */
     assert(!MeasurementResult_PublishPair(&pair,&(TemperatureSnapshot){0},200U));
+    assert(MeasurementResult_GetDiagnostics(&diag) &&
+           diag.decision==MEASUREMENT_DECISION_REJECT_TEMPERATURE);
     assert(!MeasurementResult_Get(200U,&out) && out.status==MEASUREMENT_REJECTED);
     /* Valid temperature but too far/negative/type mismatch is rejected. */
     pair=Pair(true,100000000,80U,SOUND_DIRECTION_A);
@@ -71,6 +78,26 @@ int main(void)
     assert(MeasurementResult_PublishRemote(&remote2,1002U));
     assert(MeasurementResult_Get(1002U,&out) && out.distance_mm==363 &&
            out.calibration_version==5U && out.calibration_offset_mm==20);
-    puts("PASS measurement result: id/age/temp version/direction/speed/range/calibration and remote ID");
+
+    /* 中值稳定器：固定间距下3点起稳定，孤立大离群不覆盖已显示结果。 */
+    MeasurementResult_Init(2000U);
+    temp=Temp(true,343000U,7U);
+    const int64_t delta320=((int64_t)320*1000000000LL+343000/2)/343000;
+    const int64_t delta322=((int64_t)322*1000000000LL+343000/2)/343000;
+    const int64_t delta318=((int64_t)318*1000000000LL+343000/2)/343000;
+    pair=Pair(true,delta320,95U,SOUND_DIRECTION_A);
+    assert(MeasurementResult_PublishPair(&pair,&temp,2100U));
+    pair=Pair(true,delta322,95U,SOUND_DIRECTION_A);
+    assert(MeasurementResult_PublishPair(&pair,&temp,3100U));
+    pair=Pair(true,delta318,95U,SOUND_DIRECTION_A);
+    assert(MeasurementResult_PublishPair(&pair,&temp,4100U));
+    assert(MeasurementResult_Get(4100U,&out) && out.distance_mm==320U);
+    pair=Pair(true,((int64_t)400*1000000000LL+343000/2)/343000,90U,SOUND_DIRECTION_A);
+    assert(!MeasurementResult_PublishPair(&pair,&temp,5100U));
+    assert(MeasurementResult_Get(5100U,&out) && out.distance_mm==320U);
+    pair=Pair(true,delta320,95U,SOUND_DIRECTION_A);
+    assert(MeasurementResult_PublishPair(&pair,&temp,6100U));
+    assert(MeasurementResult_Get(6100U,&out) && out.distance_mm==320U);
+    puts("PASS measurement result: id/age/temp version/direction/speed/range/calibration, remote ID and median/outlier");
     return 0;
 }
