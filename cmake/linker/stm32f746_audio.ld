@@ -10,6 +10,9 @@ MEMORY
   CAPTURE (rw) : ORIGIN = 0x20020000, LENGTH = 17K
   /* CPU-only transactional classification tails, separate from DMA/capture. */
   SOUND_CLASS (rw) : ORIGIN = 0x20024400, LENGTH = 10K
+  /* CPU-only probe data in instruction TCM; NOLOAD and explicitly initialized
+     by the probe. This is not DMA-accessible and is not part of the 320KiB RAM. */
+  ITCM (xrw) : ORIGIN = 0x00000000, LENGTH = 16K
 }
 SECTIONS
 {
@@ -31,6 +34,13 @@ SECTIONS
     KEEP(*(.SoundClassSection))
     __sound_class_end__ = .;
   } >SOUND_CLASS
+  .ItcmProbe (NOLOAD) : ALIGN(32)
+  {
+    __itcm_probe_start__ = .;
+    KEEP(*(.ItcmProbe))
+    . = ALIGN(32);
+    __itcm_probe_end__ = .;
+  } >ITCM
 }
 /* Override the generated PROVIDE values used by sysmem.c's _sbrk. This is
    deliberately outside the generated linker script. */
@@ -56,3 +66,8 @@ ASSERT(__sound_class_end__ <= ORIGIN(SOUND_CLASS) + LENGTH(SOUND_CLASS),
        "Classification PCM exceeds its 10 KiB reservation")
 ASSERT(_end >= __sound_class_end__ && _end + _Min_Heap_Size <= _sstack,
        "Runtime heap must follow classification PCM and remain below reserved stack")
+ASSERT(ADDR(.ItcmProbe) >= 0x00000000 &&
+       ADDR(.ItcmProbe) + SIZEOF(.ItcmProbe) <= 0x00004000,
+       "ITCM probe exceeds the 16 KiB instruction TCM")
+ASSERT((ADDR(.ItcmProbe) % 32) == 0,
+       "ITCM probe must be 32-byte aligned")

@@ -1,4 +1,5 @@
 # User-owned integration. CubeMX still owns SAI/DMA/clock initialization.
+option(SBCG_ITCM_PROBE "Build the one-shot ITCM data-access probe image" OFF)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/SBCG.ioc" _sbcg_audio_mode
     REGEX "^SAI2\\.AudioMode-SAI_A_MasterWithClock=")
 if(_sbcg_audio_mode)
@@ -27,7 +28,10 @@ if(_sbcg_audio_mode)
         COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/BSP/bsp_audio.c App/Audio/audio_capture.c App/Audio/audio_statistics.c
-        App/Audio/audio_frame_index.c)
+        App/Audio/audio_frame_index.c App/BSP/bsp_itcm_probe.c)
+    if(SBCG_ITCM_PROBE)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_ITCM_PROBE=1)
+    endif()
     if(TARGET LwIP)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_SOUND_TIME=1)
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE

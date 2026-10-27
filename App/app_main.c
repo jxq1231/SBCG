@@ -7,6 +7,9 @@
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
 #include "app_main.h"
+#ifdef SBCG_ITCM_PROBE
+#include "BSP/bsp_itcm_probe.h"
+#endif
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
 #include "BSP/bsp_reset.h"
 #endif
@@ -858,6 +861,20 @@ void App_Init(void)
     }
 #endif
 #endif
+#endif
+#ifdef SBCG_ITCM_PROBE
+    {
+        const bool itcm_ok=BSP_ITCM_ProbeRun();
+        BSP_ITCMProbeSnapshot probe;
+        BSP_ITCM_ProbeGetSnapshot(&probe);
+        char itcm_line[APP_LOG_LINE_CAPACITY];
+        const int itcm_length=snprintf(itcm_line,sizeof itcm_line,
+            "$ITCM_PROBE,RESULT=%s,ADDR=%08" PRIX32 ",BYTES=%" PRIu32
+            ",ERRORS=%" PRIu32 ",CRC=%08" PRIX32 "\r\n",
+            itcm_ok?"PASS":"FAIL",probe.address,probe.bytes,probe.errors,probe.crc);
+        if(itcm_length>0 && (size_t)itcm_length<sizeof itcm_line)
+        { SendLine(itcm_line,itcm_length); }
+    }
 #endif
     CodecMonitor_Init(BSP_Console_GetTickMs(), SendLine);
     if (!BSP_Console_RxInit())
