@@ -6,13 +6,13 @@
  * @note 仅串行前台，无PCM/HAL/动态分配；所有输出LOCAL=1/SYNC=0，不代表物理声学精度。
  */
 #include "sound_event_time.h"
+#include "sound_event_timing.h"
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #define ANCHOR_AGE_MS 250U
 #define MODEL_MAX_AGE_MS 1500U
-#define EVENT_WAIT_MS 2500U
 #define STREAM_AGE_MS 1000U
 #define RESULT_PERIOD_MS 250U
 #define STATE_PERIOD_MS 1000U
@@ -177,13 +177,21 @@ void SoundEventTime_Observe(uint32_t now_ms, const AudioTimeAnchorObservation *o
 }
 /**
  * @brief 旧整数模型：查询候选onset+1；返回NULL表示等待右锚，否则为结果/拒绝原因。
+ * @param now_ms 当前单调毫秒，按无符号差检查候选和模型年龄。
+ * @param item 非NULL只读队列项，仅本次调用有效。
+ * @param result 非NULL模型输出；仅返回OK时可使用时间字段。
+ * @param left 非NULL左锚序号输出，仅实际尝试模型时更新。
+ * @param right 非NULL右锚序号输出，仅实际尝试模型时更新。
+ * @param core 非NULL模型状态输出，仅实际尝试模型时更新。
+ * @return NULL表示继续等待；其它返回值为静态状态字符串，不转移所有权。
+ * @note 不消费队列、不访问PCM；候选年龄达到共享等待预算即返回TIMEOUT。
  */
 static const char *ResolveLegacy(uint32_t now_ms, const Pending *item,
                                  AudioTimeMapResult *result, uint32_t *left,
                                  uint32_t *right, AudioTimeMapStatus *core)
 {
     if (item->failure != NULL) { return item->failure; }
-    if ((uint32_t)(now_ms - item->submitted_ms) >= EVENT_WAIT_MS) { return "TIMEOUT"; }
+    if ((uint32_t)(now_ms - item->submitted_ms) >= SOUND_EVENT_MODEL_WAIT_MS) { return "TIMEOUT"; }
     const uint64_t position = item->candidate.onset_frame + 1U;
     if (anchor_count != 0U &&
         (uint32_t)(now_ms - anchors[anchor_count - 1U].captured_ms) > MODEL_MAX_AGE_MS)
@@ -209,6 +217,13 @@ static const char *ResolveLegacy(uint32_t now_ms, const Pending *item,
 }
 /**
  * @brief Q16模型：查询固定窗口TOA；返回NULL表示等待右锚，否则为结果/拒绝原因。
+ * @param now_ms 当前单调毫秒，按无符号差检查候选和模型年龄。
+ * @param item 非NULL只读候选及Q16坐标，仅本次调用有效。
+ * @param result 非NULL模型输出；仅返回OK时可使用时间字段。
+ * @param left 非NULL左锚序号输出，仅实际尝试模型时更新。
+ * @param right 非NULL右锚序号输出，仅实际尝试模型时更新。
+ * @param core 非NULL模型状态输出，仅实际尝试模型时更新。
+ * @return NULL表示继续等待；其它返回值为静态状态字符串，不转移所有权。
  * @note MISSING/INVALID不尝试任何模型，也不回退到FIRST+1。
  */
 static const char *ResolveToa(uint32_t now_ms, const Pending *item,
@@ -216,7 +231,7 @@ static const char *ResolveToa(uint32_t now_ms, const Pending *item,
                               uint32_t *right, AudioTimeMapStatus *core)
 {
     if (item->failure != NULL) { return item->failure; }
-    if ((uint32_t)(now_ms - item->submitted_ms) >= EVENT_WAIT_MS) { return "TIMEOUT"; }
+    if ((uint32_t)(now_ms - item->submitted_ms) >= SOUND_EVENT_MODEL_WAIT_MS) { return "TIMEOUT"; }
     if (item->toa.status == SOUND_TOA_MISSING) { return "TOA_MISSING"; }
     if (item->toa.status != SOUND_TOA_VALID) { return "TOA_INVALID"; }
     if (item->toa.frame == UINT64_MAX) { return "TOA_INVALID"; }

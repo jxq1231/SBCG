@@ -1,10 +1,12 @@
 /**
  * @file        udp_sound_event.c
  * @brief       两板声音事件UDP发布/接收与配对结果输出的前台实现。
- * @details     固定36字节线协议、来源IP/端口与事件侧校验；配对纯核心输出距离/方向。
+ * @details     固定36字节线协议，校验来源、事件侧与有效域；为右锚发布保留3000ms配对预算。
+ *              撤域或换域清除旧候选，配对纯核心输出距离/方向。
  * @note        只证明软件链路；不建立PTP同步、不把接收时刻当声音到达、不宣称物理精度。
  */
 #include "udp_sound_event.h"
+#include "Detector/sound_event_timing.h"
 #include "sound_event_wire.h"
 #include "measurement_wire.h"
 #include "udp_config.h"
@@ -34,6 +36,7 @@ static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
 static uint32_t ack_tx_ok, ack_tx_err, ack_rx_ok, ack_rx_bad;
 static bool configured;
 static SoundPairConfig pair_config;
+static uint32_t current_time_domain;
 
 /** @brief 饱和计数；无返回值。 */
 static void Increment(uint32_t *value){if(*value!=UINT32_MAX)++*value;}
@@ -58,7 +61,16 @@ static bool LocalSide(SoundEventSide *side)
     if(local_profile.role==BOARD_ROLE_B){*side=SOUND_SIDE_B;return true;}
     return false;
 }
-/** @brief 接收回调：校验来源/长度/事件侧后交给纯配对器；pbuf所有路径释放。 */
+/**
+ * @brief 接收回调：验证来源、协议及声音事件当前有效域后交给前台消费者。
+ * @param arg 未使用的LwIP用户参数。
+ * @param pcb 未使用的已绑定PCB指针。
+ * @param packet 本次接收所有权；非NULL时所有路径释放，NULL时直接返回。
+ * @param source 本次调用有效的来源地址，NULL或非对端时丢弃。
+ * @param source_port 来源端口，必须匹配板间固定端口。
+ * @return 无返回值；DOMAIN握手不受声音事件域资格门控。
+ * @note 仅NO_SYS网络轮询上下文，不在硬件IRQ中处理协议。
+ */
 static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
                     const ip_addr_t *source,u16_t source_port)
 {
@@ -128,6 +140,8 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     SoundEventSide local;
     if(!LocalSide(&local) || event.side==local)
     {Increment(&rx_bad);return;}
+    if(current_time_domain==0U || event.time_domain!=current_time_domain)
+    {Increment(&rx_bad);return;}
     const uint32_t now=read_tick!=NULL?read_tick():0U;
     if(!SoundPair_Submit(&pair_manager,&event,now))
     {Increment(&rx_bad);return;}
@@ -147,18 +161,27 @@ static void TryBind(uint32_t now_ms)
     udp_bind_netif(service_pcb,&gnetif);
     udp_recv(service_pcb,Receive,NULL);
 }
-/** @brief 初始化本地身份、配对配置与统计；参数非法返回false。 */
+/**
+ * @brief 初始化身份、3000ms配对等待预算与统计，初始声音事件域无效。
+ * @param now_ms 本地单调毫秒起点，支持无符号回绕。
+ * @param profile 非NULL只读A/B身份，返回前复制，非法角色拒绝。
+ * @param tick 非NULL毫秒读取函数，须在服务期间持续有效。
+ * @param log 非NULL前台日志消费者，须在返回前消费或复制临时字节。
+ * @return true为软件配置成功；false为参数或配对配置非法。
+ * @note 释放已有PCB并复位统计；真正绑定在Process完成，不配置外设。
+ */
 bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
                         uint32_t (*tick)(void),UDPSoundEvent_Log log)
 {
     if(service_pcb!=NULL){udp_remove(service_pcb);service_pcb=NULL;}
     configured=false;
+    current_time_domain=0U;
     if(profile==NULL || tick==NULL || log==NULL ||
        (profile->role!=BOARD_ROLE_A && profile->role!=BOARD_ROLE_B))return false;
     local_profile=*profile;read_tick=tick;emit=log;
     IP_ADDR4(&peer,profile->peer_ip[0],profile->peer_ip[1],
              profile->peer_ip[2],profile->peer_ip[3]);
-    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,250U};
+    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,SOUND_EVENT_PAIR_TIMEOUT_MS};
     if(!SoundPair_Init(&pair_manager,&pair_config))return false;
     last_bind_ms=now_ms-1000U;last_state_ms=now_ms;
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;
@@ -166,6 +189,20 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     domain_sequence=0U;
     ack_tx_ok=ack_tx_err=ack_rx_ok=ack_rx_bad=0U;
     configured=true;return true;
+}
+/**
+ * @brief 复制有效域，并在资格边界撤销旧配对候选及未消费结果。
+ * @param id 上层确认有效的共同域；0撤域，同一有效域重复调用不清队。
+ * @return 无返回值；未初始化时不操作，累计统计原样保留。
+ * @note 仅串行前台，复用既有固定队列，不分配新事件数组。
+ */
+void UDPSoundEvent_SetTimeDomain(uint32_t id)
+{
+    if(!configured || id==current_time_domain)return;
+    const SoundPairSnapshot saved_stats=pair_manager.stats;
+    (void)SoundPair_Init(&pair_manager,&pair_config);
+    pair_manager.stats=saved_stats;
+    current_time_domain=id;
 }
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
 void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)
@@ -238,10 +275,18 @@ bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *r
     if(err!=ERR_OK){Increment(&result_tx_err);return false;}
     Increment(&result_tx_ok);return true;
 }
-/** @brief 发布本板事件；未绑定/编码失败返回false并计数。 */
+/**
+ * @brief 在当前有效域内发布本板事件，并提交一份给本地配对器。
+ * @param now_ms 本地提交时刻，单位毫秒，供配对保留期计算。
+ * @param event 非NULL只读事件，返回前复制，不保留调用方指针。
+ * @return true为UDP发送成功；false为未配置、域不符、队列或收发失败并计数。
+ * @note 域拒绝不进入配对器；网络发送失败时已提交的本地候选仍等待对端。
+ */
 bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
 {
     if(!configured || event==NULL){Increment(&tx_err);return false;}
+    if(current_time_domain==0U || event->time_domain!=current_time_domain)
+    {Increment(&tx_err);return false;}
     /* 本端事件必须同时进入配对器；Receive只接收对端，配对器需要A+B两侧。 */
     if(!SoundPair_Submit(&pair_manager,event,now_ms))
     {Increment(&tx_err);return false;}

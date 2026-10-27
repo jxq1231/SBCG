@@ -1,7 +1,7 @@
 /**
  * @file        udp_sound_event.h
  * @brief       两板声音事件UDP发布、接收与配对结果输出（仅NO_SYS前台）。
- * @details     使用固定36字节事件线协议；本模块不做PTP同步，只校验来源IP/端口、事件侧和配对门控。
+ * @details     使用固定36字节事件线协议，校验来源、事件侧和当前有效域；撤域或换域清旧队列。
  * @note        事件时间必须是本地PTP模型时间；共同时间域由上层同步状态提供，调用方不得伪造。
  */
 #ifndef SBCG_UDP_SOUND_EVENT_H
@@ -49,6 +49,14 @@ bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *r
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,
                         uint32_t (*tick)(void), UDPSoundEvent_Log log);
+
+/**
+ * @brief 同步当前有效共同域；撤域或换域时清除旧候选与未消费配对结果。
+ * @param id 已由上层确认有效的非零共同域，0表示撤销声音事件收发资格。
+ * @return 无返回值；保留累计配对统计，不影响DOMAIN握手或其它消息收发。
+ * @note 仅NO_SYS串行前台调用；同一非零域重复同步保留候选，流边界须先传0。
+ */
+void UDPSoundEvent_SetTimeDomain(uint32_t id);
 
 /** @brief 重试绑定、推进配对并限速输出结果/状态；主循环调用。 */
 void UDPSoundEvent_Process(uint32_t now_ms);

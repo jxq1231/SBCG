@@ -388,13 +388,14 @@ static void HandleDomainMessage(const DomainMessage *message)
 /**
  * @brief A周期发REQ并检查对端超时；B只检查超时（ACK由回调发）。
  * @param now_ms 当前HAL毫秒。
- * @return 无返回值；域无效时事件路径自行拒绝。
+ * @return 无返回值；在事件取出、发送及配对处理前同步UDP有效域。
+ * @note 撤域或换域会清除UDP旧候选；DOMAIN握手仍通过既有独立路径收发。
  */
 static void ServiceDomain(uint32_t now_ms)
 {
     TimeDomain_Tick(now_ms);
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(profile==NULL)return;
+    if(profile==NULL){UDPSoundEvent_SetTimeDomain(0U);return;}
     if(profile->role==BOARD_ROLE_A)
     {
         MeasurementGate_Tick(now_ms);
@@ -402,6 +403,7 @@ static void ServiceDomain(uint32_t now_ms)
     }
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
+    UDPSoundEvent_SetTimeDomain(domain.valid?domain.id:0U);
     static bool last_domain_valid;
     if(profile->role==BOARD_ROLE_A && domain.valid!=last_domain_valid)
     {
@@ -420,7 +422,7 @@ static void ServiceDomain(uint32_t now_ms)
         char line[160];
         const int length=snprintf(line,sizeof line,
             "$DOMAIN,ROLE=%s,VALID=%u,LOCAL=%u,PEER=%u,TOKEN=%" PRIu32
-            ",PEER_AGE_MS=%" PRIu32 "\n",
+            ",PEER_AGE_MS=%" PRIu32 "\r\n",
             profile->role==BOARD_ROLE_A?"A":"B",domain.valid?1U:0U,
             domain.local_valid?1U:0U,domain.peer_seen?1U:0U,
             domain.id,domain.peer_age_ms);
@@ -437,6 +439,11 @@ static void ServiceDomain(uint32_t now_ms)
             last_request_ms=now_ms;
     }
 }
+/**
+ * @brief 仅将当前有效共同域的配对结果交给权威测量缓存。
+ * @param pair 本次调用有效的只读配对结果；NULL或非当前域时撤销测量。
+ * @return 无返回值；仍须通过标准序列、测量门控及温度资格，不修改外设。
+ */
 static void PublishMeasurement(const SoundPairResult *pair)
 {
     const uint32_t now_ms=BSP_Console_GetTickMs();
@@ -450,7 +457,8 @@ static void PublishMeasurement(const SoundPairResult *pair)
     TimeDomain_Get(&domain);
     MeasurementGateSnapshot gate;
     MeasurementGate_Get(&gate);
-    if(!domain.valid || domain.id==0U || !sequence.detected || sequence.quality<50U ||
+    if(pair==NULL || !domain.valid || domain.id==0U || pair->time_domain!=domain.id ||
+       !sequence.detected || sequence.quality<50U ||
        !MeasurementGate_CanPublish(&gate)){
         MeasurementResult_Invalidate(now_ms);
         return;
@@ -692,6 +700,8 @@ void App_Init(void)
  * @return  无返回值（void）。
  * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
  *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
+ *          DHT低态仍逐轮将最新域资格复制给UDP层；此标量同步不主动发送报文或读取音频。
+ *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
  *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
  *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
  */
@@ -768,6 +778,13 @@ void App_Process(void)
     }
 #endif
 #endif
+    #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
+    {
+        TimeDomainSnapshot event_domain;
+        TimeDomain_Get(&event_domain);
+        UDPSoundEvent_SetTimeDomain(event_domain.valid?event_domain.id:0U);
+    }
+    #endif
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #ifdef SBCG_USE_AUDIO
 #ifdef SBCG_USE_CHIRP
@@ -796,17 +813,23 @@ void App_Process(void)
         BSP_Audio_GetSnapshot(&snapshot);
 #ifdef SBCG_USE_BOARD_IDENTITY
         const BoardIdentityProfile *audio_profile=BSP_BoardIdentity_Get();
-        if(audio_profile!=NULL && audio_profile->role==BOARD_ROLE_A &&
-           last_audio_session!=0U && snapshot.session!=last_audio_session)
+        if(last_audio_session!=0U && snapshot.session!=last_audio_session)
         {
-            MeasurementGate_OnStreamInvalid(BSP_Console_GetTickMs());
-            MeasurementResult_Invalidate(BSP_Console_GetTickMs());
+            UDPSoundEvent_SetTimeDomain(0U);
+            if(audio_profile!=NULL && audio_profile->role==BOARD_ROLE_A)
+            {
+                MeasurementGate_OnStreamInvalid(BSP_Console_GetTickMs());
+                MeasurementResult_Invalidate(BSP_Console_GetTickMs());
+            }
         }
         last_audio_session=snapshot.session;
 #endif
         SoundEventTime_Process(BSP_Console_GetTickMs(),&snapshot);
-        /* Diagnostic event publishing: identity/time-domain are supplied by App,
-           but this constant domain is not a PTP sync or formal measurement claim. */
+#ifdef SBCG_USE_BOARD_IDENTITY
+        ServiceDomain(BSP_Console_GetTickMs());
+#endif
+        /* 按本板身份与当前有效共同域发布成功TOA；域资格不代表外部同步精度验收，
+           诊断输出仍保持DIAG/LOCAL=1、SYNC=0的边界。 */
         SoundEventTimeEvent notice;
         while (SoundEventTime_TakeEvent(&notice))
         {
@@ -853,7 +876,6 @@ void App_Process(void)
         }
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_BOARD_IDENTITY
-        ServiceDomain(BSP_Console_GetTickMs());
         ServiceAuthoritativeResult(BSP_Console_GetTickMs());
 #endif
     }

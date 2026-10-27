@@ -38,6 +38,8 @@ bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event){if(event)memset(event,
 bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *p,uint32_t(*tick)(void),UDPSoundEvent_Log log){(void)now;(void)p;(void)tick;(void)log;return true;}
 /** @brief App测试桩：不推进事件UDP。 */
 void UDPSoundEvent_Process(uint32_t now){(void)now;}
+/** @brief App测试桩：接收当前有效域或0撤域；id仅为标量，无返回值。 */
+void UDPSoundEvent_SetTimeDomain(uint32_t id){(void)id;}
 /** @brief App测试桩：不发送事件UDP。 */
 bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
 /** @brief App测试桩：清空权威测量缓存。 */
