@@ -201,6 +201,41 @@ static void TestFaults(void)
     init_status = BSP_PPS_BAD_CONFIG; assert(!PpsService_Init(0U, BOARD_ROLE_A, Log));
     Reset(BOARD_ROLE_A, 0U); assert(PpsService_Deinit()); assert(!snapshot.armed);
 }
+/** @brief 验证FAULT后1秒自动重试、A/B恢复状态及故障码；无参数，无返回值。 */
+static void TestFaultRecovery(void)
+{
+    PpsServiceSnapshot out;
+    Reset(BOARD_ROLE_A, 0U);
+    process_status = BSP_PPS_TARGET_ERROR;
+    PpsService_Process(0U, true);
+    assert(PpsService_GetSnapshot(0U, &out));
+    assert(out.faulted && out.faults == 1U &&
+           out.last_fault_status == (uint32_t)BSP_PPS_TARGET_ERROR);
+    process_status = BSP_PPS_OK;
+    PpsService_Process(999U, true);
+    assert(PpsService_GetSnapshot(999U, &out));
+    assert(out.faulted && out.recoveries == 0U);
+    PpsService_Process(1000U, true);
+    assert(PpsService_GetSnapshot(1000U, &out));
+    assert(!out.faulted && out.recoveries == 1U &&
+           out.state == PPS_SERVICE_QUALIFIED && out.faults == 1U);
+    Reset(BOARD_ROLE_B, 0U);
+    Locked(0U); Budget(0U, true, 2000U);
+    process_status = BSP_PPS_TARGET_ERROR;
+    PpsService_Process(1000U, true);
+    assert(PpsService_GetSnapshot(1000U, &out));
+    assert(out.faulted && out.faults == 1U);
+    process_status = BSP_PPS_OK;
+    PpsService_Process(2000U, true);
+    assert(PpsService_GetSnapshot(2000U, &out));
+    assert(!out.faulted && out.recoveries == 1U &&
+           out.state == PPS_SERVICE_UNQUALIFIED && !out.qualified);
+    Locked(2000U); Budget(2000U, true, 2000U);
+    assert(PpsService_GetSnapshot(2000U, &out));
+    assert(out.qualified && !out.faulted);
+    puts("PASS PPS recovery: fault code, 1s retry, A qualified/B unqualified-then-lock");
+}
+
 /** @brief 验证日志频率、有界长度及精度声明；无参数，无返回值。 */
 static void TestLogs(void)
 {
@@ -229,7 +264,7 @@ static void TestSnapshot(void)
 int main(void)
 {
     TestAcquisition(); TestFreshness(); TestQuality(); TestRateRequalification();
-    TestInvalidation(); TestFaults(); TestLogs(); TestSnapshot();
+    TestInvalidation(); TestFaults(); TestFaultRecovery(); TestLogs(); TestSnapshot();
     puts("PPS service: acquisition, quality, timeouts, frequency, faults, logs PASS");
     return 0;
 }

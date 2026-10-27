@@ -33,6 +33,9 @@ typedef struct
     uint32_t emitted;
     uint32_t missed;
     uint32_t errors;
+    uint32_t faults;              /**< 锁存故障次数；初始化清零，自动恢复不清零。 */
+    uint32_t recoveries;          /**< FAULT后BSP重新初始化成功次数。 */
+    uint32_t last_fault_status;   /**< 最近一次BSP_PpsStatus数值，供现场诊断。 */
 } PpsServiceSnapshot;
 
 /**

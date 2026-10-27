@@ -22,6 +22,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.23 PPS FAULT自动恢复（软件完成，2026-10-27）。** FAULT保留故障计数但每秒重试`BSP_PPS_Init`；A恢复QUALIFIED，B恢复UNQUALIFIED后须重新Observe；`$PPS`新增FAULTS/LAST_FAULT/RECOVERIES。单元测试和短时双板运行通过，长时间无FAULT待验。见[M4.3.23记录](Milestones/M4_3_23_PPS_Fault_Recovery.md)。
+
 **M4.3.22 PPS示波器相位记录（2026-10-27）。** 操作者用两个BNC转双鳄鱼夹、1×，测得10次A/B PPS上升沿差：2/20/56/78/80/93/108/122/145/235ns。最大235ns，均值93.9ns，满足任务书≤10µs；但未校线偏斜，不能据此证明10ns级精度。B PPS曾FAULT，A/B同时复位恢复，长期不FAULT未闭合。见[M4.3.22记录](Milestones/M4_3_22_PPS_Scope.md)。
 
 **M4.3.21 A事件UDP PCB池耗尽已修复（2026-10-27）。** 根因为`MEMP_NUM_UDP_PCB=6`，A的PTP2+heartbeat+probe+chirp capture+time exchange占满，事件需第7个。CubeMX已改为10并重新生成；run05 A `INIT_ERR=0`、无`$SOUND_EVENT_BIND`，A/B DOMAIN约19s建立并持续60s无掉域。见[M4.3.21记录](Milestones/M4_3_21_A_Event_UDP_PCB.md)。

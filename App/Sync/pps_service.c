@@ -17,12 +17,14 @@
 #define MAX_OFFSET_X2_NS INT64_C(20000)
 #define MAX_DELAY_X2_NS INT64_C(4000000)
 #define MAX_DRIFT_PPB 500
+#define FAULT_RETRY_MS 1000U
 
 typedef enum { UNQUALIFIED, QUALIFIED, RATE_REQUALIFY, FAULT } Qualification;
 static Qualification state;
 static BoardRole board_role;
 static bool configured, pending, preserve;
 static uint32_t epoch, revision, sample_ms, rate_ms, log_ms, pending_revision;
+static uint32_t fault_ms, faults, recoveries, last_fault_status;
 static int32_t pending_frequency;
 static void (*emit_line)(const char *, int);
 
@@ -46,9 +48,41 @@ bool PpsService_Invalidate(uint32_t now_ms)
     return state!=FAULT;
 }
 
-/** @brief 锁存故障并尝试停止输出；无参数、无返回值，只有显式Init可以恢复。 */
-static void Fail(void)
-{ state=FAULT; (void)PpsService_Invalidate(0U); }
+/**
+ * @brief 记录并锁存一次BSP故障，保留故障码供诊断。
+ * @param now_ms 当前毫秒；0表示初始化/非周期路径。
+ * @param status 最近一次BSP_PpsStatus。
+ * @return 无返回值；重复故障不重复计数。
+ * @note FAULT不是永久死锁：PpsService_Process在1秒后尝试BSP_PPS_Init恢复。
+ */
+static void Fail(uint32_t now_ms,BSP_PpsStatus status)
+{
+    const bool first=state!=FAULT;
+    if(first) { ++faults; fault_ms=now_ms; }
+    last_fault_status=(uint32_t)status;
+    state=FAULT;
+    (void)PpsService_Invalidate(now_ms);
+}
+/**
+ * @brief 在FAULT后限频重试BSP初始化；成功则恢复为A合格或B待锁定。
+ * @param now_ms 当前毫秒，允许回绕。
+ * @return 无返回值；失败保持FAULT，下一窗口继续重试。
+ * @note 只重新打开硬件输出，不伪造PTP观测；B仍须后续Observe重新取得资格。
+ */
+static void TryRecover(uint32_t now_ms)
+{
+    if(state!=FAULT || !configured || (uint32_t)(now_ms-fault_ms)<FAULT_RETRY_MS)
+    { return; }
+    fault_ms=now_ms;
+    if(BSP_PPS_Init()!=BSP_PPS_OK) { return; }
+    BSP_PtpTime sample;
+    if(BSP_PTP_Read(&sample)!=BSP_PTP_OK)
+    { last_fault_status=(uint32_t)BSP_PPS_CLOCK_ERROR; return; }
+    CacheGeneration();
+    sample_ms=now_ms; pending=preserve=false;
+    state=board_role==BOARD_ROLE_A?QUALIFIED:UNQUALIFIED;
+    ++recoveries;
+}
 
 /**
  * @brief 检查本地时钟健康、未知代际及现有资格期限。
@@ -60,7 +94,7 @@ static bool Check(uint32_t now_ms)
 {
     if (!configured || state==FAULT) { return false; }
     BSP_PtpTime sample;
-    if (BSP_PTP_Read(&sample)!=BSP_PTP_OK) { Fail(); return false; }
+    if (BSP_PTP_Read(&sample)!=BSP_PTP_OK) { Fail(now_ms,BSP_PPS_CLOCK_ERROR); return false; }
     if (epoch!=BSP_PTP_GetEpoch() || revision!=BSP_PTP_GetRateRevision())
     { return PpsService_Invalidate(now_ms); }
     if (board_role==BOARD_ROLE_B &&
@@ -82,11 +116,12 @@ static bool Check(uint32_t now_ms)
 bool PpsService_Init(uint32_t now_ms,BoardRole role,void (*log)(const char *,int))
 {
     configured=false; pending=preserve=false; state=UNQUALIFIED;
+    fault_ms=faults=recoveries=last_fault_status=0U;
     board_role=role; emit_line=log; log_ms=now_ms;
     BSP_PtpTime sample;
     if (BSP_PPS_Init()!=BSP_PPS_OK ||
         (role!=BOARD_ROLE_A && role!=BOARD_ROLE_B) || BSP_PTP_Read(&sample)!=BSP_PTP_OK)
-    { Fail(); return false; }
+    { Fail(now_ms,BSP_PPS_BAD_CONFIG); return false; }
     CacheGeneration(); configured=true;
     if (role==BOARD_ROLE_A) { state=QUALIFIED; }
     return true;
@@ -115,6 +150,9 @@ bool PpsService_GetSnapshot(uint32_t now_ms,PpsServiceSnapshot *out)
     out->emitted=hardware.emitted;
     out->missed=hardware.missed;
     out->errors=hardware.errors;
+    out->faults=faults;
+    out->recoveries=recoveries;
+    out->last_fault_status=last_fault_status;
     return true;
 }
 
@@ -165,7 +203,7 @@ bool PpsService_BeforeFrequency(uint32_t now_ms,int32_t previous_ppb,int32_t nex
     pending_revision=revision;
     if (next_ppb!=actual)
     {
-        if (pending_revision==UINT32_MAX) { Fail(); return false; }
+        if (pending_revision==UINT32_MAX) { Fail(now_ms,BSP_PPS_BAD_CONFIG); return false; }
         ++pending_revision;
     }
     return true;
@@ -182,7 +220,7 @@ void PpsService_AfterFrequency(uint32_t now_ms,bool success)
 {
     if (!pending || !success || epoch!=BSP_PTP_GetEpoch() ||
         pending_revision!=BSP_PTP_GetRateRevision() || pending_frequency!=BSP_PTP_GetFrequencyPpb())
-    { Fail(); return; }
+    { Fail(now_ms,BSP_PPS_BAD_CONFIG); return; }
     if (preserve) { state=RATE_REQUALIFY; rate_ms=now_ms; }
     pending=preserve=false; CacheGeneration();
 }
@@ -196,6 +234,7 @@ void PpsService_AfterFrequency(uint32_t now_ms,bool success)
  */
 void PpsService_Process(uint32_t now_ms,bool schedule_allowed)
 {
+    if(state==FAULT) { TryRecover(now_ms); }
     uint32_t budget=0U;
     if (Check(now_ms) && (state==QUALIFIED || state==RATE_REQUALIFY))
     {
@@ -206,19 +245,22 @@ void PpsService_Process(uint32_t now_ms,bool schedule_allowed)
             if (remaining<budget) { budget=remaining; }
         }
     }
-    if (BSP_PPS_Process(budget,schedule_allowed)!=BSP_PPS_OK) { Fail(); }
+    if (BSP_PPS_Process(budget,schedule_allowed)!=BSP_PPS_OK) { Fail(now_ms,BSP_PPS_TARGET_ERROR); }
     if (!configured || emit_line==NULL || (uint32_t)(now_ms-log_ms)<1000U) { return; }
     log_ms=now_ms;
     BSP_PpsSnapshot snapshot;
-    if (!BSP_PPS_GetSnapshot(&snapshot)) { Fail(); return; }
+    if (!BSP_PPS_GetSnapshot(&snapshot)) { Fail(now_ms,BSP_PPS_BAD_CONFIG); return; }
     const char *name=state==QUALIFIED ? "QUALIFIED" : state==RATE_REQUALIFY ? "RATE_REQUALIFY" :
                      state==FAULT ? "FAULT" : "UNQUALIFIED";
     char line[256];
     int length=snprintf(line,sizeof line,
         "$PPS,ROLE=%s,STATE=%s,QUALIFIED=%u,ARMED=%u,TARGET_SEC=%" PRIu32
-        ",EMITTED=%" PRIu32 ",MISSED=%" PRIu32 ",ERRORS=%" PRIu32 ",SYNC=0\r\n",
+        ",EMITTED=%" PRIu32 ",MISSED=%" PRIu32 ",ERRORS=%" PRIu32
+        ",FAULTS=%" PRIu32 ",LAST_FAULT=%" PRIu32 ",RECOVERIES=%" PRIu32
+        ",SYNC=0\r\n",
         board_role==BOARD_ROLE_A ? "A" : "B",name,
         state==QUALIFIED || state==RATE_REQUALIFY ? 1U : 0U,snapshot.armed ? 1U : 0U,
-        snapshot.target_seconds,snapshot.emitted,snapshot.missed,snapshot.errors);
+        snapshot.target_seconds,snapshot.emitted,snapshot.missed,snapshot.errors,
+        faults,last_fault_status,recoveries);
     if (length>0 && (size_t)length<sizeof line) { emit_line(line,length); }
 }
