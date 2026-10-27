@@ -122,6 +122,10 @@ void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink){(void)sink;}
 void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink){(void)sink;}
 bool UDPSoundEvent_SendTemperature(uint32_t now,const TemperatureSnapshot *temperature)
 {(void)now;(void)temperature;return true;}
+void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink){(void)sink;}
+void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink){(void)sink;}
+bool UDPSoundEvent_SendRangingStatus(uint32_t now,const RangingStatusMessage *message){(void)now;(void)message;return false;}
+bool UDPSoundEvent_SendRangingAck(uint32_t now,const RangingStatusAck *ack){(void)now;(void)ack;return false;}
 /** @brief App测试桩：B发送MACK。 */
 bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
 {(void)now;(void)id;(void)domain;return true;}

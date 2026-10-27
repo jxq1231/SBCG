@@ -14,6 +14,19 @@ static SoundPairResult Pair(bool valid,int64_t delta,uint8_t quality,SoundDirect
     SoundPairResult p={0};p.valid=valid;p.status=valid?SOUND_PAIR_OK:SOUND_PAIR_QUALITY;
     p.delta_ns=delta;p.quality=quality;p.direction=dir;p.time_domain=7U;return p;
 }
+static uint32_t tracked_a_sequence=1U,tracked_b_sequence=1U;
+static SoundPairResult TrackedPair(int32_t mm,uint32_t source_ms)
+{
+    const int64_t magnitude=mm<0?-(int64_t)mm:(int64_t)mm;
+    const int64_t delta=(magnitude*1000000000LL+343000LL/2LL)/343000LL;
+    SoundPairResult p=Pair(true,mm<0?-delta:delta,98U,
+        mm<0?SOUND_DIRECTION_B:SOUND_DIRECTION_A);
+    p.a_session=11U;p.b_session=12U;p.a_sequence=tracked_a_sequence++;
+    p.b_sequence=tracked_b_sequence++;
+    p.a_time_ns=1000000000ULL+(uint64_t)source_ms*1000000ULL;
+    p.b_time_ns=(uint64_t)((int64_t)p.a_time_ns+p.delta_ns);
+    return p;
+}
 int main(void)
 {
     MeasurementResult_Init(0U);MeasurementResultSnapshot out;
@@ -98,6 +111,48 @@ int main(void)
     pair=Pair(true,delta320,95U,SOUND_DIRECTION_A);
     assert(MeasurementResult_PublishPair(&pair,&temp,6100U));
     assert(MeasurementResult_Get(6100U,&out) && out.distance_mm==320U);
-    puts("PASS measurement result: id/age/temp version/direction/speed/range/calibration, remote ID and median/outlier");
+
+    /* A2b展示层：首点临时，3点确认，离群HOLD，远程状态缓存。 */
+    tracked_a_sequence=1U;tracked_b_sequence=1U;
+    MeasurementResult_Init(8000U);
+    TemperatureSnapshot tracked_temp=Temp(true,343000U,9U);
+    SoundPairResult tracked=TrackedPair(315,0U);
+    assert(MeasurementResult_PublishTrackedPair(&tracked,&tracked_temp,false,8000U,
+        tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns)!=
+        RANGING_DECISION_REJECT);
+    MeasurementPresentationSnapshot presentation;
+    MeasurementResult_GetPresentation(&presentation);
+    assert(presentation.state==MEASUREMENT_PRESENTATION_ACQUIRING &&
+           presentation.has_value && presentation.provisional &&
+           presentation.distance_mm==315);
+    tracked=TrackedPair(314,2000U);
+    assert(MeasurementResult_PublishTrackedPair(&tracked,&tracked_temp,true,10000U,
+        tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns)!=
+        RANGING_DECISION_REJECT);
+    tracked=TrackedPair(316,4000U);
+    assert(MeasurementResult_PublishTrackedPair(&tracked,&tracked_temp,true,12000U,
+        tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns)==
+        RANGING_DECISION_ACCEPT);
+    MeasurementResult_GetPresentation(&presentation);
+    assert(presentation.state==MEASUREMENT_PRESENTATION_TRACKING &&
+           presentation.has_value && !presentation.formal &&
+           presentation.provisional && presentation.distance_mm==315);
+    const uint32_t formal_id=presentation.measurement_id;
+    tracked=TrackedPair(245,6000U);
+    assert(MeasurementResult_PublishTrackedPair(&tracked,&tracked_temp,true,14000U,
+        tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns)==
+        RANGING_DECISION_HOLD);
+    MeasurementResult_GetPresentation(&presentation);
+    assert(presentation.state==MEASUREMENT_PRESENTATION_HOLD &&
+           presentation.has_value && !presentation.fresh &&
+           presentation.distance_mm==315);
+    assert(presentation.measurement_id==formal_id);
+    const MeasurementPresentationSnapshot remote_presentation=presentation;
+    MeasurementResult_Init(15000U);
+    assert(MeasurementResult_PublishRemotePresentation(&remote_presentation,7U,15000U));
+    MeasurementResult_GetPresentation(&presentation);
+    assert(presentation.state==MEASUREMENT_PRESENTATION_HOLD &&
+           presentation.distance_mm==315 && presentation.captured_ms==15000U);
+    puts("PASS measurement result: id/age/temp version/direction/speed/range/calibration, remote ID, median/outlier and presentation");
     return 0;
 }

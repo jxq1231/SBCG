@@ -24,6 +24,14 @@ static uint32_t stable_last_ms;
 static uint8_t stable_outliers;
 static MeasurementDiagnosticsSnapshot diagnostic;
 static uint32_t diagnostic_sequence;
+/* A2b CPU-only状态放在ITCM NOLOAD段：不占320KB主RAM，不能被DMA访问。 */
+static RangingTracker tracked
+    __attribute__((section(".ItcmState"), aligned(32)));
+static MeasurementPresentationSnapshot presentation
+    __attribute__((section(".ItcmState"), aligned(32)));
+static uint32_t presentation_id_counter;
+static uint32_t presentation_revision;
+static void ClearPresentation(MeasurementPresentationState state,uint32_t now_ms);
 
 /** @brief 复制当前稳定窗口成员到诊断副本；窗口保持原插入顺序，供离线分析。 */
 static void FillStableDiagnostic(void)
@@ -131,6 +139,12 @@ void MeasurementResult_Init(uint32_t now_ms)
     diagnostic.schema=1U;
     diagnostic.status=MEASUREMENT_NONE;
     diagnostic_sequence=0U;
+    const RangingTrackerConfig tracker_config=RangingTracker_DefaultConfig();
+    RangingTracker_Init(&tracked,&tracker_config);
+    memset(&presentation,0,sizeof presentation);
+    presentation.state=MEASUREMENT_PRESENTATION_NONE;
+    presentation_id_counter=0U;
+    presentation_revision=0U;
 }
 
 void MeasurementResult_SetCalibration(int32_t offset_mm,uint16_t version)
@@ -260,6 +274,13 @@ void MeasurementResult_Invalidate(uint32_t now_ms)
     FillStableDiagnostic();
 }
 
+/** @brief 显式撤销tracker展示状态；域/流硬边界由协调者调用，普通单点拒绝不调用。 */
+void MeasurementResult_InvalidatePresentation(uint32_t now_ms)
+{
+    RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,now_ms);
+    ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);
+}
+
 bool MeasurementResult_Get(uint32_t now_ms, MeasurementResultSnapshot *out)
 {
     if (out == NULL) { return false; }
@@ -274,5 +295,168 @@ bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out)
 {
     if(out==NULL)return false;
     *out=diagnostic;
+    return true;
+}
+
+/** @brief tracker状态映射到展示状态；未知值按FAULT处理。 */
+static MeasurementPresentationState PresentationFromTracker(RangingTrackerState state)
+{
+    switch(state)
+    {
+    case RANGING_STATE_TRACKING:return MEASUREMENT_PRESENTATION_TRACKING;
+    case RANGING_STATE_HOLD:return MEASUREMENT_PRESENTATION_HOLD;
+    case RANGING_STATE_REACQUIRE:return MEASUREMENT_PRESENTATION_REACQUIRE;
+    case RANGING_STATE_STALE:return MEASUREMENT_PRESENTATION_STALE;
+    case RANGING_STATE_FAULT:return MEASUREMENT_PRESENTATION_FAULT;
+    default:return MEASUREMENT_PRESENTATION_ACQUIRING;
+    }
+}
+
+/** @brief 用温度声速和标定把pair的有符号delta换算成展示距离。 */
+static int32_t TrackedDistanceMm(const SoundPairResult *pair,
+                                 const TemperatureSnapshot *temperature)
+{
+    const uint64_t magnitude=pair->delta_ns<0?
+        (uint64_t)(-(pair->delta_ns+1))+1U:(uint64_t)pair->delta_ns;
+    const uint64_t distance=(magnitude*temperature->sound_speed_mm_s+
+        NS_PER_SEC/2U)/NS_PER_SEC;
+    const int32_t corrected=(int32_t)distance+calibration_offset_mm;
+    return corrected<0?0:corrected;
+}
+
+/** @brief 清空展示并进入指定无值状态；保留tracker自己的历史规则。 */
+static void ClearPresentation(MeasurementPresentationState state,uint32_t now_ms)
+{
+    presentation=(MeasurementPresentationSnapshot){0};
+    presentation.state=state;
+    presentation.captured_ms=now_ms;
+    ++presentation_revision;
+    presentation.state_revision=presentation_revision;
+}
+
+RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair,
+                                                     const TemperatureSnapshot *temperature,
+                                                     bool formal,
+                                                     uint32_t now_ms,
+                                                     uint64_t now_common_ns)
+{
+    if(pair==NULL || !pair->valid || pair->time_domain==0U)
+    {
+        ClearPresentation(MEASUREMENT_PRESENTATION_NONE,now_ms);
+        return RANGING_DECISION_REJECT;
+    }
+    if(temperature==NULL || !temperature->valid || temperature->sound_speed_mm_s==0U)
+    {
+        RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,now_ms);
+        ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);
+        return RANGING_DECISION_REJECT;
+    }
+    const RangingTrackerContext context={
+        .time_domain=pair->time_domain,
+        .a_session=pair->a_session,
+        .b_session=pair->b_session,
+        .a_clock_epoch=1U,
+        .domain_valid=true,.stream_valid=true,.temperature_valid=true};
+    RangingTracker_SetContext(&tracked,&context,now_ms,now_common_ns);
+    RangingTracker_SetSoundSpeed(&tracked,temperature->sound_speed_mm_s);
+    const RangingObservation observation={
+        .time_domain=pair->time_domain,.a_session=pair->a_session,
+        .a_sequence=pair->a_sequence,.b_session=pair->b_session,
+        .b_sequence=pair->b_sequence,.a_time_ns=pair->a_time_ns,
+        .b_time_ns=pair->b_time_ns,.delta_ns=pair->delta_ns,
+        .proxy_quality=pair->quality,.evidence_kind=RANGING_EVIDENCE_PROXY,
+        .geometry_assumed_valid=true};
+    const RangingDecision decision=RangingTracker_Push(
+        &tracked,&observation,now_ms,now_common_ns);
+    RangingTrackerSnapshot snapshot;
+    RangingTracker_Get(&tracked,&snapshot);
+    const uint64_t source_ns=pair->a_time_ns>pair->b_time_ns?
+        pair->a_time_ns:pair->b_time_ns;
+
+    if(snapshot.has_value)
+    {
+        presentation=(MeasurementPresentationSnapshot){0};
+        presentation.state=PresentationFromTracker(snapshot.state);
+        presentation.has_value=true;
+        presentation.fresh=snapshot.fresh;
+        /* 当前证据仍是PROXY，不能把标准序列确认写成身份验证FORMAL；
+           A/B统一显示CONFIRMING，等A4/编码身份通过后再置FORMAL。 */
+        presentation.formal=false;
+        presentation.provisional=true;
+        (void)formal;
+        presentation.filtered_delta_ns=snapshot.filtered_delta_ns;
+        presentation.distance_mm=snapshot.distance_mm;
+        presentation.direction=(uint8_t)snapshot.direction;
+        presentation.quality=snapshot.quality;
+        presentation.evidence_kind=snapshot.evidence_kind;
+        presentation.measurement_id=snapshot.measurement_id;
+        presentation.state_revision=snapshot.state_revision;
+        presentation.time_domain=pair->time_domain;
+        presentation.authority_clock_epoch=1U;
+        presentation.temperature_version=temperature->version;
+        presentation.sound_speed_mm_s=temperature->sound_speed_mm_s;
+        presentation.source_common_ns=snapshot.source_common_ns;
+        presentation.fresh_deadline_ns=snapshot.fresh_deadline_ns;
+        presentation.display_deadline_ns=snapshot.display_deadline_ns;
+        presentation.captured_ms=now_ms;
+        if(presentation.state_revision==0U){++presentation_revision;
+            presentation.state_revision=presentation_revision;}
+        return decision;
+    }
+
+    /* 首对独立事件可临时显示，但不能称为FORMAL；不足3点时tracker无确认值。 */
+    if(decision==RANGING_DECISION_CANDIDATE && pair->quality>=90U)
+    {
+        ++presentation_id_counter;
+        presentation=(MeasurementPresentationSnapshot){0};
+        presentation.state=MEASUREMENT_PRESENTATION_ACQUIRING;
+        presentation.has_value=true;
+        presentation.fresh=true;
+        presentation.provisional=true;
+        presentation.formal=false;
+        presentation.filtered_delta_ns=pair->delta_ns;
+        presentation.distance_mm=TrackedDistanceMm(pair,temperature);
+        presentation.direction=pair->delta_ns>0?1U:(pair->delta_ns<0?2U:0U);
+        presentation.quality=pair->quality;
+        presentation.evidence_kind=RANGING_EVIDENCE_PROXY;
+        presentation.measurement_id=presentation_id_counter;
+        presentation.time_domain=pair->time_domain;
+        presentation.authority_clock_epoch=1U;
+        presentation.temperature_version=temperature->version;
+        presentation.sound_speed_mm_s=temperature->sound_speed_mm_s;
+        presentation.source_common_ns=source_ns;
+        presentation.fresh_deadline_ns=source_ns+UINT64_C(2500000000);
+        presentation.display_deadline_ns=source_ns+UINT64_C(6500000000);
+        presentation.captured_ms=now_ms;
+        ++presentation_revision;
+        presentation.state_revision=presentation_revision;
+        return decision;
+    }
+    const MeasurementPresentationState state=snapshot.state==RANGING_STATE_FAULT?
+        MEASUREMENT_PRESENTATION_FAULT:MEASUREMENT_PRESENTATION_ACQUIRING;
+    ClearPresentation(state,now_ms);
+    return decision;
+}
+
+void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out)
+{
+    if(out!=NULL)*out=presentation;
+}
+
+bool MeasurementResult_PublishRemotePresentation(const MeasurementPresentationSnapshot *remote,
+                                                 uint32_t time_domain,
+                                                 uint32_t now_ms)
+{
+    if(remote==NULL || time_domain==0U || remote->time_domain!=time_domain)
+    { return false; }
+    if(presentation.time_domain==time_domain &&
+       remote->state_revision<presentation.state_revision)
+    { return false; }
+    if(presentation.time_domain==time_domain &&
+       remote->state_revision==presentation.state_revision)
+    { return true; } /* 同revision重复包不续租、不重写展示内容。 */
+    presentation=*remote;
+    presentation.captured_ms=now_ms;
+    ++presentation_revision;
     return true;
 }

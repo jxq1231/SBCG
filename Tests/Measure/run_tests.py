@@ -15,7 +15,7 @@ for option in ('-O0','-O2'):
         ('test_sound_event_wire','Tests/Measure/test_sound_event_wire.c',
          ['App/Measure/sound_pair.c','App/Network/sound_event_wire.c']),
         ('test_measurement_result','Tests/Measure/test_measurement_result.c',
-         ['App/Measure/sound_pair.c','App/Measure/measurement_result.c']),
+         ['App/Measure/sound_pair.c','App/Measure/measurement_result.c','App/Measure/ranging_tracker.c']),
         ('test_measurement_wire','Tests/Measure/test_measurement_wire.c',
          ['App/Measure/sound_pair.c','App/Network/measurement_wire.c']),
         ('test_measurement_gate','Tests/Measure/test_measurement_gate.c',

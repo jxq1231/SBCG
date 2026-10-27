@@ -12,6 +12,7 @@
 #include "Network/domain_wire.h"
 #include "Network/measurement_ack.h"
 #include "Network/temperature_wire.h"
+#include "Network/ranging_status_wire.h"
 #include "BSP/board_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -52,6 +53,19 @@ typedef void (*UDPSoundEvent_TemperatureSink)(const TemperatureWireMessage *mess
 void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink);
 /** @brief A板发送当前有效温度；仅A角色/已绑定/链路可用/字段有效。 */
 bool UDPSoundEvent_SendTemperature(uint32_t now_ms,const TemperatureSnapshot *temperature);
+
+/** @brief B板接收A的RST2状态；只在前台回调，不保留输入指针。 */
+typedef void (*UDPSoundEvent_RangingStatusSink)(const RangingStatusMessage *message);
+/** @brief 安装RST2消费者；A角色安装后也不接收。 */
+void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink);
+/** @brief A板接收B的RAK2确认。 */
+typedef void (*UDPSoundEvent_RangingAckSink)(const RangingStatusAck *ack);
+/** @brief 安装RAK2消费者。 */
+void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink);
+/** @brief A发送RST2；仅A/已绑定/链路可用。 */
+bool UDPSoundEvent_SendRangingStatus(uint32_t now_ms,const RangingStatusMessage *message);
+/** @brief B发送RAK2；仅B/已绑定/链路可用。 */
+bool UDPSoundEvent_SendRangingAck(uint32_t now_ms,const RangingStatusAck *ack);
 
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,

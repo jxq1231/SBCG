@@ -8,6 +8,7 @@
 #define SBCG_MEASUREMENT_RESULT_H
 
 #include "Measure/sound_pair.h"
+#include "Measure/ranging_tracker.h"
 #include "Temperature/temperature_service.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -87,6 +88,43 @@ typedef struct
     uint32_t sound_speed_mm_s;
 } MeasurementDiagnosticsSnapshot;
 
+/** @brief 面向两屏的显式展示状态；HOLD仍可带旧值，STALE/FAULT无值。 */
+typedef enum
+{
+    MEASUREMENT_PRESENTATION_NONE = 0,
+    MEASUREMENT_PRESENTATION_ACQUIRING,
+    MEASUREMENT_PRESENTATION_TRACKING,
+    MEASUREMENT_PRESENTATION_HOLD,
+    MEASUREMENT_PRESENTATION_REACQUIRE,
+    MEASUREMENT_PRESENTATION_STALE,
+    MEASUREMENT_PRESENTATION_FAULT
+} MeasurementPresentationState;
+
+/** @brief 本地/远程权威状态的只读展示副本；不等同于测量有效或物理精度。 */
+typedef struct
+{
+    MeasurementPresentationState state;
+    bool has_value;
+    bool fresh;
+    bool formal;
+    bool provisional;
+    int64_t filtered_delta_ns;
+    int32_t distance_mm;
+    uint8_t direction;             /* 1=A侧，2=B侧，0未知。 */
+    uint8_t quality;
+    uint8_t evidence_kind;
+    uint32_t measurement_id;
+    uint32_t state_revision;
+    uint32_t time_domain;
+    uint32_t authority_clock_epoch;
+    uint32_t temperature_version;
+    uint32_t sound_speed_mm_s;
+    uint64_t source_common_ns;
+    uint64_t fresh_deadline_ns;
+    uint64_t display_deadline_ns;
+    uint32_t captured_ms;
+} MeasurementPresentationSnapshot;
+
 /** @brief 复位结果和ID；now_ms仅作时间基准，不读硬件。 */
 void MeasurementResult_Init(uint32_t now_ms);
 
@@ -115,10 +153,42 @@ bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
 /** @brief 显式撤销当前结果（时钟/流/配对边界由上层调用）；now_ms仅记录。 */
 void MeasurementResult_Invalidate(uint32_t now_ms);
 
+/** @brief 硬撤销tracker展示状态；普通pair拒绝不应调用。 */
+void MeasurementResult_InvalidatePresentation(uint32_t now_ms);
+
 /** @brief 复制结果；超龄时valid=false但status可保留REJECTED/VALID供诊断。 */
 bool MeasurementResult_Get(uint32_t now_ms, MeasurementResultSnapshot *out);
 
 /** @brief 复制最近一次测量决策诊断；NULL不操作，返回值表示有可用副本。 */
 bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out);
+
+/**
+ * @brief 将独立pair送入tracker并更新显式展示状态。
+ * @param pair 非NULL已配对结果；域/session/源时刻必须完整。
+ * @param temperature 可NULL；无效时硬撤销展示值。
+ * @param formal 标准序列/门控是否已确认；false表示PROVISIONAL。
+ * @param now_ms 本地HAL毫秒，仅写展示/诊断。
+ * @param now_common_ns 当前共同时间纳秒；0表示未提供，仍按源时刻推进。
+ * @return tracker本次决策；展示副本通过GetPresentation读取。
+ */
+RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair,
+                                                     const TemperatureSnapshot *temperature,
+                                                     bool formal,
+                                                     uint32_t now_ms,
+                                                     uint64_t now_common_ns);
+
+/** @brief 复制当前展示快照；无结果时state=NONE且has_value=false。 */
+void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out);
+
+/**
+ * @brief B接收A的RST2展示副本；只缓存同一共同域的显式状态，不刷新源年龄。
+ * @param remote A已解码的状态；captured_ms由接收方记录。
+ * @param time_domain 当前已确认共同域，不匹配则拒绝。
+ * @param now_ms 本地接收毫秒，仅诊断。
+ * @return 接受返回true；旧revision/无域返回false且不覆盖。
+ */
+bool MeasurementResult_PublishRemotePresentation(const MeasurementPresentationSnapshot *remote,
+                                                 uint32_t time_domain,
+                                                 uint32_t now_ms);
 
 #endif

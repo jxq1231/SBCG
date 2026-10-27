@@ -61,17 +61,21 @@ void UI_StatusSnapshot_Read(uint32_t now_ms, UI_StatusSnapshot *out)
         audio.hal_error==0U && audio.dma_error==0U && audio.dropped_blocks==0U;
     SoundDetectorServiceSnapshot detector; SoundDetectorService_GetSnapshot(&detector);
     if (detector.configured) { out->candidates=detector.candidates; }
-    MeasurementResultSnapshot measurement={0};
-    const bool measurement_fresh=MeasurementResult_Get(now_ms,&measurement);
-    out->measurement_captured_ms=measurement.captured_ms;
-    out->measurement_status=(uint8_t)measurement.status;
-    if(measurement_fresh && measurement.valid){
+    MeasurementPresentationSnapshot presentation={0};
+    MeasurementResult_GetPresentation(&presentation);
+    out->measurement_state=(uint8_t)presentation.state;
+    out->measurement_fresh=presentation.fresh;
+    out->measurement_formal=presentation.formal;
+    out->measurement_revision=presentation.state_revision;
+    out->measurement_captured_ms=presentation.captured_ms;
+    out->measurement_status=presentation.has_value?1U:
+        presentation.state==MEASUREMENT_PRESENTATION_STALE?3U:0U;
+    if(presentation.has_value){
         out->measurement_valid=true;
-        out->distance_mm=measurement.distance_mm;
-        out->measurement_direction=measurement.direction==SOUND_DIRECTION_A?1U:
-            measurement.direction==SOUND_DIRECTION_B?2U:0U;
-        out->measurement_quality=measurement.quality;
-        out->measurement_id=measurement.id;
+        out->distance_mm=presentation.distance_mm;
+        out->measurement_direction=presentation.direction;
+        out->measurement_quality=presentation.quality;
+        out->measurement_id=presentation.measurement_id;
     }
 }
 

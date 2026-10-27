@@ -123,6 +123,9 @@ static StandardSequence standard_sequence;
 static bool standard_sequence_detected;
 static ResultExchangeState result_exchange;
 static uint32_t last_audio_session;
+static uint32_t acked_ranging_revision;
+static uint32_t last_ranging_tx_ms;
+static uint32_t last_ranging_revision;
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -417,6 +420,8 @@ static void ServiceDomain(uint32_t now_ms)
         else MeasurementGate_OnDomainInvalid(now_ms);
         last_domain_valid=domain.valid;
     }
+    if(profile->role==BOARD_ROLE_A && !domain.valid)
+    { MeasurementResult_InvalidatePresentation(now_ms); }
     static bool last_valid;
     static uint32_t last_domain_log_ms;
     if(domain.valid!=last_valid)
@@ -584,6 +589,10 @@ static void PublishMeasurement(const SoundPairResult *pair)
     CalibrationSnapshot calibration;
     Calibration_Get(&calibration);
     MeasurementResult_SetCalibration(calibration.offset_mm,calibration.version);
+    const uint64_t source_ns=pair->a_time_ns>pair->b_time_ns?
+        pair->a_time_ns:pair->b_time_ns;
+    /* A2b：pair先进入tracker；单点拒绝只产生HOLD/REACQUIRE，不清历史。 */
+    (void)MeasurementResult_PublishTrackedPair(pair,&temperature,formal,now_ms,source_ns);
     const bool published=MeasurementResult_PublishPair(pair,&temperature,now_ms);
     LogRangeDecision(pair,&temperature,
         formal?"FORMAL":(provisional?"PROVISIONAL":"PUBLISH"),formal,provisional);
@@ -612,6 +621,140 @@ static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
         (void)UDPSoundEvent_SendMeasurementAck(now,result->id,result->time_domain);
     }
 }
+/** @brief 把RST2状态数值映射到本地展示状态。 */
+static MeasurementPresentationState PresentationFromWire(uint8_t state)
+{
+    switch(state)
+    {
+    case RANGING_STATE_TRACKING:return MEASUREMENT_PRESENTATION_TRACKING;
+    case RANGING_STATE_HOLD:return MEASUREMENT_PRESENTATION_HOLD;
+    case RANGING_STATE_REACQUIRE:return MEASUREMENT_PRESENTATION_REACQUIRE;
+    case RANGING_STATE_STALE:return MEASUREMENT_PRESENTATION_STALE;
+    case RANGING_STATE_FAULT:return MEASUREMENT_PRESENTATION_FAULT;
+    default:return MEASUREMENT_PRESENTATION_ACQUIRING;
+    }
+}
+
+/** @brief B接收A的RST2：缓存同一共同域展示状态并回RAK2。 */
+static void PublishRemoteRangingStatus(const RangingStatusMessage *message)
+{
+    if(message==NULL)return;
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_B)return;
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(!domain.valid || domain.id==0U || domain.id!=message->domain)return;
+    const uint32_t now=BSP_Console_GetTickMs();
+    MeasurementPresentationSnapshot presentation={0};
+    presentation.state=PresentationFromWire(message->state);
+    presentation.has_value=(message->flags&RANGING_STATUS_FLAG_HAS_VALUE)!=0U;
+    presentation.fresh=(message->flags&RANGING_STATUS_FLAG_FRESH)!=0U;
+    presentation.formal=(message->flags&RANGING_STATUS_FLAG_FORMAL)!=0U;
+    presentation.provisional=!presentation.formal;
+    presentation.filtered_delta_ns=message->filtered_delta_ns;
+    presentation.distance_mm=message->distance_mm;
+    presentation.direction=message->direction;
+    presentation.quality=message->quality;
+    presentation.evidence_kind=message->evidence_kind;
+    presentation.measurement_id=message->measurement_id;
+    presentation.state_revision=message->state_revision;
+    presentation.time_domain=message->domain;
+    presentation.authority_clock_epoch=message->authority_clock_epoch;
+    presentation.temperature_version=message->temperature_version;
+    presentation.sound_speed_mm_s=message->sound_speed_mm_s;
+    presentation.source_common_ns=message->source_common_ns;
+    presentation.fresh_deadline_ns=message->fresh_deadline_ns;
+    presentation.display_deadline_ns=message->display_deadline_ns;
+    const bool accepted=MeasurementResult_PublishRemotePresentation(
+        &presentation,domain.id,now);
+    RangingStatusAck ack={accepted?RANGING_STATUS_ACK_OK:RANGING_STATUS_ACK_REJECT,
+        message->domain,message->authority_clock_epoch,message->state_revision,
+        message->measurement_id};
+    (void)UDPSoundEvent_SendRangingAck(now,&ack);
+}
+
+/** @brief A接收B的RAK2，记录精确revision已确认；旧ACK不续租。 */
+static void HandleRangingAck(const RangingStatusAck *ack)
+{
+    if(ack==NULL)return;
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(!domain.valid || domain.id!=ack->domain)return;
+    if(ack->status==RANGING_STATUS_ACK_OK)
+    { acked_ranging_revision=ack->state_revision; }
+}
+
+/** @brief 将本地展示快照编码为RST2；proxy证据不冒充身份/正式。 */
+static bool BuildRangingStatusMessage(RangingStatusMessage *message,uint32_t now_ms)
+{
+    MeasurementPresentationSnapshot presentation;
+    MeasurementResult_GetPresentation(&presentation);
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if(message==NULL || !domain.valid || domain.id==0U)return false;
+    TemperatureSnapshot temperature={0};
+    TemperatureService_GetSnapshot(now_ms,&temperature);
+    memset(message,0,sizeof *message);
+    message->domain=domain.id;
+    message->authority_clock_epoch=presentation.authority_clock_epoch!=0U?
+        presentation.authority_clock_epoch:1U;
+    message->state_revision=presentation.state_revision!=0U?
+        presentation.state_revision:1U;
+    switch(presentation.state)
+    {
+    case MEASUREMENT_PRESENTATION_TRACKING:message->state=RANGING_STATE_TRACKING;break;
+    case MEASUREMENT_PRESENTATION_HOLD:message->state=RANGING_STATE_HOLD;break;
+    case MEASUREMENT_PRESENTATION_REACQUIRE:message->state=RANGING_STATE_REACQUIRE;break;
+    case MEASUREMENT_PRESENTATION_STALE:message->state=RANGING_STATE_STALE;break;
+    case MEASUREMENT_PRESENTATION_FAULT:message->state=RANGING_STATE_FAULT;break;
+    default:message->state=RANGING_STATE_ACQUIRING;break;
+    }
+    message->direction=presentation.has_value?presentation.direction:0U;
+    message->quality=presentation.quality;
+    message->temperature_version=presentation.temperature_version!=0U?
+        presentation.temperature_version:temperature.version;
+    message->sound_speed_mm_s=presentation.sound_speed_mm_s!=0U?
+        presentation.sound_speed_mm_s:temperature.sound_speed_mm_s;
+    message->distance_mm=presentation.has_value?presentation.distance_mm:0;
+    message->filtered_delta_ns=presentation.has_value?presentation.filtered_delta_ns:0;
+    message->measurement_id=presentation.has_value?presentation.measurement_id:0U;
+    message->source_common_ns=presentation.source_common_ns;
+    message->fresh_deadline_ns=presentation.fresh_deadline_ns;
+    message->display_deadline_ns=presentation.display_deadline_ns;
+    message->detection_version=1U;
+    message->evidence_kind=RANGING_EVIDENCE_PROXY;
+    if(presentation.has_value)
+    {
+        message->flags|=RANGING_STATUS_FLAG_HAS_VALUE;
+        /* 当前仍是代理质量，不设置IDENTITY/FORMAL，避免把代理分数冒充身份。 */
+        if(presentation.fresh)message->flags|=RANGING_STATUS_FLAG_FRESH;
+    }
+    return true;
+}
+
+/** @brief A按状态/revision变化或500ms重发RST2；不靠接收时刻续租。 */
+static void ServiceAuthoritativeStatus(uint32_t now_ms)
+{
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    MeasurementPresentationSnapshot presentation;
+    MeasurementResult_GetPresentation(&presentation);
+    const uint32_t revision=presentation.state_revision;
+    if(revision==0U)return;
+    if(revision==acked_ranging_revision)return;
+    if(revision==last_ranging_revision &&
+       (uint32_t)(now_ms-last_ranging_tx_ms)<500U)return;
+    RangingStatusMessage message;
+    if(!BuildRangingStatusMessage(&message,now_ms))return;
+    if(UDPSoundEvent_SendRangingStatus(now_ms,&message))
+    {
+        last_ranging_revision=revision;
+        last_ranging_tx_ms=now_ms;
+    }
+}
+
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 static uint32_t last_temperature_send_ms;
 /**
@@ -858,6 +1001,8 @@ void App_Init(void)
         UDPSoundEvent_SetDomainSink(HandleDomainMessage);
         UDPSoundEvent_SetAckSink(HandleMeasurementAck);
         UDPSoundEvent_SetTemperatureSink(ApplySharedTemperature);
+        UDPSoundEvent_SetRangingStatusSink(PublishRemoteRangingStatus);
+        UDPSoundEvent_SetRangingAckSink(HandleRangingAck);
     }
 #endif
 #endif
@@ -1083,6 +1228,7 @@ void App_Process(void)
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_BOARD_IDENTITY
         ServiceAuthoritativeResult(BSP_Console_GetTickMs());
+        ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #endif
     }
 #elif defined(SBCG_USE_AUDIO_MAP)

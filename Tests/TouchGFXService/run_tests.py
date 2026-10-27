@@ -28,6 +28,9 @@ if snapshot.exists():
 measurement = root / 'App/Measure/measurement_result.c'
 if measurement.exists():
     sources.append(measurement)
+    tracker = root / 'App/Measure/ranging_tracker.c'
+    if tracker.exists():
+        sources.append(tracker)
 exe = out / 'service.exe'
 subprocess.run([shutil.which('gcc'), '-std=c11', '-Wall', '-Wextra', '-Werror',
                 '-pedantic', '-I', str(root / 'App'), *map(str, sources),

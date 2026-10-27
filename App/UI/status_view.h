@@ -30,6 +30,10 @@ typedef struct {
  uint32_t measurement_id;
  uint32_t measurement_captured_ms; /* 最近测量快照的HAL毫秒，仅诊断年龄。 */
  uint8_t measurement_status;       /* MeasurementStatus整数副本，0 none/1 valid/2 rejected. */
+ uint8_t measurement_state;        /* MeasurementPresentationState副本，0表示旧路径。 */
+ bool measurement_fresh;
+ bool measurement_formal;
+ uint32_t measurement_revision;
 } UI_StatusSnapshot;
 /** @brief 由调用方拥有的NUL结尾ASCII文本；后续中文字体由TouchGFX视图负责。 */
 typedef struct {

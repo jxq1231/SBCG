@@ -46,8 +46,8 @@ static bool MessageValid(const RangingStatusMessage *m)
     if((m->state==RANGING_STATE_HOLD || m->state==RANGING_STATE_REACQUIRE) &&
        (!has || fresh || formal))
     { return false; }
-    if((m->state==RANGING_STATE_ACQUIRING || m->state==RANGING_STATE_STALE ||
-        m->state==RANGING_STATE_FAULT) && has)
+    /* ACQUIRING可携带PROVISIONAL值；STALE/FAULT不允许旧数字复活。 */
+    if((m->state==RANGING_STATE_STALE || m->state==RANGING_STATE_FAULT) && has)
     { return false; }
     if(!has)
     {

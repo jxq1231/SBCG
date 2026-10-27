@@ -62,7 +62,17 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
   (void)snprintf(out->direction,sizeof out->direction,"%s",
    s->measurement_direction==1?"SIDE A":s->measurement_direction==2?"SIDE B":"SIDE --");
  (void)snprintf(out->quality,sizeof out->quality,"QUALITY --");
- if(fresh && s->measurement_valid)
+ if(s->measurement_state!=0U)
+ {
+  const char *state =
+   s->measurement_state==1U?"CONFIRMING":
+   s->measurement_state==2U?(s->measurement_formal?"VALID":"CONFIRMING"):
+   s->measurement_state==3U?"HOLD":
+   s->measurement_state==4U?"REACQUIRE":
+   s->measurement_state==5U?"STALE":"FAULT";
+  (void)snprintf(out->quality,sizeof out->quality,"%s",state);
+ }
+ else if(fresh && s->measurement_valid)
   (void)snprintf(out->quality,sizeof out->quality,"QUALITY %u",(unsigned)s->measurement_quality);
  return true;
 }

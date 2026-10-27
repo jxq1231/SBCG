@@ -171,6 +171,9 @@ void RangingTracker_SetContext(RangingTracker *self,
                                uint32_t now_ms,
                                uint64_t now_common_ns);
 
+/** @brief 合法温度更新声速；不刷新源时间、ID或deadline，只影响后续距离换算。 */
+void RangingTracker_SetSoundSpeed(RangingTracker *self, uint32_t sound_speed_mm_s);
+
 /** @brief 提交一个独立声事件，返回本次决策；拒绝不刷新源时间/ID/历史。 */
 RangingDecision RangingTracker_Push(RangingTracker *self,
                                     const RangingObservation *observation,

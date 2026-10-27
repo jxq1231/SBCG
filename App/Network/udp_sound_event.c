@@ -29,6 +29,8 @@ static UDPSoundEvent_EventSink event_sink;
 static UDPSoundEvent_DomainSink domain_sink;
 static UDPSoundEvent_AckSink ack_sink;
 static UDPSoundEvent_TemperatureSink temperature_sink;
+static UDPSoundEvent_RangingStatusSink ranging_status_sink;
+static UDPSoundEvent_RangingAckSink ranging_ack_sink;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
@@ -128,6 +130,38 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         {Increment(&rx_bad);return;}
         if(domain_sink!=NULL){domain_sink(&message);}
         Increment(&rx_ok);
+        return;
+    }
+    if(packet->tot_len==RANGING_STATUS_WIRE_BYTES)
+    {
+        uint8_t status_data[RANGING_STATUS_WIRE_BYTES];
+        if(pbuf_copy_partial(packet,status_data,sizeof status_data,0)!=sizeof status_data)
+        {Increment(&rx_bad);Increment(&result_rx_bad);pbuf_free(packet);return;}
+        pbuf_free(packet);
+        if(local_profile.role!=BOARD_ROLE_B)
+        {Increment(&rx_bad);Increment(&result_rx_bad);return;}
+        RangingStatusMessage status;
+        if(RangingStatusWire_Decode(status_data,sizeof status_data,&status)!=
+           RANGING_STATUS_WIRE_OK)
+        {Increment(&rx_bad);Increment(&result_rx_bad);return;}
+        if(ranging_status_sink!=NULL){ranging_status_sink(&status);}
+        Increment(&rx_ok);Increment(&result_rx_ok);
+        return;
+    }
+    if(packet->tot_len==RANGING_STATUS_ACK_BYTES)
+    {
+        uint8_t ack_data[RANGING_STATUS_ACK_BYTES];
+        if(pbuf_copy_partial(packet,ack_data,sizeof ack_data,0)!=sizeof ack_data)
+        {Increment(&rx_bad);Increment(&ack_rx_bad);pbuf_free(packet);return;}
+        pbuf_free(packet);
+        if(local_profile.role!=BOARD_ROLE_A)
+        {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
+        RangingStatusAck ack;
+        if(RangingStatusAck_Decode(ack_data,sizeof ack_data,&ack)!=
+           RANGING_STATUS_WIRE_OK)
+        {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
+        if(ranging_ack_sink!=NULL){ranging_ack_sink(&ack);}
+        Increment(&rx_ok);Increment(&ack_rx_ok);
         return;
     }
     if(packet->tot_len==MEASUREMENT_WIRE_BYTES)
@@ -236,6 +270,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     domain_sequence=0U;
     ack_tx_ok=ack_tx_err=ack_rx_ok=ack_rx_bad=0U;
     temperature_tx_ok=temperature_tx_err=temperature_rx_ok=temperature_rx_bad=0U;
+    ranging_status_sink=NULL;ranging_ack_sink=NULL;
     configured=true;return true;
 }
 /**
@@ -261,6 +296,16 @@ void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)
 void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink)
 {
     measurement_sink=sink;
+}
+/** @brief 安装RST2消费者；NULL不回调。 */
+void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink)
+{
+    ranging_status_sink=sink;
+}
+/** @brief 安装RAK2消费者；NULL不回调。 */
+void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink)
+{
+    ranging_ack_sink=sink;
 }
 /** @brief 安装对端事件消费者；NULL不回调。 */
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink)
@@ -323,6 +368,44 @@ bool UDPSoundEvent_SendResult(uint32_t now_ms,const MeasurementResultSnapshot *r
     if(err!=ERR_OK){Increment(&result_tx_err);return false;}
     Increment(&result_tx_ok);return true;
 }
+/** @brief A发送RST2；仅A角色/已绑定/链路可用。 */
+bool UDPSoundEvent_SendRangingStatus(uint32_t now_ms,const RangingStatusMessage *message)
+{
+    (void)now_ms;
+    if(!configured || service_pcb==NULL || message==NULL ||
+       local_profile.role!=BOARD_ROLE_A || !netif_is_link_up(&gnetif))
+    {Increment(&result_tx_err);return false;}
+    uint8_t data[RANGING_STATUS_WIRE_BYTES];
+    if(RangingStatusWire_Encode(message,data,sizeof data)!=RANGING_STATUS_WIRE_OK)
+    {Increment(&result_tx_err);return false;}
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&result_tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&result_tx_err);return false;}
+    Increment(&result_tx_ok);return true;
+}
+
+/** @brief B发送RAK2；仅B角色/已绑定/链路可用。 */
+bool UDPSoundEvent_SendRangingAck(uint32_t now_ms,const RangingStatusAck *ack)
+{
+    (void)now_ms;
+    if(!configured || service_pcb==NULL || ack==NULL ||
+       local_profile.role!=BOARD_ROLE_B || !netif_is_link_up(&gnetif))
+    {Increment(&ack_tx_err);return false;}
+    uint8_t data[RANGING_STATUS_ACK_BYTES];
+    if(RangingStatusAck_Encode(ack,data,sizeof data)!=RANGING_STATUS_WIRE_OK)
+    {Increment(&ack_tx_err);return false;}
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&ack_tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&ack_tx_err);return false;}
+    Increment(&tx_ok);return true;
+}
+
 /**
  * @brief 在当前有效域内发布本板事件，并提交一份给本地配对器。
  * @param now_ms 本地提交时刻，单位毫秒，供配对保留期计算。

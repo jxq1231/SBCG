@@ -11,7 +11,7 @@ cmd=[gcc,'-std=c11','-Wall','-Wextra','-Werror','-pedantic',
      '-DSBCG_USE_SOUND_TIME=1','-DSBCG_USE_BOARD_SYNC=1','-DSBCG_USE_BOARD_IDENTITY=1',
      '-I',str(ROOT), '-I',str(ROOT/'Tests/App'), '-I',str(ROOT/'App'), '-I',str(ROOT/'Tests/App/stubs'),
      str(ROOT/'Tests/App/test_app_udp_integration.c'),str(ROOT/'App/app_main.c'),
-     str(ROOT/'App/Measure/measurement_result.c'),str(ROOT/'App/Measure/result_exchange_state.c'),
+     str(ROOT/'App/Measure/measurement_result.c'),str(ROOT/'App/Measure/ranging_tracker.c'),str(ROOT/'App/Measure/result_exchange_state.c'),
      str(ROOT/'App/Measure/measurement_gate.c'),str(ROOT/'App/Detector/standard_sequence.c'),
      str(ROOT/'App/Calibration/calibration.c'),str(ROOT/'App/Sync/time_domain.c'),
      '-o',str(out/'test_app_udp_integration.exe')]

@@ -89,6 +89,10 @@ void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink s){(void)s;}
 void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink){(void)sink;}
 bool UDPSoundEvent_SendTemperature(uint32_t now,const TemperatureSnapshot *temperature)
 {(void)now;(void)temperature;return true;}
+void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink){(void)sink;}
+void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink){(void)sink;}
+bool UDPSoundEvent_SendRangingStatus(uint32_t now,const RangingStatusMessage *message){(void)now;(void)message;return false;}
+bool UDPSoundEvent_SendRangingAck(uint32_t now,const RangingStatusAck *ack){(void)now;(void)ack;return false;}
 /** @brief 观察主动DOMAIN发送；now为毫秒、token为域，DHT低态禁止调用，成功返回true。 */
 bool UDPSoundEvent_SendDomainRequest(uint32_t now,uint32_t token)
 {(void)now;(void)token;assert(!temperature_low);++domain_requests;return true;}

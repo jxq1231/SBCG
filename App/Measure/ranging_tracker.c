@@ -291,6 +291,12 @@ static bool ObservationValid(const RangingTracker *self,
     return true;
 }
 
+void RangingTracker_SetSoundSpeed(RangingTracker *self, uint32_t sound_speed_mm_s)
+{
+    if(self==NULL || sound_speed_mm_s==0U)return;
+    self->config.sound_speed_mm_s=sound_speed_mm_s;
+}
+
 RangingDecision RangingTracker_Push(RangingTracker *self,
                                     const RangingObservation *observation,
                                     uint32_t now_ms,

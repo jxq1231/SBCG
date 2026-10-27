@@ -80,11 +80,16 @@ static void Report(uint32_t now_ms, const BSP_TouchGFXDisplaySnapshot *lcd)
         valid ? state.page.temperature_milli_c : 0, valid ? state.page.sound_speed_mm_s : 0U,
         state.data_generation, max_update_ms);
     if (length > 0 && (size_t)length < sizeof line) { emit_line(line, length); }
-    const bool has_measurement = state.page.measurement_status == 1U;
-    const bool fresh_measurement = state.page.measurement_valid;
-    const char *measurement_state = fresh_measurement ? "VALID" :
-        has_measurement ? "STALE" :
-        state.page.measurement_status == 2U ? "REJECTED" : "NONE";
+    const bool has_measurement = state.page.measurement_valid;
+    const bool fresh_measurement = state.page.measurement_valid && state.page.measurement_fresh;
+    const char *measurement_state = state.page.measurement_state != 0U ?
+        (state.page.measurement_state == 1U ? "CONFIRMING" :
+         state.page.measurement_state == 2U ? (state.page.measurement_formal ? "VALID" : "CONFIRMING") :
+         state.page.measurement_state == 3U ? "HOLD" :
+         state.page.measurement_state == 4U ? "REACQUIRE" :
+         state.page.measurement_state == 5U ? "STALE" : "FAULT") :
+        (fresh_measurement ? "VALID" : has_measurement ? "STALE" :
+         state.page.measurement_status == 2U ? "REJECTED" : "NONE");
     const char *direction = state.page.measurement_direction == 1U ? "A" :
         state.page.measurement_direction == 2U ? "B" : "UNKNOWN";
     const uint32_t measurement_age_ms = has_measurement ?

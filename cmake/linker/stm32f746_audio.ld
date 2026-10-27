@@ -41,6 +41,13 @@ SECTIONS
     . = ALIGN(32);
     __itcm_probe_end__ = .;
   } >ITCM
+  .ItcmState (NOLOAD) : ALIGN(32)
+  {
+    __itcm_state_start__ = .;
+    KEEP(*(.ItcmState))
+    . = ALIGN(32);
+    __itcm_state_end__ = .;
+  } >ITCM
 }
 /* Override the generated PROVIDE values used by sysmem.c's _sbrk. This is
    deliberately outside the generated linker script. */
@@ -71,3 +78,7 @@ ASSERT(ADDR(.ItcmProbe) >= 0x00000000 &&
        "ITCM probe exceeds the 16 KiB instruction TCM")
 ASSERT((ADDR(.ItcmProbe) % 32) == 0,
        "ITCM probe must be 32-byte aligned")
+ASSERT(ADDR(.ItcmState) >= 0x00000000 &&
+       ADDR(.ItcmState) + SIZEOF(.ItcmState) <= 0x00004000 &&
+       (ADDR(.ItcmState) % 32) == 0,
+       "ITCM CPU-only state exceeds the 16 KiB instruction TCM")
