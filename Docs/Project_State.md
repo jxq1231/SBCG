@@ -28,6 +28,8 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
+**M4.3.26 TOA跨块补窗（2026-10-27）。** 块尾TOA候选改为等待下一连续块，用已提交CPU尾部+当前块拼完整256帧；无后继块1秒过期，不伪造NA。主机测试通过；实物短验中标准声期间`$SOUND_CAND`不再出现`TOA_US=NA`，稳定配对321/320/317/320/319/320/320/323mm，仍有高度/反射异常388mm。见[M4.3.26记录](Milestones/M4_3_26_TOA_Cross_Block.md)。
+
 **M4.3.25 A/B温度共享与B屏显示（2026-10-27）。** 新增20字节TEMP UDP（复用5009 PCB），A按1Hz发布温度/声速/版本；B `TemperatureService_SetRemote`接收并让UI显示A温度，无需第二只DHT11。实物：A/B均T_MILLI_C=23500、C_MM_S=345541，B `$TEMP STATE=REMOTE`、UI `TEMP_VALID=1`。见[M4.3.25记录](Milestones/M4_3_25_Temperature_Share.md)。
 
 **M4.3.24 PPS双板10分钟长稳（2026-10-27）。** A/B同时复位后采集600s：A PPS 599/599 QUALIFIED；B无FAULT、MISSED=0/ERRORS=0，B在QUALIFIED/RATE_REQUALIFY/短暂UNQUALIFIED间切换但未锁死；A/B DOMAIN各仅1条VALID=1记录，无掉域。自动恢复路径未被自然故障触发。见[M4.3.24记录](Milestones/M4_3_24_PPS_Long_Stability.md)。

@@ -32,7 +32,7 @@ def main():
     detector = root / 'App/Detector/sound_detector.c'
     estimator = root / 'App/Detector/toa_estimator.c'
     scenarios = ('partial-tail', 'complete-boundary', 'cross-block-left',
-                 'rejected-recovery', 'missing-recovery', 'large-frame-overflow',
+                 'rejected-recovery', 'pending-expiry', 'large-frame-overflow',
                  'long-decimal', 'invalid-numbers')
     result = 0
     for option in ('-O0', '-O2'):

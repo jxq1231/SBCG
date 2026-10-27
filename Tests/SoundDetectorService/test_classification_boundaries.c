@@ -126,7 +126,7 @@ static void Reference(uint64_t first)
         if(result==SOUND_DETECTOR_EVENT){
             CHECK(expected.session==0U);expected=event;
             const uint64_t anchor=event.onset_frame>64U ? event.onset_frame-64U:0U;
-            expected_toa=anchor>=first && anchor-first<=BSP_AUDIO_HALF_FRAMES-256U;
+            (void)anchor;expected_toa=true; /* TOA跨块在下一连续块补齐 */
         }
         else CHECK(result==SOUND_DETECTOR_NONE);
     }
@@ -162,8 +162,8 @@ static void CheckEvent(void)
     EventClassResult result;CHECK(__real_EventClassifier_Classify(window,CLASS_FRAMES,&result));
     CHECK(result.type==EVENT_CLASS_CHIRP && result.quality>=80U);
     CHECK(last_event.event_class==result.type && last_event.quality==result.quality);
-    CHECK(last_toa.status==(expected_toa ? SOUND_TOA_VALID:SOUND_TOA_MISSING));
-    CHECK(toa_calls==(expected_toa ? 1U:0U));
+    CHECK(last_toa.status==SOUND_TOA_VALID);
+    CHECK(toa_calls==1U);
 }
 /** @brief 验证一个相位/声道，必要时等待唯一后继块；无返回值。 */
 static void RunPhase(unsigned phase,unsigned channel)

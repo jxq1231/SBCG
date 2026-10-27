@@ -25,7 +25,7 @@
 #define CLASSIFY_FRAMES 2400U
 const SoundDetectorConfig SoundDetectorService_DefaultConfig={64U,256U,128U,2U,8U,24000U};
 typedef struct { SoundCandidate event; uint32_t completed_ms,sequence;
-                 uint64_t toa_anchor; double toa_fraction; bool toa_valid;
+                 uint64_t toa_anchor; double toa_fraction; bool toa_valid,toa_ready;
                  SoundToaPosition toa; bool class_ready; } QueuedCandidate;
 static SoundDetector current,working;
 static SoundDetectorServiceSnapshot diagnostics;
@@ -44,6 +44,7 @@ _Static_assert(sizeof sound_class_pcm==9600U,"classification PCM reservation mus
 static double staged_toa[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint64_t staged_toa_anchor[SOUND_DETECTOR_QUEUE_CAPACITY];
 static bool staged_toa_ok[SOUND_DETECTOR_QUEUE_CAPACITY];
+static bool staged_toa_ready[SOUND_DETECTOR_QUEUE_CAPACITY];
 static SoundToaPosition staged_toa_position[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint32_t staged_total,staged_ms,last_event_ms,last_state_ms;
 static uint8_t staged_count,head,count;
@@ -107,7 +108,7 @@ static bool QuantizeToa(uint64_t anchor,double fraction,SoundToaPosition *out)
  * @param event 非NULL工作候选，仅更新event_class/quality，onset为会话内绝对帧。
  * @return true为分类完成或窗口永不可得（UNKNOWN）；false为等待后继块。
  * @note 当前块完整窗直接借用；跨块窗只拼已提交尾部和当前PCM到未提交槽，不保留PCM指针。
- *       起点已丢失或坐标溢出时不伪造窗口，保留UNKNOWN能量诊断；TOA不使用此缓存。
+ *       起点已丢失或坐标溢出时不伪造窗口，保留UNKNOWN能量诊断；TOA复用已提交尾部但不补零。
  */
 static bool ClassifyCandidate(const BSP_AudioBlock *block,SoundCandidate *event)
 {
@@ -141,41 +142,90 @@ static bool ClassifyCandidate(const BSP_AudioBlock *block,SoundCandidate *event)
     return true;
 }
 
+/** @brief 一次TOA窗口构建/估算结果；ready=false表示等待后继块。 */
+typedef struct { bool ready,valid; uint64_t anchor; double fraction;
+                 SoundToaPosition position; } ToaEstimate;
+typedef enum { TOA_WINDOW_READY,TOA_WINDOW_WAIT,TOA_WINDOW_LOST } ToaWindowStatus;
 /**
- * @brief 在Stage借用期内仅对当前块内的完整256帧候选窗调用原TOA估算器。
- * @param block 非NULL只读交错PCM借用描述符，样本仅在本次调用中读取。
- * @param event 非NULL只读暂存能量候选，onset_frame为会话内绝对帧号。
- * @param slot 暂存槽位，写入锚点/分数/有效性。
+ * @brief 从已提交CPU尾部历史和当前借用块拼出候选完整256帧窗。
+ * @param block 非NULL当前借用块，只在调用期间读取。
+ * @param anchor 窗口绝对首帧，已由估算器约定确定。
  * @param channel 选定声道0或1。
- * @return 无返回值；不完整窗口或估算失败清暂存TOA有效性并计toa_miss，不丢能量候选。
- * @note 目标窗起点=max(onset−64,0)，缺左沿或右侧不足256帧时直接拒绝，不裁到块首、
- *       不补零、不重组跨块PCM。完整窗锚点随队列保存，Q16副本供事件时间服务使用。
+ * @param window 非NULL256点输出，成功时完成填充。
+ * @return READY为窗口完整；WAIT为右侧帧尚未到；LOST为历史不足/坐标越界。
+ * @note 历史只来自上一块End成功提交的2400帧尾部；不补零、不读取DMA未来数据。
+ */
+static ToaWindowStatus BuildToaWindow(const BSP_AudioBlock *block,uint64_t anchor,
+    uint8_t channel,int16_t window[TOA_SEARCH_WINDOW])
+{
+    if(anchor>UINT64_MAX-(TOA_SEARCH_WINDOW-1U))return TOA_WINDOW_LOST;
+    const uint64_t block_end=block->first_frame+block->frame_count;
+    bool wait=false;
+    for(uint16_t i=0U;i<TOA_SEARCH_WINDOW;++i)
+    {
+        const uint64_t frame=anchor+i;
+        if(frame>=block->first_frame && frame<block_end)
+        {
+            window[i]=block->samples[2U*(size_t)(frame-block->first_frame)+channel];
+        }
+        else if(frame<block->first_frame)
+        {
+            if(!class_history_valid || class_session!=block->session ||
+               frame<class_first_frame || frame>=class_first_frame+CLASSIFY_FRAMES)
+            { return TOA_WINDOW_LOST; }
+            window[i]=sound_class_pcm[class_committed_slot][frame-class_first_frame];
+        }
+        else { wait=true; }
+    }
+    return wait?TOA_WINDOW_WAIT:TOA_WINDOW_READY;
+}
+/**
+ * @brief 估算一个候选的TOA；不完整右窗返回ready=false等待下一块。
+ * @param block 非NULL当前借用块，样本仅本次读取。
+ * @param event 非NULL候选，onset_frame为会话内绝对帧。
+ * @param channel 选定声道0或1。
+ * @param out 非NULL结果；ready=false时其余字段无意义。
+ * @return true表示已得到终态（成功或永久缺失）；false表示等待后继块。
+ * @note 只有完整窗才调用原估算器；失败计toa_miss，不伪造成FIRST+1。
+ */
+static bool EstimateToaCore(const BSP_AudioBlock *block,const SoundCandidate *event,
+    uint8_t channel,ToaEstimate *out)
+{
+    out->ready=true;out->valid=false;out->anchor=0U;out->fraction=0.0;
+    out->position=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U};
+    const uint64_t anchor=event->onset_frame>TOA_LEFT_MARGIN?
+        event->onset_frame-TOA_LEFT_MARGIN:0U;
+    int16_t window[TOA_SEARCH_WINDOW];
+    const ToaWindowStatus status=BuildToaWindow(block,anchor,channel,window);
+    if(status==TOA_WINDOW_WAIT){out->ready=false;return false;}
+    if(status==TOA_WINDOW_LOST){Add(&diagnostics.toa_miss,1U);return true;}
+    double fraction=0.0;
+    if(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,window,&fraction))
+    { Add(&diagnostics.toa_miss,1U);return true; }
+    out->anchor=anchor;out->fraction=fraction;out->valid=true;
+    Add(&diagnostics.toa_ok,1U);
+    if(!QuantizeToa(anchor,fraction,&out->position))
+    { out->valid=false;Add(&diagnostics.toa_invalid,1U); }
+    return true;
+}
+/**
+ * @brief 将新暂存候选的TOA结果写入槽位。
+ * @param block 非NULL当前借用块。
+ * @param event 非NULL暂存候选。
+ * @param slot 槽位0..3。
+ * @param channel 选定声道。
+ * @return 无返回值；待后继块时ready=false，Complete后队列保留重试。
  */
 static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
     uint8_t slot,uint8_t channel)
 {
-    staged_toa_ok[slot]=false;staged_toa[slot]=0.0;staged_toa_anchor[slot]=0U;
-    staged_toa_position[slot]=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U};
-    uint64_t anchor=0U;
-    if(event->onset_frame>TOA_LEFT_MARGIN)anchor=event->onset_frame-TOA_LEFT_MARGIN;
-    if(anchor<block->first_frame){Add(&diagnostics.toa_miss,1U);return;}
-    const uint64_t local=anchor-block->first_frame;
-    if(local>=block->frame_count){Add(&diagnostics.toa_miss,1U);return;}
-    const uint64_t available=block->frame_count-local;
-    if(available<TOA_SEARCH_WINDOW){Add(&diagnostics.toa_miss,1U);return;}
-    int16_t window[TOA_SEARCH_WINDOW];
-    for(uint16_t i=0U;i<TOA_SEARCH_WINDOW;++i)
-        window[i]=block->samples[2U*(size_t)(local+i)+channel];
-    double fraction=0.0;
-    if(!ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,window,&fraction)){
-        Add(&diagnostics.toa_miss,1U);return;
-    }
-    staged_toa[slot]=fraction;staged_toa_anchor[slot]=anchor;
-    staged_toa_ok[slot]=true;Add(&diagnostics.toa_ok,1U);
-    /* 保留旧TOA_US的double来源；模型只接收固定Q16副本。 */
-    if(!QuantizeToa(anchor,fraction,&staged_toa_position[slot])){
-        staged_toa_ok[slot]=false;Add(&diagnostics.toa_invalid,1U);
-    }
+    ToaEstimate estimate;
+    (void)EstimateToaCore(block,event,channel,&estimate);
+    staged_toa_ready[slot]=estimate.ready;
+    staged_toa_ok[slot]=estimate.valid;
+    staged_toa[slot]=estimate.fraction;
+    staged_toa_anchor[slot]=estimate.anchor;
+    staged_toa_position[slot]=estimate.position;
 }
 /** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
 static void ResetHistory(void)
@@ -244,6 +294,14 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
         for(uint8_t i=0U;i<count;++i){
             QueuedCandidate *item=&queue_working[(head+i)%SOUND_DETECTOR_QUEUE_CAPACITY];
             if(!item->class_ready)item->class_ready=ClassifyCandidate(block,&item->event);
+            if(!item->toa_ready){
+                ToaEstimate estimate;
+                if(EstimateToaCore(block,&item->event,diagnostics.channel,&estimate)){
+                    item->toa_ready=true;item->toa_valid=estimate.valid;
+                    item->toa_anchor=estimate.anchor;item->toa_fraction=estimate.fraction;
+                    item->toa=estimate.position;
+                }
+            }
         }
     }
     int16_t batch[SOUND_DETECTOR_BATCH_MAX_FRAMES];
@@ -309,7 +367,7 @@ bool SoundDetectorService_Complete(bool accepted)
         if(count==SOUND_DETECTOR_QUEUE_CAPACITY){Add(&diagnostics.dropped,1U);continue;}
         const uint8_t tail=(uint8_t)((head+count)%SOUND_DETECTOR_QUEUE_CAPACITY);
         queue[tail]=(QueuedCandidate){staged[i],staged_ms,sequence,
-            staged_toa_anchor[i],staged_toa[i],staged_toa_ok[i],
+            staged_toa_anchor[i],staged_toa[i],staged_toa_ok[i],staged_toa_ready[i],
             staged_toa_position[i],staged_class_ready[i]};++count;
     }
     active=stage_valid=false;staged_count=0U;staged_total=0U;return true;
@@ -348,7 +406,7 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
         head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;Add(&diagnostics.dropped,1U);
     }
     char line[256];
-    if(count!=0U && queue[head].class_ready && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
+    if(count!=0U && queue[head].class_ready && queue[head].toa_ready && (uint32_t)(now_ms-last_event_ms)>=EVENT_LOG_PERIOD_MS)
     {
         const QueuedCandidate item=queue[head];head=(uint8_t)((head+1U)%SOUND_DETECTOR_QUEUE_CAPACITY);--count;
         last_event_ms=now_ms;char first[21],confirmed[21],toa_us[21]="NA";

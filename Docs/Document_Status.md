@@ -38,6 +38,7 @@
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
 | [M4.3.9结果周期刷新/计数](Milestones/M4_3_9_Result_Refresh.md) | 软件完成·无ACK/未烧录 | A每500ms重发同ID；B刷新2s；`$MEASURE_RESULT_STATE`计数 |
+| [M4.3.26 TOA跨块补窗](Milestones/M4_3_26_TOA_Cross_Block.md) | 软件完成·短验 | 块尾TOA等待下一块拼接；标准声期间不再TOA_US=NA；完整10次待测 |
 | [M4.3.25 A/B温度共享](Milestones/M4_3_25_Temperature_Share.md) | 实物验证PASS | A一只DHT11经TEMP UDP共享；B UI显示同温度/声速，无需第二传感器 |
 | [M4.3.24 PPS 10分钟长稳](Milestones/M4_3_24_PPS_Long_Stability.md) | 长稳PASS(600s) | A 599/599 QUALIFIED；B无FAULT/MISSED；DOMAIN无掉域 |
 | [M4.3.23 PPS FAULT恢复](Milestones/M4_3_23_PPS_Fault_Recovery.md) | 软件完成·短时运行通过 | FAULT后1s重试；A恢复QUALIFIED/B需重新锁定；FAULTS/LAST_FAULT日志 |

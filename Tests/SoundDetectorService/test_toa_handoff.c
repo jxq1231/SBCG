@@ -81,14 +81,16 @@ int main(void)
     SoundDetectorService_Process(250U,&health);
     CHECK(!last_called && submits==0U && invalidations>0U);
 
-    /* 块内完整窗不足时保留能量候选，但只交接MISSING，不得用FIRST+1伪造成功TOA。 */
+    /* 块尾不足的右窗在下一连续块到达后由已提交尾部+当前块补齐，不伪造FIRST+1。 */
     Setup(0U);
     for(unsigned i=8064U;i<8192U;++i)pcm[2U*i]=(int16_t)(i%2U ? 10000:-10000);
     CHECK(Deliver(0U,0U,BSP_AUDIO_HALF_FRAMES,true));
     ContinueClassification();
     SoundDetectorService_Process(250U,&health);
     CHECK(last_called && submits==1U);
-    CHECK(last_toa.status==SOUND_TOA_MISSING);
-    puts("PASS TOA handoff: complete window frame/Q16, End failure no submit, incomplete window MISSING");
+    CHECK(last_toa.status==SOUND_TOA_VALID);
+    CHECK(last_candidate.onset_frame==8064U);
+    CHECK(last_toa.frame==8009U && last_toa.fraction_q16==16384U);
+    puts("PASS TOA handoff: complete window frame/Q16, End failure no submit, cross-block tail completed");
     return 0;
 }

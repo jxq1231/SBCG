@@ -1,8 +1,8 @@
 /**
  * @file        test_toa_boundaries.c
- * @brief       验证真实检测服务只向TOA估算器交付当前块内的完整256帧窗口。
- * @details     真实能量检测器生成候选；估算器替身只记录调用及完整窗内容，确定性检出
- *              块尾不足或跨块缺左沿时的错误调用，同时验证候选保留、End拒绝及后续恢复；
+ * @brief       验证真实检测服务在块内/跨块完整256帧窗口才调用TOA估算器。
+ * @details     真实能量检测器生成候选；估算器替身记录调用，验证块尾/跨块由已提交尾部
+ *              和后继块补齐，同时验证End拒绝、候选过期及后续恢复；
  *              完整窗另覆盖名义微秒越界/非有限数拒绝及长十进制日志不损坏帧号。
  * @note        纯主机测试，不链接真实估算器；分类允许CPU尾部拼窗，TOA仍不跨块重组或补零。
  */
@@ -132,9 +132,7 @@ static void Deliver(uint64_t first_frame,uint32_t completed_ms,bool accepted)
 static void ContinueClassification(uint64_t first)
 {
     SoundDetectorService_Process(100U,&health);CHECK(candidate_logs==0U);
-    const unsigned calls=estimator_calls;
     memset(pcm,0,sizeof pcm);Deliver(first,170U,true);
-    CHECK(estimator_calls==calls);
 }
 
 /**
@@ -156,11 +154,11 @@ static void TestPartialTail(void)
     Setup(0U);Tone(8064U,8192U);Deliver(0U,0U,true);
     ContinueClassification(8192U);
     SoundDetectorService_Process(250U,&health);Trace("partial-tail");
-    CHECK(estimator_calls==0U);
-    CHECK(Snap().candidates==1U && Snap().toa_ok==0U && Snap().toa_miss==1U);
+    CHECK(estimator_calls==1U);
+    CHECK(Snap().candidates==1U && Snap().toa_ok==1U && Snap().toa_miss==0U);
     CHECK(candidate_logs==1U && strstr(last_candidate,",FIRST=8064,CONFIRMED=8191,")!=NULL);
-    CHECK(strstr(last_candidate,",TOA_US=NA\r\n")!=NULL);
-    puts("PASS partial-tail: 192 available frames rejected, energy candidate preserved with TOA_US=NA");
+    CHECK(strstr(last_candidate,",TOA_US=NA\r\n")==NULL);
+    puts("PASS partial-tail: right window completed from next block; no missing TOA");
 }
 
 /** @brief onset8000恰好留完整256帧，两声道都应原样交付默认估算器；无参数/返回值。 */
@@ -185,11 +183,11 @@ static void TestCrossBlockLeft(void)
     CHECK(Snap().candidates==0U && estimator_calls==0U);
     memset(pcm,0,sizeof pcm);Tone(0U,256U);Deliver(8192U,170U,true);
     SoundDetectorService_Process(250U,&health);Trace("cross-block-left");
-    CHECK(estimator_calls==0U);
-    CHECK(Snap().candidates==1U && Snap().toa_ok==0U && Snap().toa_miss==1U);
+    CHECK(estimator_calls==1U);
+    CHECK(Snap().candidates==1U && Snap().toa_ok==1U && Snap().toa_miss==0U);
     CHECK(candidate_logs==1U && strstr(last_candidate,",FIRST=8128,CONFIRMED=8255,")!=NULL);
-    CHECK(strstr(last_candidate,",TOA_US=NA\r\n")!=NULL);
-    puts("PASS cross-block-left: missing pre-onset PCM rejected without clipping anchor or suppressing candidate");
+    CHECK(strstr(last_candidate,",TOA_US=NA\r\n")==NULL);
+    puts("PASS cross-block-left: committed tail + current block complete the TOA window");
 }
 
 /** @brief 完整窗暂算后End失败不发布，清布防历史，后续完整候选可重新估算；无参数/返回值。 */
@@ -208,24 +206,15 @@ static void TestRejectedAndRecovery(void)
 }
 
 /** @brief 不完整候选输出NA后，等待原24000帧冷却再验证完整候选不沿用失效状态；无参数/返回值。 */
-static void TestMissingAndRecovery(void)
+static void TestPendingExpiry(void)
 {
     Setup(0U);Tone(8064U,8192U);Deliver(0U,0U,true);
-    ContinueClassification(8192U);
-    SoundDetectorService_Process(250U,&health);
-    CHECK(strstr(last_candidate,",TOA_US=NA\r\n")!=NULL);
-    /* 已提交候选保留原冷却规则；三个连续静默块跨过24000帧后才允许再次布防。 */
-    memset(pcm,0,sizeof pcm);
-    Deliver(16384U,470U,true);Deliver(24576U,640U,true);
-    CHECK(Snap().armed && estimator_calls==0U);
-    memset(pcm,0,sizeof pcm);Tone(1024U,1280U);ExpectWindow(960U);
-    Deliver(32768U,810U,true);SoundDetectorService_Process(1060U,&health);Trace("missing-recovery");
-    CHECK(estimator_calls==1U && Snap().toa_ok==1U && Snap().toa_miss==1U);
-    CHECK(Snap().candidates==2U && candidate_logs==2U);
-    CHECK(strstr(last_candidate,",FIRST=33792,CONFIRMED=33919,")!=NULL);
-    CHECK(strstr(last_candidate,",TOA_US=702859\r\n")!=NULL);
-    puts("PASS missing-recovery: later complete event restores valid TOA without stale window state");
+    SoundDetectorService_Process(1000U,&health);
+    CHECK(estimator_calls==0U && candidate_logs==0U && Snap().pending==0U);
+    CHECK(Snap().toa_ok==0U && Snap().toa_miss==0U);
+    puts("PASS pending-expiry: no next block -> no fabricated TOA, candidate expired");
 }
+
 
 /** @brief 合法极大块首仍完成局部估算，但名义微秒超过uint64范围必须输出NA；无参数/返回值。 */
 static void TestLargeFrameOverflow(void)
@@ -290,7 +279,7 @@ int main(int argc,char **argv)
     if(strcmp(scenario,"all")==0 || strcmp(scenario,"complete-boundary")==0){TestCompleteBoundary();matched=true;}
     if(strcmp(scenario,"all")==0 || strcmp(scenario,"cross-block-left")==0){TestCrossBlockLeft();matched=true;}
     if(strcmp(scenario,"all")==0 || strcmp(scenario,"rejected-recovery")==0){TestRejectedAndRecovery();matched=true;}
-    if(strcmp(scenario,"all")==0 || strcmp(scenario,"missing-recovery")==0){TestMissingAndRecovery();matched=true;}
+    if(strcmp(scenario,"all")==0 || strcmp(scenario,"pending-expiry")==0){TestPendingExpiry();matched=true;}
     if(strcmp(scenario,"all")==0 || strcmp(scenario,"large-frame-overflow")==0){TestLargeFrameOverflow();matched=true;}
     if(strcmp(scenario,"all")==0 || strcmp(scenario,"long-decimal")==0){TestLongDecimal();matched=true;}
     if(strcmp(scenario,"all")==0 || strcmp(scenario,"invalid-numbers")==0){TestInvalidNumbers();matched=true;}

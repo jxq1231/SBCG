@@ -41,7 +41,7 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
  * @return true表示已完成暂存，false为无效元数据/生命周期；任何结果之后均须Complete。
  * @note 不打印、不发布、不调用Begin/End；优先使用64点批量入口，未满足快速资格时按原逐帧回退；
  *       8192帧可产生多个候选，超4条暂存损失待End成功才计数；完整2400帧分类可借已提交尾部，
- *       块尾不足则等待下一个连续块，不截短分类；TOA仍只用原当前块完整256帧窗。
+ *       块尾不足则等待下一个连续块，不截短分类；TOA同样用尾部+后继块拼完整256帧窗。
  */
 bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block);
 /**
