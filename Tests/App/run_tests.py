@@ -23,6 +23,8 @@ def main():
         sources = [root / "Tests/App" / (name + ".c"), root / "App/app_main.c"]
         if name in ("test_app_identity", "test_app_sync"):
             sources.append(root / "App/BSP/board_identity.c")
+        if name == "test_app_sync":
+            sources.append(root / "App/Sync/time_domain.c")
         command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic",
                    "-DSBCG_USE_LWIP=1", "-DSBCG_USE_AUDIO=1", "-DSBCG_USE_AUDIO_ANCHOR=1", "-DSBCG_USE_AUDIO_MAP=1",
                    *flags, "-I", str(root / "Tests/App/stubs"), "-I", str(root / "App"),
