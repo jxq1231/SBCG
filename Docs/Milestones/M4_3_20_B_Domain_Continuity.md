@@ -1,6 +1,6 @@
 # M4.3.20 B共同域连续性修复（软件完成，硬件待复验）
 
-<!-- doc-status: m4.3.20-b-domain-continuity-software-complete-hardware-pending; reviewed: 2026-10-27 -->
+<!-- doc-status: m4.3.20-b-domain-continuity-hardware-verified; reviewed: 2026-10-27 -->
 
 ## 问题
 
@@ -27,7 +27,12 @@ $PPS,ROLE=B,STATE=RATE_REQUALIFY
 - `Tests/BoardSync/run_tests.py` PASS；
 - Debug/Release构建PASS；
 - 已烧当前测试镜像到A/B；
-- 实物run04暂未建立DOMAIN，原因是**A板事件UDP绑定失败**（`$SOUND_EVENT_STATE INIT_ERR`持续增长，B为0），A未发DOMAIN REQ；尚未验证本修复的真正效果。
+- run04曾因A事件UDP PCB耗尽未建立DOMAIN；提高`MEMP_NUM_UDP_PCB=10`后run05验证：
+  ```text
+  A/B DOMAIN VALID=1 at ~19s
+  持续60s无掉域
+  B在TRACKING/RATE_REQUALIFY下不再撤域
+  ```
 
 ## 边界
 

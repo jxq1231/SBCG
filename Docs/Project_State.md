@@ -22,7 +22,7 @@
 
 **M4.2.3-B扫频批量接入已完成静默实机验收，主动标准音频待验。** 当时A板烧录`SBCG-M4.2-BATCH`（Debug前缀26a6496eb5ed，功能提交`743e027`）；约70秒静默采集SCAN最大3ms（原59ms）、DONE_MAX_MS=831ms、CAND32/DONE32、丢弃/日志/音频错误全0，原候选256/128与扫频128/64门限及Begin/End事务未迁移。主机合成压力已由`c6af223`完成，不再列为待做；它不是真实时序回放。MATCH 10/10、双板与声学精度未验收。[静默和压力证据](Milestones/M4_2_3_B_Batch_Scan.md)。
 
-**M4.3.21 A事件UDP PCB池耗尽（2026-10-27）。** 诊断日志确认A板`udp_new()`返回NULL；LwIP `MEMP_NUM_UDP_PCB=6`，A已有PTP2+heartbeat+probe+chirp+time exchange共6个，事件需第7个。必须用CubeMX把`MEMP_NUM_UDP_PCB`提高到至少8/建议10后重新生成，不能手改`.ioc`/`lwipopts.h`。见[M4.3.21记录](Milestones/M4_3_21_A_Event_UDP_PCB.md)。
+**M4.3.21 A事件UDP PCB池耗尽已修复（2026-10-27）。** 根因为`MEMP_NUM_UDP_PCB=6`，A的PTP2+heartbeat+probe+chirp capture+time exchange占满，事件需第7个。CubeMX已改为10并重新生成；run05 A `INIT_ERR=0`、无`$SOUND_EVENT_BIND`，A/B DOMAIN约19s建立并持续60s无掉域。见[M4.3.21记录](Milestones/M4_3_21_A_Event_UDP_PCB.md)。
 
 **M4.3.20 B共同域连续性修复（软件完成，硬件待复验，2026-10-27）。** B板改为`offset_valid`即可（TRACKING不拆域），PPS接受有界RATE_REQUALIFY；单元测试通过。实物run04因A板事件UDP绑定失败（A `INIT_ERR`增长、B为0）未建立DOMAIN，尚未验证效果。见[M4.3.20记录](Milestones/M4_3_20_B_Domain_Continuity.md)。
 

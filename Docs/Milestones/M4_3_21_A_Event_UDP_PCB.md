@@ -1,6 +1,6 @@
 # M4.3.21 A板事件UDP PCB池耗尽诊断
 
-<!-- doc-status: m4.3.21-a-event-udp-pcb-exhaustion-confirmed-cubemx-fix-required; reviewed: 2026-10-27 -->
+<!-- doc-status: m4.3.21-a-event-udp-pcb-exhaustion-cubemx-fixed-hardware-verified; reviewed: 2026-10-27 -->
 
 ## 现象
 
@@ -50,21 +50,30 @@ UDPTimeExchange：1个
 
 `UDPSoundEvent`需要第7个PCB，因此A板`udp_new()`失败。B板可能有一个可选socket尚未实际绑定，所以暂时未触发；这不是A/B固件差异。
 
-## 需要CubeMX修改
+## CubeMX修复与硬件验证
 
-在CubeMX LwIP配置中把：
+用户已在CubeMX把`LWIP.MEMP_NUM_UDP_PCB`从`6`改为`10`，并重新生成：
 
 ```text
-MEMP_NUM_UDP_PCB
+SBCG.ioc: LWIP.MEMP_NUM_UDP_PCB=10
+LWIP/Target/lwipopts.h: #define MEMP_NUM_UDP_PCB 10
 ```
 
-从`6`改为至少`8`（建议`10`，留余量），重新生成工程后构建、烧两板。
+构建后烧A/B，run05实物结果：
 
-**不得手改`.ioc`或生成的`lwipopts.h`。** 本仓库规则要求LwIP选项由CubeMX维护。
+```text
+A: INIT_ERR=0，$SOUND_EVENT_BIND=0条
+B: INIT_ERR=0
+A: $DOMAIN,VALID=1 at 19.27s
+B: $DOMAIN,VALID=1 at 19.07s
+两板TOKEN=3171538039
+60秒内DOMAIN仅1条建立记录，无掉域
+```
+
+A板事件UDP绑定问题已解决；B板在`TRACKING/RATE_REQUALIFY`下共同域保持稳定，M4.3.20修复同时得到实物验证。
 
 ## 边界
 
 - 本诊断不改变音频、测距或同步结论；
-- A/B当前烧录的是含诊断日志的同一Release镜像；
-- B域连续性修复尚未在A板能绑定后被硬件验证；
-- 未完成音频闭合、标准声、PPS示波器或距离验收。
+- 未播放标准声，未完成音频闭合；
+- 未完成标准声身份、配对距离、PPS示波器或物理精度验收。
