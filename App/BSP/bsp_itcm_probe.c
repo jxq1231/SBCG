@@ -7,7 +7,7 @@
 #include "BSP/bsp_itcm_probe.h"
 #include <stddef.h>
 
-#define ITCM_PROBE_WORDS 64U
+#define ITCM_PROBE_WORDS 256U
 #define ITCM_PROBE_BYTES (ITCM_PROBE_WORDS * 4U)
 
 /** @brief 放在ITCM的探测数组；volatile防止编译器把回读优化掉。 */
