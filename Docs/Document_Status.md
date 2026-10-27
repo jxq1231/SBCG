@@ -35,6 +35,7 @@
 | [M4.2.7单板TOA](Milestones/M4_2_7_A_Single_Board_TOA.md) | 实物链路成立·整体精度未过 | 实验版本、全事件/背景候选及名义采样轴限制 |
 | [标准声选择契约](../Data/Audio/standard_selection.json) | 已选定·识别未通过 | 当前chirp WAV/模板哈希、10次时刻冻结；MATCH0仍未解决；asset/selection only |
 | [M4.3.9结果周期刷新/计数](Milestones/M4_3_9_Result_Refresh.md) | 软件完成·无ACK/未烧录 | A每500ms重发同ID；B刷新2s；`$MEASURE_RESULT_STATE`计数 |
+| [M4.3.22 PPS示波器相位](Milestones/M4_3_22_PPS_Scope.md) | 操作者实测·满足10µs | 10次max235ns/mean93.9ns；鳄鱼夹未校偏斜，不能证明10ns |
 | [M4.3.21 A事件UDP PCB耗尽](Milestones/M4_3_21_A_Event_UDP_PCB.md) | 已修复·硬件验证 | CubeMX池6→10；run05 A INIT_ERR=0，A/B DOMAIN 60s稳定 |
 | [M4.3.20 B域连续性](Milestones/M4_3_20_B_Domain_Continuity.md) | 软件完成·A绑定失败/待复验 | B TRACKING+有界RATE不再掉域；run04 A事件UDP bind失败未验证 |
 | [事件阻断修复计划](Plans/2026-10-27_Event_Blockers_Fix.md) | 软件完成·未烧录 | 配对3000ms、跨块2400帧分类、App回归；首次2秒/标定/CLAP另列 |
