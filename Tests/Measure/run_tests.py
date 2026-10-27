@@ -20,6 +20,8 @@ for option in ('-O0','-O2'):
          ['App/Measure/sound_pair.c','App/Network/measurement_wire.c']),
         ('test_measurement_gate','Tests/Measure/test_measurement_gate.c',
          ['App/Measure/measurement_gate.c']),
+        ('test_ranging_tracker','Tests/Measure/test_ranging_tracker.c',
+         ['App/Measure/ranging_tracker.c']),
         ('test_result_exchange_state','Tests/Measure/test_result_exchange_state.c',
          ['App/Measure/result_exchange_state.c'])):
         exe=out/(name+'_'+option[1:]+'.exe')
