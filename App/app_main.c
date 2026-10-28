@@ -485,7 +485,7 @@ static void HandleDomainMessage(const DomainMessage *message)
     }
 }
 /**
- * @brief A周期发REQ并检查对端超时；B只检查超时（ACK由回调发）。
+ * @brief A每500ms至多尝试一次REQ并检查对端超时；B只检查超时（ACK由回调发）。
  * @param now_ms 当前HAL毫秒。
  * @return 无返回值；在事件取出、发送及配对处理前同步UDP有效域。
  * @note 撤域或换域会清除UDP旧候选；DOMAIN握手仍通过既有独立路径收发。
@@ -535,8 +535,9 @@ static void ServiceDomain(uint32_t now_ms)
     static uint32_t last_request_ms;
     if((uint32_t)(now_ms-last_request_ms)>=500U)
     {
-        if(UDPSoundEvent_SendDomainRequest(now_ms,domain.id))
-            last_request_ms=now_ms;
+        /* 失败也占用本次节拍，防止链路未就绪时按前台轮次重试。 */
+        last_request_ms=now_ms;
+        (void)UDPSoundEvent_SendDomainRequest(now_ms,domain.id);
     }
 }
 /**

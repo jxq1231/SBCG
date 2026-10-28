@@ -157,6 +157,11 @@ def main():
         a.cmd('SEND 0')
         for t in range(10050,11251,50):step(t,5 if t==10050 else 0)
         failed=status_packets(a,10050)
+        domain_failed=[p for p in a.history if p['tick_ms']>=10050 and
+                       p['hex'].startswith('444f4d4e') and not p['ok']]
+        check(len(domain_failed)>=2 and
+              all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(domain_failed,domain_failed[1:])),
+              'failed DOMAIN requests also preserve 500ms retry cadence')
         check(len(failed)>=3 and all(not p['ok'] for p in failed),'send failures are observed')
         check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(failed,failed[1:])),
               'failed sends preserve 500ms retry cadence')
