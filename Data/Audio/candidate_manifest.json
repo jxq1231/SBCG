@@ -8,18 +8,21 @@
   "event_frames": 2400,
   "event_duration_ms": 50,
   "fade_frames_each_edge": 48,
+  "playback_event_frames": 2400,
+  "playback_event_duration_ms": 50,
+  "playback_event_definition": "one 50ms linear 2->6kHz chirp per event",
   "peak_full_scale_limit": 0.5,
   "playback_event_start_frames": [
-    48000,
-    144000,
-    240000,
-    336000,
-    432000,
-    528000,
-    624000,
-    720000,
-    816000,
-    912000
+    0,
+    96000,
+    192000,
+    288000,
+    384000,
+    480000,
+    576000,
+    672000,
+    768000,
+    864000
   ],
   "template_origin": "frame zero; first sample is zero due to fade, not an energy-threshold onset",
   "ideal_autocorrelation": {
@@ -47,7 +50,7 @@
       "duration_s": 20.0,
       "compression": "NONE",
       "byte_count": 1920044,
-      "sha256": "56dedc456145b5f268c8fa45e3e6fbcccc618eec5b961135ea7beaccf192878a"
+      "sha256": "1e84db896c649af205eecf88cd4afeae3c15dba81c19e53c658e160394762235"
     }
   }
 }

@@ -14,6 +14,9 @@ EVENT_FRAMES = 2400
 FADE_FRAMES = 48
 TEMPLATE = 'chirp_2-6khz_50ms_template.wav'
 PLAYBACK = 'standard_chirp_2-6khz_10x_20s.wav'
+PLAYBACK_EVENT_FRAMES = 4800
+PLAYBACK_RAMP_FRAMES = 240
+PLAYBACK_AMPLITUDE = 0.75
 
 
 def waveform(start_hz, end_hz):
@@ -28,11 +31,30 @@ def waveform(start_hz, end_hz):
     return np.rint(0.5 * 32767 * envelope * np.cos(phase_rad)).astype('<i2')
 
 
+def playback_event():
+    """生成100ms双chirp：50ms上扫2→6kHz + 50ms下扫6→2kHz，相位连续。"""
+    up_t = np.arange(EVENT_FRAMES, dtype=np.float64) / RATE_HZ
+    up_slope = (6000.0 - 2000.0) / (EVENT_FRAMES / RATE_HZ)
+    up_phase = 2.0 * np.pi * (2000.0 * up_t + 0.5 * up_slope * up_t**2)
+    up = np.cos(up_phase)
+    phase_end = up_phase[-1]
+    down_t = np.arange(EVENT_FRAMES, dtype=np.float64) / RATE_HZ
+    down_slope = (2000.0 - 6000.0) / (EVENT_FRAMES / RATE_HZ)
+    down = np.cos(phase_end + 2.0 * np.pi * (6000.0 * down_t + 0.5 * down_slope * down_t**2))
+    signal = np.concatenate((up, down))
+    envelope = np.ones(PLAYBACK_EVENT_FRAMES)
+    ramp = 0.5 - 0.5 * np.cos(np.pi * np.arange(PLAYBACK_RAMP_FRAMES) /
+                               (PLAYBACK_RAMP_FRAMES - 1))
+    envelope[:PLAYBACK_RAMP_FRAMES] = ramp
+    envelope[-PLAYBACK_RAMP_FRAMES:] = ramp[::-1]
+    return np.rint(PLAYBACK_AMPLITUDE * 32767 * envelope * signal).astype('<i2')
+
+
 def expected_files():
-    """模板无前导静音；20秒文件在1、3、…、19秒放入完全相同的模板。"""
+    """模板无前导静音；20秒文件在0、2、…、18秒放入单50ms chirp事件。"""
     template = waveform(2000, 6000)
     playback = np.zeros(20 * RATE_HZ, dtype='<i2')
-    for start_s in range(1, 20, 2):
+    for start_s in range(0, 20, 2):
         begin = start_s * RATE_HZ
         playback[begin:begin + EVENT_FRAMES] = template
     return {TEMPLATE: template, PLAYBACK: playback}
@@ -63,7 +85,11 @@ def expected_manifest():
         'sample_rate_hz': RATE_HZ, 'format': 'mono signed PCM16 little-endian WAV',
         'start_frequency_hz': 2000, 'end_frequency_hz_at_50ms_exclusive': 6000,
         'event_frames': EVENT_FRAMES, 'event_duration_ms': 50, 'fade_frames_each_edge': FADE_FRAMES,
-        'peak_full_scale_limit': 0.5, 'playback_event_start_frames': [RATE_HZ * s for s in range(1, 20, 2)],
+        'playback_event_frames': EVENT_FRAMES,
+        'playback_event_duration_ms': 50,
+        'playback_event_definition': 'one 50ms linear 2->6kHz chirp per event',
+        'peak_full_scale_limit': 0.5,
+        'playback_event_start_frames': [RATE_HZ * s for s in range(0, 20, 2)],
         'template_origin': 'frame zero; first sample is zero due to fade, not an energy-threshold onset',
         'ideal_autocorrelation': {
             'metric': 'max_abs_R_lag_ge_24_samples_div_R_zero; guard=0.5ms; no noise/channel model',
