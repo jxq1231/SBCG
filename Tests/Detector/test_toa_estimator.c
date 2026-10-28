@@ -129,6 +129,36 @@ int main(void)
     CHECK(!ToaEstimator_EstimateBackward(NULL,full,&fraction));
     CHECK(!ToaEstimator_EstimateBackward(&(ToaBackwardConfig){16U,128U,8U,4U},full,&fraction));
     CHECK(!ToaEstimator_EstimateBackward(&(ToaBackwardConfig){256U,128U,8U,9U},full,&fraction));
+    /* 多候选：四个分离的连续过阈段应枚举为4个递增候选，且首候选与单值接口一致。 */
+    {
+        int16_t bursts[256];memset(bursts,0,sizeof bursts);
+        const uint16_t starts[4]={40U,80U,120U,160U};
+        for(unsigned b=0U;b<4U;++b){
+            for(unsigned k=0U;k<8U;++k)bursts[starts[b]+k]=(int16_t)20000;
+        }
+        ToaBackwardCandidates candidates={0U,{0.0}};
+        double first=0.0;
+        CHECK(ToaEstimator_EstimateBackward(&ToaBackward_DefaultConfig,bursts,&first));
+        CHECK(ToaEstimator_EstimateCandidates(&ToaBackward_DefaultConfig,bursts,&candidates));
+        CHECK(candidates.count==4U);
+        CHECK(fabs(candidates.fractions[0]-first)<1e-9);
+        for(unsigned i=1U;i<candidates.count;++i){
+            CHECK(candidates.fractions[i]>candidates.fractions[i-1]);
+        }
+        int16_t five[256];memset(five,0,sizeof five);
+        const uint16_t five_starts[5]={30U,60U,90U,120U,150U};
+        for(unsigned b=0U;b<5U;++b){
+            for(unsigned k=0U;k<8U;++k)five[five_starts[b]+k]=(int16_t)20000;
+        }
+        CHECK(ToaEstimator_EstimateCandidates(&ToaBackward_DefaultConfig,five,&candidates));
+        CHECK(candidates.count==TOA_BACKWARD_MAX_CANDIDATES);
+        memset(bursts,0,sizeof bursts);
+        candidates.count=9U;
+        CHECK(!ToaEstimator_EstimateCandidates(&ToaBackward_DefaultConfig,bursts,&candidates));
+        CHECK(candidates.count==0U);
+        CHECK(!ToaEstimator_EstimateCandidates(NULL,bursts,&candidates));
+        CHECK(!ToaEstimator_EstimateCandidates(&ToaBackward_DefaultConfig,bursts,NULL));
+    }
     printf("PASS toa estimator: integer/fractional leading edges, adaptive threshold, boundaries, grid-free backward\n");
     return 0;
 }

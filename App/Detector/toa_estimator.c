@@ -151,3 +151,82 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
     *out_fraction=fraction;
     return true;
 }
+
+/**
+ * @brief   枚举同一窗内前4个有效上升沿候选。
+ * @param   config 非NULL有效配置，window_frames 32..512、run_samples 2..8。
+ * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本次借用。
+ * @param   out 非NULL输出；成功时count为1..4，失败时count=0。
+ * @return  true表示至少找到一个候选；false为参数非法或无有效前沿。
+ * @note    复用ToaEstimator_EstimateBackward的峰值/阈值/能量段/连续性规则；
+ *          第1个候选与单值接口完全一致，后续候选只追加不改变默认路径。
+ */
+bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *config,
+                                     const int16_t *samples,
+                                     ToaBackwardCandidates *out)
+{
+    if(out!=NULL){out->count=0U;}
+    if(config==NULL || samples==NULL || out==NULL ||
+       config->window_frames<32U || config->window_frames>TOA_MAX_FRAMES ||
+       config->threshold_pcm>TOA_MAX_PCM ||
+       config->run_samples<2U || config->run_samples>8U){return false;}
+    uint32_t peak=0U;
+    for(uint16_t i=0U;i<config->window_frames;++i){
+        const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+        if(magnitude>peak){peak=magnitude;}
+    }
+    if(peak==0U){return false;}
+    uint32_t limit=config->threshold_pcm;
+    if(config->relative_scale>0U && config->relative_scale<=32U){
+        const uint32_t relative=peak/config->relative_scale;
+        if(relative>limit){limit=relative;}
+    }
+    if(limit==0U){return false;}
+    const uint16_t frames=config->window_frames;
+    uint64_t emax=0U;
+    for(uint16_t i=0U;i<frames;++i){
+        const uint64_t energy=ToaEnergyAt(samples,frames,(int32_t)i);
+        if(energy>emax){emax=energy;}
+    }
+    if(emax==0U){return false;}
+    const uint64_t elimit=emax>>3U;
+    uint16_t seg_start=0U;
+    for(uint16_t i=0U;i<frames;++i){
+        if(ToaEnergyAt(samples,frames,(int32_t)i)>=elimit){seg_start=i;break;}
+    }
+    int32_t below=-1;
+    for(int32_t i=(int32_t)seg_start;i>=0;--i){
+        const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+        if(magnitude<limit){below=i;break;}
+    }
+    if(below<0){return false;}
+    int32_t scan=below+1;
+    while(scan<(int32_t)frames && out->count<TOA_BACKWARD_MAX_CANDIDATES){
+        int32_t cross=-1;
+        for(int32_t i=scan;i<(int32_t)frames;++i){
+            const uint32_t before=(uint32_t)(samples[i-1]<0 ? -(int32_t)samples[i-1]:samples[i-1]);
+            if(before>=limit){continue;}
+            const uint32_t after=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+            if(after<limit){continue;}
+            cross=i;
+            break;
+        }
+        if(cross<0){break;}
+        uint16_t run=0U;
+        for(int32_t i=cross;i<(int32_t)frames;++i){
+            const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
+            if(magnitude<limit){break;}
+            ++run;
+            if(run>=config->run_samples){break;}
+        }
+        if(run<config->run_samples){scan=cross+1;continue;}
+        const double hi=(double)(samples[cross]<0 ? -(int32_t)samples[cross]:samples[cross]);
+        const double lo=(double)(samples[cross-1]<0 ? -(int32_t)samples[cross-1]:samples[cross-1]);
+        if(hi<=lo){scan=cross+1;continue;}
+        out->fractions[out->count]=(double)(cross-1)+
+            (double)((uint32_t)limit-lo)/(hi-lo);
+        ++out->count;
+        scan=cross+1;
+    }
+    return out->count!=0U;
+}

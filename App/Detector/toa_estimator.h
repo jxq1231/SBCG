@@ -56,6 +56,32 @@ typedef struct {
 /** @brief 试验默认：256点窗、阈值128、相对峰值1/8、连续4样本过阈。 */
 extern const ToaBackwardConfig ToaBackward_DefaultConfig;
 
+/** @brief 一次估算最多保留的早/晚过阈候选数。 */
+#define TOA_BACKWARD_MAX_CANDIDATES 4U
+
+/**
+ * @brief 同一候选窗内的多个有效上升沿候选。
+ * @note  fractions按时间递增；count=0表示无有效前沿；调用方只读。
+ */
+typedef struct {
+    uint8_t count;
+    double fractions[TOA_BACKWARD_MAX_CANDIDATES];
+} ToaBackwardCandidates;
+
+/**
+ * @brief   枚举同一候选窗内的前4个有效上升沿候选。
+ * @param   config 非NULL有效配置，规则与ToaEstimator_EstimateBackward相同。
+ * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本调用借用。
+ * @param   out 非NULL输出；成功时count为1..4，失败时清为0。
+ * @return  true表示至少找到一个候选；false表示参数非法、无峰值、
+ *          整窗已过阈或首个候选后无连续过阈段。
+ * @note    第1个候选与ToaEstimator_EstimateBackward的第一前沿完全一致；
+ *          其余候选按时间递增追加，供上层做早/晚齿选择。纯计算，无状态。
+ */
+bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *config,
+                                     const int16_t *samples,
+                                     ToaBackwardCandidates *out);
+
 /**
  * @brief   基于能量包络起跳定位直达前沿，返回相对samples[0]的子帧位置。
  * @param   config 非NULL有效配置，只读。
