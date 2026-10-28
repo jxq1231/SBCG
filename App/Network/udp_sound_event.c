@@ -34,7 +34,8 @@ static UDPSoundEvent_RangingAckSink ranging_ack_sink;
 static UDPSoundEvent_RangingSessionSink ranging_session_sink;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
-static SoundPairManager pair_manager;
+/* 配对状态只由前台CPU访问，放ITCM避免挤占已满的DTCM/RAM；无DMA/IRQ。 */
+static SoundPairManager pair_manager __attribute__((section(".ItcmState"),aligned(32)));
 static uint32_t last_bind_ms, last_state_ms, last_bind_log_ms;
 static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
 static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
@@ -209,14 +210,15 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         Increment(&rx_ok);Increment(&result_rx_ok);
         return;
     }
-    if(packet->tot_len!=SOUND_EVENT_WIRE_BYTES)
+    const uint16_t wire_length=packet->tot_len;
+    if(wire_length!=SOUND_EVENT_WIRE_V1_BYTES && wire_length!=SOUND_EVENT_WIRE_BYTES)
     {Increment(&rx_bad);pbuf_free(packet);return;}
     uint8_t data[SOUND_EVENT_WIRE_BYTES];
-    if(pbuf_copy_partial(packet,data,sizeof data,0)!=sizeof data)
+    if(pbuf_copy_partial(packet,data,wire_length,0)!=wire_length)
     {Increment(&rx_bad);pbuf_free(packet);return;}
     pbuf_free(packet);
     SoundEventRecord event;
-    if(SoundEventWire_Decode(data,sizeof data,&event)!=SOUND_EVENT_WIRE_OK)
+    if(SoundEventWire_Decode(data,wire_length,&event)!=SOUND_EVENT_WIRE_OK)
     {Increment(&rx_bad);return;}
     SoundEventSide local;
     if(!LocalSide(&local) || event.side==local)
@@ -290,7 +292,8 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     local_profile=*profile;read_tick=tick;emit=log;
     IP_ADDR4(&peer,profile->peer_ip[0],profile->peer_ip[1],
              profile->peer_ip[2],profile->peer_ip[3]);
-    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,SOUND_EVENT_PAIR_TIMEOUT_MS};
+    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,SOUND_EVENT_PAIR_TIMEOUT_MS,
+                                  320U,32U,3U};
     if(!SoundPair_Init(&pair_manager,&pair_config))return false;
     last_bind_ms=now_ms-1000U;last_state_ms=now_ms;
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;

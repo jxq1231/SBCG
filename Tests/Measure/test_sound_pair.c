@@ -12,7 +12,13 @@ static SoundEventRecord Event(SoundEventSide side,uint32_t seq,uint64_t time_ns)
 }
 static SoundPairConfig Config(void)
 {
-    const SoundPairConfig c={40000000U,10000U,343000U,50U,50U};return c;
+    const SoundPairConfig c={40000000U,10000U,343000U,50U,50U,0U,0U,0U};return c;
+}
+/** @brief 距离差mm转1/65536帧时间偏移，测试用343m/s。 */
+static int32_t OffsetQ16(int32_t delta_mm)
+{
+    const double ns=(double)delta_mm*1e9/343000.0;
+    return (int32_t)(ns*48000.0/1e9*65536.0);
 }
 int main(void)
 {
@@ -85,6 +91,26 @@ int main(void)
     b=Event(SOUND_SIDE_B,1U,1000000000U);
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_OK);
     assert(result.distance_mm==0U && result.direction==SOUND_DIRECTION_UNKNOWN);
-    puts("PASS sound pair: distance/direction, identity gates, out-of-order, duplicate, ambiguity, timeout");
+    /* B候选齿选择：基准390mm，候选含256/320/390/459，应选320而非390。 */
+    {
+        SoundPairConfig tooth=Config();
+        tooth.nominal_distance_mm=320U;tooth.tooth_jump_mm=32U;tooth.tooth_confirm=3U;
+        SoundPairManager tm;
+        assert(SoundPair_Init(&tm,&tooth));
+        SoundEventRecord ta=Event(SOUND_SIDE_A,10U,2000000000U);
+        SoundEventRecord tb=Event(SOUND_SIDE_B,10U,2000000000U+1137026U);
+        tb.toa_candidate_count=4U;
+        tb.toa_candidate_q16[0]=OffsetQ16(-134);
+        tb.toa_candidate_q16[1]=OffsetQ16(-70);
+        tb.toa_candidate_q16[2]=0;
+        tb.toa_candidate_q16[3]=OffsetQ16(69);
+        assert(SoundPair_Submit(&tm,&ta,0U));
+        assert(SoundPair_Submit(&tm,&tb,0U));
+        SoundPair_Process(&tm,0U);
+        assert(SoundPair_Take(&tm,&result));
+        assert(result.valid && result.distance_mm==320U);
+        puts("tooth selection: B candidate set selected 320 mm");
+    }
+    puts("PASS sound pair: distance/direction, identity gates, out-of-order, duplicate, ambiguity, timeout, tooth selection");
     return 0;
 }

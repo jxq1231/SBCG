@@ -17,9 +17,97 @@ static void Increment(uint32_t *value)
 /** @brief 配置基本合法性；不检查具体量程语义。 */
 static bool ConfigValid(const SoundPairConfig *config)
 {
-    return config != NULL && config->max_tdoa_ns > 0U &&
-           config->max_distance_mm > 0U && config->sound_speed_mm_s > 0U &&
-           config->min_quality <= 100U && config->pair_timeout_ms > 0U;
+    if (config == NULL || config->max_tdoa_ns == 0U ||
+        config->max_distance_mm == 0U || config->sound_speed_mm_s == 0U ||
+        config->min_quality > 100U || config->pair_timeout_ms == 0U)
+    { return false; }
+    if (config->nominal_distance_mm != 0U &&
+        (config->tooth_jump_mm == 0U || config->tooth_confirm < 1U ||
+         config->tooth_confirm > 8U))
+    { return false; }
+    return true;
+}
+/** @brief 1/65536帧的候选偏移转纳秒，四舍五入；无硬件访问。 */
+static int64_t Q16ToNs(int32_t offset_q16)
+{
+    const int64_t numerator = (int64_t)offset_q16 * (int64_t)SOUND_PAIR_NS_PER_SEC;
+    const int64_t denominator = 65536LL * 48000LL;
+    return numerator >= 0 ? (numerator + denominator / 2) / denominator :
+                            (numerator - denominator / 2) / denominator;
+}
+/**
+ * @brief 用A时间+已接受距离从B候选齿中选一个；无候选/未配置时保持原事件。
+ * @param manager 非NULL配对状态，允许更新接受/待确认距离。
+ * @param config 非NULL已校验配置，只读。
+ * @param a 非NULL A事件，仅读取time_ns。
+ * @param b 非NULL B事件，携带候选Q16偏移。
+ * @param out 非NULL输出B事件副本；无选择时复制b。
+ * @return 无返回值；只改B时间，不改A侧或配置。
+ * @note 候选距离按|candidate_time-a_time|*speed计算；一格跳变需连续确认。
+ */
+static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *config,
+                           const SoundEventRecord *a, const SoundEventRecord *b,
+                           SoundEventRecord *out)
+{
+    *out = *b;
+    if (config->nominal_distance_mm == 0U || b->toa_candidate_count == 0U ||
+        b->toa_candidate_count > SOUND_EVENT_MAX_TOA_CANDIDATES)
+    { return; }
+    const uint32_t reference = manager->accepted_valid ? manager->accepted_distance_mm :
+                               config->nominal_distance_mm;
+    uint32_t best_distance = 0U;
+    uint64_t best_time = b->time_ns;
+    bool have_best = false;
+    for (uint8_t i = 0U; i < b->toa_candidate_count; ++i)
+    {
+        const int64_t offset = Q16ToNs(b->toa_candidate_q16[i]);
+        if (offset < 0 && (uint64_t)(-offset) > b->time_ns) { continue; }
+        const uint64_t candidate_time = offset < 0 ? b->time_ns - (uint64_t)(-offset) :
+                                        b->time_ns + (uint64_t)offset;
+        const int64_t delta = (int64_t)candidate_time - (int64_t)a->time_ns;
+        const uint64_t magnitude = delta < 0 ? (uint64_t)(-(delta + 1)) + 1U :
+                                               (uint64_t)delta;
+        const uint64_t distance = (magnitude * config->sound_speed_mm_s +
+                                   SOUND_PAIR_NS_PER_SEC / 2U) / SOUND_PAIR_NS_PER_SEC;
+        if (!have_best ||
+            (distance > reference ? distance - reference : reference - distance) <
+            (best_distance > reference ? best_distance - reference : reference - best_distance))
+        {
+            best_distance = (uint32_t)distance;
+            best_time = candidate_time;
+            have_best = true;
+        }
+    }
+    if (!have_best) { return; }
+    if (!manager->accepted_valid)
+    {
+        manager->accepted_distance_mm = best_distance;
+        manager->accepted_valid = 1U;
+        manager->pending_count = 0U;
+    }
+    else if ((best_distance > manager->accepted_distance_mm ?
+              best_distance - manager->accepted_distance_mm :
+              manager->accepted_distance_mm - best_distance) <= config->tooth_jump_mm)
+    {
+        manager->accepted_distance_mm = best_distance;
+        manager->pending_count = 0U;
+    }
+    else
+    {
+        if (manager->pending_count != 0U &&
+            (best_distance > manager->pending_distance_mm ?
+             best_distance - manager->pending_distance_mm :
+             manager->pending_distance_mm - best_distance) <= config->tooth_jump_mm)
+        { ++manager->pending_count; }
+        else
+        { manager->pending_distance_mm = best_distance; manager->pending_count = 1U; }
+        if (manager->pending_count >= config->tooth_confirm)
+        {
+            manager->accepted_distance_mm = best_distance;
+            manager->pending_count = 0U;
+        }
+    }
+    out->time_ns = best_time;
 }
 /** @brief 结果清零；NULL安全。 */
 static void ClearResult(SoundPairResult *result)
@@ -209,8 +297,11 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
             break;
         }
         SoundPairResult result = {0};
+        SoundEventRecord selected_b;
+        SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
+                       &manager->events[1][pair_b], &selected_b);
         (void)SoundPair_Compute(&manager->config, &manager->events[0][pair_a],
-                                &manager->events[1][pair_b], &result);
+                                &selected_b, &result);
         used_a[pair_a] = true;
         used_b[pair_b] = true;
         if (result.valid) { Increment(&manager->stats.paired); }

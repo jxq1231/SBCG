@@ -13,8 +13,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SOUND_EVENT_WIRE_BYTES 36U
-#define SOUND_EVENT_WIRE_VERSION 1U
+/** @brief v1旧长度，仅用于兼容解码；新发送一律v2。 */
+#define SOUND_EVENT_WIRE_V1_BYTES 36U
+/** @brief v2固定长度：36字节旧字段+候选计数/保留+4个int32候选Q16偏移。 */
+#define SOUND_EVENT_WIRE_BYTES 56U
+#define SOUND_EVENT_WIRE_VERSION 2U
 /** @brief 线协议解码状态；OK才产生事件副本。 */
 typedef enum
 {
@@ -26,11 +29,11 @@ typedef enum
     SOUND_EVENT_WIRE_BAD_FIELD
 } SoundEventWireStatus;
 
-/** @brief 将事件编码为固定36字节协议；out容量不足或字段非法返回false。 */
+/** @brief 将事件编码为固定56字节v2协议；out容量不足或字段非法返回false。 */
 SoundEventWireStatus SoundEventWire_Encode(const SoundEventRecord *event,
                                            uint8_t *out, size_t capacity);
 
-/** @brief 解码固定协议；成功填充event并返回OK，失败不产生有效事件。 */
+/** @brief 解码v1/v2协议；成功填充event并返回OK，失败不产生有效事件。 */
 SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
                                            SoundEventRecord *event);
 

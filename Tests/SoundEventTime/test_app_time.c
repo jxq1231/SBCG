@@ -3,6 +3,7 @@
 #include "../App/test_app_main.c"
 #undef main
 #include "Detector/sound_event_time.h"
+#include "Detector/sound_detector_service.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Measure/measurement_gate.h"
@@ -34,6 +35,13 @@ void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out){*out=(BSP_AudioSnapshot){.ses
 void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot *snapshot){assert(!temperature_low && now==tick_ms && snapshot->last_callback_ms==now && takes==event_receives);++event_processes;}
 /** @brief App测试桩：无待取成功TOA事件，返回false。 */
 bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event){if(event)memset(event,0,sizeof *event);return false;}
+bool SoundDetectorService_GetToaCandidates(uint32_t sequence,
+    SoundDetectorServiceToaCandidates *out)
+{
+    (void)sequence;
+    if(out!=NULL)out->count=0U;
+    return false;
+}
 /** @brief App测试桩：初始化事件UDP不访问网络。 */
 bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *p,uint32_t(*tick)(void),UDPSoundEvent_Log log){(void)now;(void)p;(void)tick;(void)log;return true;}
 /** @brief App测试桩：不推进事件UDP。 */

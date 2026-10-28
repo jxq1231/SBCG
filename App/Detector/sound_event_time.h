@@ -25,6 +25,8 @@ typedef struct
     SoundToaStatus status;
     uint64_t frame;
     uint16_t fraction_q16;
+    uint8_t candidate_count;       /**< 0..4个早/晚候选；0表示旧单值。 */
+    int32_t candidate_offset_q16[4]; /**< 相对选中前沿的1/65536帧偏移。 */
 } SoundToaPosition;
 /** @brief 成功TOA事件的标量副本，供后续网络发布；不含PCM指针。 */
 typedef struct

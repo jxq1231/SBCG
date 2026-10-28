@@ -9,6 +9,19 @@
 #include "Detector/sound_detector.h"
 #include "BSP/bsp_audio.h"
 #define SOUND_DETECTOR_QUEUE_CAPACITY 4U
+/** @brief 最近一次已发布候选的B侧早/晚TOA偏移，供上层事件发布复制。 */
+typedef struct {
+    uint8_t count;
+    int32_t offset_q16[4];
+} SoundDetectorServiceToaCandidates;
+/**
+ * @brief 取指定候选序号的TOA候选偏移；只读，不访问PCM。
+ * @param sequence 非零候选序号。
+ * @param out 非NULL输出；找到时复制，未找到count=0。
+ * @return true表示命中最近发布缓存；false为参数非法或未找到。
+ */
+bool SoundDetectorService_GetToaCandidates(uint32_t sequence,
+    SoundDetectorServiceToaCandidates *out);
 extern const SoundDetectorConfig SoundDetectorService_DefaultConfig;
 /** @brief 服务计数饱和递增，pending含已验证且等待完整分类窗的队列条目，armed仅是能量检测布防。
  *  max_stage_ms为Stage内8192帧批量/逐帧回退暂算循环的最大HAL毫秒（不含入口校验/工作副本拷贝）；

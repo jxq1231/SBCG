@@ -79,6 +79,11 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,const int16_t
     CHECK(borrowed && config==&ToaBackward_DefaultConfig && samples!=NULL && out!=NULL);
     ++toa_calls;*out=9.25;return true;
 }
+bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *config,const int16_t *samples,
+                                     ToaBackwardCandidates *out)
+{
+    (void)config;(void)samples;if(out!=NULL)out->count=0U;return false;
+}
 /** @brief 记录归还后唯一标量交接；参数立即复制，返回true。 */
 bool SoundEventTime_SubmitToa(uint32_t now,uint32_t sequence,const SoundCandidate *event,
                              const SoundToaPosition *toa)

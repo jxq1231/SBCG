@@ -20,6 +20,11 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *c,const int16_t *s,d
 {
     (void)c;(void)s;CHECK(out!=NULL);*out=9.25;return true;
 }
+bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *c,const int16_t *s,
+                                     ToaBackwardCandidates *out)
+{
+    (void)c;(void)s;if(out!=NULL)out->count=0U;return false;
+}
 /** @brief 记录服务交接的候选和固定TOA；无返回值、不读PCM。 */
 bool SoundEventTime_SubmitToa(uint32_t now,uint32_t sequence,
                               const SoundCandidate *candidate,

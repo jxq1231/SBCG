@@ -24,6 +24,7 @@
 #endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
+#include "Detector/sound_detector_service.h"
 #include "Network/udp_sound_event.h"
 #include "Measure/measurement_result.h"
 #include "Detector/standard_sequence.h"
@@ -1189,6 +1190,13 @@ void App_Process(void)
             event.session = notice.session;
             event.sequence = notice.sequence;
             event.time_ns = notice.time_ns;
+            SoundDetectorServiceToaCandidates candidates;
+            if (SoundDetectorService_GetToaCandidates(notice.sequence, &candidates))
+            {
+                event.toa_candidate_count = candidates.count;
+                for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
+                    event.toa_candidate_q16[i] = candidates.offset_q16[i];
+            }
             (void)UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
 #else
             (void)notice;

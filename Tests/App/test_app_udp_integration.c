@@ -97,6 +97,9 @@ void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out)
 /** @brief 返回检测计数元数据。 @param out 可空输出。 @return 无返回值。 */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 {if(out)*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=event_delivered};}
+bool SoundDetectorService_GetToaCandidates(uint32_t sequence,
+    SoundDetectorServiceToaCandidates *out)
+{(void)sequence;if(out)out->count=0U;return false;}
 /** @brief 复制温度边界值。 @param now 毫秒。 @param out 可空输出。 @return 无返回值。 */
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)*out=host_temperature;}
 /** @brief 保存真实TEMP解码结果。 @param now 毫秒。 @param temperature_milli_c 毫摄氏度。 @param sound_speed_mm_s 声速。 @param version 版本。 @param manual 手动标志。 @return true。 */

@@ -47,6 +47,11 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
     *out_fraction=estimator_fraction;
     return true;
 }
+bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *config,
+    const int16_t *samples,ToaBackwardCandidates *out)
+{
+    (void)config;(void)samples;if(out!=NULL)out->count=0U;return false;
+}
 
 /** @brief 提供固定HAL毫秒读数；无参数，返回0，不访问实物。 */
 uint32_t BSP_Console_GetTickMs(void){return 0U;}

@@ -104,9 +104,9 @@ static void TestDelayedPeer(const BoardIdentityProfile *profile)
         UDPSoundEvent_SetTimeDomain(1U);
         UDPSoundEvent_Process(100U);
         SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,
-                                1U,1U,1U,1000000000U};
+                                1U,1U,1U,1000000000U,0U,{0,0,0,0}};
         SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,
-                                 1U,2U,2U,1001000000U};
+                                 1U,2U,2U,1001000000U,0U,{0,0,0,0}};
         unsigned before=pair_count;
         assert(SoundEventWire_Encode(&remote,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
         tick_ms=100U;
@@ -238,8 +238,8 @@ static void ReceiveEvent(const SoundEventRecord *event,uint32_t now_ms)
  */
 static void TestExpiryAndWrap(const BoardIdentityProfile *profile)
 {
-    SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,1U,1U,1U,1000000000U};
-    SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1001000000U};
+    SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,1U,1U,1U,1000000000U,0U,{0,0,0,0}};
+    SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1001000000U,0U,{0,0,0,0}};
     for(unsigned local_first=0U;local_first<2U;++local_first)
     {
         InitService(profile,100U);
@@ -280,8 +280,8 @@ static void TestExpiryAndWrap(const BoardIdentityProfile *profile)
  */
 static void TestDomainBoundary(const BoardIdentityProfile *profile)
 {
-    SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,1U,1U,1U,1000000000U};
-    SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1001000000U};
+    SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,1U,1U,1U,1000000000U,0U,{0,0,0,0}};
+    SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1001000000U,0U,{0,0,0,0}};
     assert(UDPSoundEvent_Init(0U,profile,Tick,Log));
     UDPSoundEvent_Process(100U);
     assert(!UDPSoundEvent_Send(100U,&local));
@@ -337,8 +337,8 @@ static void TestDomainBoundary(const BoardIdentityProfile *profile)
 static void TestPairingLimits(const BoardIdentityProfile *profile)
 {
     uint32_t rx_bad;
-    SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,1U,1U,1U,1000000000U};
-    SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1040000001U};
+    SoundEventRecord local={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_A,1U,1U,1U,1000000000U,0U,{0,0,0,0}};
+    SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1040000001U,0U,{0,0,0,0}};
     InitService(profile,100U);
     unsigned before=pair_count;
     assert(UDPSoundEvent_Send(100U,&local));

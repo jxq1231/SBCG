@@ -107,7 +107,7 @@ static bool CandidateValid(const SoundCandidate *candidate, uint32_t sequence,
 bool SoundEventTime_Submit(uint32_t now_ms, uint32_t sequence,
                            const SoundCandidate *candidate)
 {
-    SoundToaPosition missing = {SOUND_TOA_MISSING, 0U, 0U};
+    SoundToaPosition missing = {SOUND_TOA_MISSING, 0U, 0U, 0U, {0, 0, 0, 0}};
     if (!CandidateValid(candidate, sequence, now_ms)) { Increment(&stats.dropped); return false; }
     have_event_sequence = true;
     last_event_sequence = sequence;

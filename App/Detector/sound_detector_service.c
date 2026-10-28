@@ -50,6 +50,30 @@ static uint32_t staged_total,staged_ms,last_event_ms,last_state_ms;
 static uint8_t staged_count,head,count;
 static bool active,stage_valid,boundary;
 static void (*emit_line)(const char *,int);
+#define TOA_CANDIDATE_CACHE 8U
+static struct { uint32_t sequence; SoundDetectorServiceToaCandidates data; } toa_cache[TOA_CANDIDATE_CACHE];
+static uint8_t toa_cache_next;
+/** @brief 保存最近发布候选的TOA齿偏移；仅前台，环形覆盖最旧项。 */
+static void __attribute__((unused)) CacheToaCandidates(uint32_t sequence,
+    const SoundToaPosition *position)
+{
+    if(position==NULL)return;
+    toa_cache[toa_cache_next].sequence=sequence;
+    SoundDetectorServiceToaCandidates *out=&toa_cache[toa_cache_next].data;
+    out->count=position->candidate_count;
+    for(uint8_t i=0U;i<4U;++i)out->offset_q16[i]=position->candidate_offset_q16[i];
+    toa_cache_next=(uint8_t)((toa_cache_next+1U)%TOA_CANDIDATE_CACHE);
+}
+bool SoundDetectorService_GetToaCandidates(uint32_t sequence,
+    SoundDetectorServiceToaCandidates *out)
+{
+    if(out==NULL||sequence==0U){if(out!=NULL)out->count=0U;return false;}
+    out->count=0U;
+    for(uint8_t i=0U;i<TOA_CANDIDATE_CACHE;++i){
+        if(toa_cache[i].sequence==sequence){*out=toa_cache[i].data;return true;}
+    }
+    return false;
+}
 
 /** @brief 饱和增加计数；value为非NULL可写计数、amount为增加条数，无返回值，仅前台。 */
 static void Add(uint32_t *value,uint32_t amount)
@@ -90,6 +114,8 @@ static void RecordProcessTime(uint32_t begin_ms)
 static bool QuantizeToa(uint64_t anchor,double fraction,SoundToaPosition *out)
 {
     out->status=SOUND_TOA_MISSING;out->frame=0U;out->fraction_q16=0U;
+    out->candidate_count=0U;
+    for(uint8_t i=0U;i<4U;++i)out->candidate_offset_q16[i]=0;
     /* NaN fails both comparisons; infinities/negative/窗口外值也被拒绝。 */
     if(!(fraction>=0.0 && fraction<256.0)){out->status=SOUND_TOA_INVALID;return false;}
     uint64_t integer=(uint64_t)fraction;
@@ -144,7 +170,7 @@ static bool ClassifyCandidate(const BSP_AudioBlock *block,SoundCandidate *event)
 
 /** @brief 一次TOA窗口构建/估算结果；ready=false表示等待后继块。 */
 typedef struct { bool ready,valid; uint64_t anchor; double fraction;
-                 SoundToaPosition position; } ToaEstimate;
+                 ToaBackwardCandidates candidates; SoundToaPosition position; } ToaEstimate;
 typedef enum { TOA_WINDOW_READY,TOA_WINDOW_WAIT,TOA_WINDOW_LOST } ToaWindowStatus;
 /**
  * @brief 从已提交CPU尾部历史和当前借用块拼出候选完整256帧窗。
@@ -192,7 +218,8 @@ static bool EstimateToaCore(const BSP_AudioBlock *block,const SoundCandidate *ev
     uint8_t channel,ToaEstimate *out)
 {
     out->ready=true;out->valid=false;out->anchor=0U;out->fraction=0.0;
-    out->position=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U};
+    out->candidates=(ToaBackwardCandidates){0U,{0.0}};
+    out->position=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U,0U,{0,0,0,0}};
     const uint64_t anchor=event->onset_frame>TOA_LEFT_MARGIN?
         event->onset_frame-TOA_LEFT_MARGIN:0U;
     int16_t window[TOA_SEARCH_WINDOW];
@@ -205,7 +232,19 @@ static bool EstimateToaCore(const BSP_AudioBlock *block,const SoundCandidate *ev
     out->anchor=anchor;out->fraction=fraction;out->valid=true;
     Add(&diagnostics.toa_ok,1U);
     if(!QuantizeToa(anchor,fraction,&out->position))
-    { out->valid=false;Add(&diagnostics.toa_invalid,1U); }
+    { out->valid=false;Add(&diagnostics.toa_invalid,1U);return true; }
+    if(ToaEstimator_EstimateCandidates(&ToaBackward_DefaultConfig,window,&out->candidates))
+    {
+        out->position.candidate_count=out->candidates.count;
+        for(uint8_t i=0U;i<out->candidates.count;++i)
+        {
+            const double delta=(out->candidates.fractions[i]-fraction)*65536.0;
+            const double rounded=delta>=0.0?delta+0.5:delta-0.5;
+            if(rounded>2147483647.0)out->position.candidate_offset_q16[i]=INT32_MAX;
+            else if(rounded<-2147483648.0)out->position.candidate_offset_q16[i]=INT32_MIN;
+            else out->position.candidate_offset_q16[i]=(int32_t)rounded;
+        }
+    }
     return true;
 }
 /**
@@ -250,6 +289,7 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
     uint8_t channel,void (*log)(const char *,int))
 {
     diagnostics=(SoundDetectorServiceSnapshot){0};diagnostics.channel=channel;
+    memset(toa_cache,0,sizeof toa_cache);toa_cache_next=0U;
     head=count=staged_count=0U;staged_total=0U;active=stage_valid=boundary=false;
     class_history_valid=false;class_committed_slot=0U;
     class_first_frame=staged_class_first_frame=0U;class_session=staged_class_session=0U;
@@ -426,6 +466,7 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
             item.event.peak_abs,item.event.clipped ? 1U:0U,toa_us));
 #ifdef SBCG_USE_SOUND_TIME
         /* 已归还并验证且已发布的元数据副本；时间服务不访问PCM。 */
+        CacheToaCandidates(item.sequence,&item.toa);
         (void)SoundEventTime_SubmitToa(now_ms,item.sequence,&item.event,&item.toa);
 #endif
     }

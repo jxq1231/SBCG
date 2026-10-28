@@ -14,7 +14,7 @@ static SoundCandidate Candidate(uint64_t first){SoundCandidate c={0};c.session=1
 static void Observe(uint32_t seq,uint32_t ms,uint64_t frame,uint32_t sec){AudioTimeAnchorObservation a=Anchor(seq,ms,1,frame,sec);SoundEventTime_Observe(ms,&a);}
 static void Pair(void){Observe(1,1000,48000,1);Observe(2,2000,96000,2);}
 static void Process(uint32_t ms){const BSP_AudioSnapshot s={.running=true,.callback_count=20,.session=1,.last_callback_ms=ms};SoundEventTime_Process(ms,&s);}
-static SoundToaPosition Position(uint64_t frame,uint16_t q16){return (SoundToaPosition){SOUND_TOA_VALID,frame,q16};}
+static SoundToaPosition Position(uint64_t frame,uint16_t q16){return (SoundToaPosition){SOUND_TOA_VALID,frame,q16,0U,{0,0,0,0}};}
 static bool Has(const char *text){return strstr(output,text)!=NULL;}
 
 int main(void)
@@ -40,14 +40,14 @@ int main(void)
     assert(Has("EST_NS=1499994792,LO_NS=1499984375,HI_NS=1500005209"));
 
     /* Missing TOA is explicit: no model/anchors, and no FIRST+1 fallback in the TOA line. */
-    Init();Pair();p=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U};
+    Init();Pair();p=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U,0U,{0,0,0,0}};
     assert(SoundEventTime_SubmitToa(2000,1,&c,&p));Process(2250);
     assert(Has("$SOUND_TIME,SEQ=1") && Has("STATUS=OK"));
     assert(Has("$SOUND_TOA_TIME,SEQ=1,SESSION=1,STATUS=TOA_MISSING,CORE=0"));
     assert(!Has("$SOUND_TOA_TIME") || !strstr(output,"$SOUND_TOA_TIME,SEQ=1,SESSION=1,FRAME="));
 
     /* Invalid and overflowing positions are rejected without a model time. */
-    Init();Pair();p=(SoundToaPosition){SOUND_TOA_INVALID,0U,0U};
+    Init();Pair();p=(SoundToaPosition){SOUND_TOA_INVALID,0U,0U,0U,{0,0,0,0}};
     assert(SoundEventTime_SubmitToa(2000,1,&c,&p));Process(2250);
     assert(Has("STATUS=TOA_INVALID") && !Has("$SOUND_TOA_TIME,SEQ=1,SESSION=1,FRAME="));
     Init();Pair();p=Position(UINT64_MAX,0U);

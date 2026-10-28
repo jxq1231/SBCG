@@ -1,7 +1,8 @@
 /**
  * @file        sound_event_wire.c
  * @brief       两板声音事件最小线协议编解码实现。
- * @details     big-endian固定36字节；保留字段必须为零；无socket、配对或同步行为。
+ * @details     big-endian v2固定56字节；36字节旧字段后追加B侧候选Q16偏移；
+ *              兼容解码v1的36字节无候选事件；无socket、配对或同步行为。
  * @note        失败不返回部分有效事件；协议本身不代表跨板时间已同步。
  */
 #include "sound_event_wire.h"
@@ -19,6 +20,9 @@
 #define WIRE_OFF_NANOS 24U
 #define WIRE_OFF_FLAGS 28U
 #define WIRE_OFF_RESERVED 32U
+#define WIRE_OFF_CANDIDATE_COUNT 36U
+#define WIRE_OFF_CANDIDATE_RESERVED 37U
+#define WIRE_OFF_CANDIDATE_Q16 40U
 #define NSEC_PER_SEC UINT64_C(1000000000)
 
 static void Put32(uint8_t *p, uint32_t value)
@@ -37,7 +41,8 @@ static bool EventFieldsValid(const SoundEventRecord *event)
            event->type != SOUND_EVENT_INVALID &&
            (event->type == SOUND_EVENT_CHIRP || event->type == SOUND_EVENT_CLAP) &&
            event->quality <= 100U && event->time_domain != 0U &&
-           event->sequence != 0U;
+           event->sequence != 0U &&
+           event->toa_candidate_count <= SOUND_EVENT_MAX_TOA_CANDIDATES;
 }
 
 SoundEventWireStatus SoundEventWire_Encode(const SoundEventRecord *event,
@@ -63,6 +68,15 @@ SoundEventWireStatus SoundEventWire_Encode(const SoundEventRecord *event,
     Put32(out + WIRE_OFF_NANOS, nanos);
     Put32(out + WIRE_OFF_FLAGS, 0U);
     Put32(out + WIRE_OFF_RESERVED, 0U);
+    out[WIRE_OFF_CANDIDATE_COUNT] = event->toa_candidate_count;
+    out[WIRE_OFF_CANDIDATE_RESERVED] = 0U;
+    out[WIRE_OFF_CANDIDATE_RESERVED + 1U] = 0U;
+    out[WIRE_OFF_CANDIDATE_RESERVED + 2U] = 0U;
+    for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
+    {
+        Put32(out + WIRE_OFF_CANDIDATE_Q16 + 4U * i,
+              (uint32_t)event->toa_candidate_q16[i]);
+    }
     return SOUND_EVENT_WIRE_OK;
 }
 
@@ -72,11 +86,14 @@ SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
     if (event == NULL) { return SOUND_EVENT_WIRE_BAD_ARGUMENT; }
     memset(event, 0, sizeof *event);
     if (data == NULL) { return SOUND_EVENT_WIRE_BAD_ARGUMENT; }
-    if (length != SOUND_EVENT_WIRE_BYTES) { return SOUND_EVENT_WIRE_BAD_LENGTH; }
+    if (length != SOUND_EVENT_WIRE_V1_BYTES && length != SOUND_EVENT_WIRE_BYTES)
+    { return SOUND_EVENT_WIRE_BAD_LENGTH; }
     if (data[WIRE_OFF_MAGIC] != 'S' || data[WIRE_OFF_MAGIC + 1U] != 'E' ||
         data[WIRE_OFF_MAGIC + 2U] != 'V' || data[WIRE_OFF_MAGIC + 3U] != 'T')
     { return SOUND_EVENT_WIRE_BAD_MAGIC; }
-    if (data[WIRE_OFF_VERSION] != SOUND_EVENT_WIRE_VERSION)
+    const uint8_t version = data[WIRE_OFF_VERSION];
+    if (!((version == 1U && length == SOUND_EVENT_WIRE_V1_BYTES) ||
+          (version == 2U && length == SOUND_EVENT_WIRE_BYTES)))
     { return SOUND_EVENT_WIRE_BAD_VERSION; }
     if (data[WIRE_OFF_SIDE] > (uint8_t)SOUND_SIDE_B) { return SOUND_EVENT_WIRE_BAD_FIELD; }
     const SoundEventType type = (SoundEventType)data[WIRE_OFF_TYPE];
@@ -99,5 +116,20 @@ SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
     if (event->time_domain == 0U || event->sequence == 0U)
     { memset(event, 0, sizeof *event); return SOUND_EVENT_WIRE_BAD_FIELD; }
     event->time_ns = (uint64_t)seconds * NSEC_PER_SEC + nanos;
+    if (version == 2U)
+    {
+        const uint8_t count = data[WIRE_OFF_CANDIDATE_COUNT];
+        if (count > SOUND_EVENT_MAX_TOA_CANDIDATES ||
+            data[WIRE_OFF_CANDIDATE_RESERVED] != 0U ||
+            data[WIRE_OFF_CANDIDATE_RESERVED + 1U] != 0U ||
+            data[WIRE_OFF_CANDIDATE_RESERVED + 2U] != 0U)
+        { memset(event, 0, sizeof *event); return SOUND_EVENT_WIRE_BAD_FIELD; }
+        event->toa_candidate_count = count;
+        for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
+        {
+            event->toa_candidate_q16[i] =
+                (int32_t)Get32(data + WIRE_OFF_CANDIDATE_Q16 + 4U * i);
+        }
+    }
     return SOUND_EVENT_WIRE_OK;
 }

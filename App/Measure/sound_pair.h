@@ -15,6 +15,8 @@
 #define SOUND_PAIR_QUEUE_CAPACITY 4U
 #define SOUND_PAIR_RESULT_CAPACITY 4U
 #define SOUND_PAIR_NS_PER_SEC UINT64_C(1000000000)
+/** @brief 单个事件最多携带的TOA早/晚候选数。 */
+#define SOUND_EVENT_MAX_TOA_CANDIDATES 4U
 
 /** @brief 事件类型；未知类型不得配对。 */
 typedef enum
@@ -70,6 +72,9 @@ typedef struct
     uint32_t session;             /**< 板本地采集会话，仅诊断。 */
     uint32_t sequence;             /**< 板本地事件序号。 */
     uint64_t time_ns;              /**< 本地PTP模型时间，纳秒。 */
+    uint8_t toa_candidate_count;   /**< 0..4，B侧TOA早/晚候选数；0表示旧单值。 */
+    int32_t toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES];
+                                   /**< 相对time_ns的候选偏移，1/65536帧。 */
 } SoundEventRecord;
 
 /** @brief 配对策略；时间窗口和量程由调用方按课程范围配置。 */
@@ -80,6 +85,9 @@ typedef struct
     uint32_t sound_speed_mm_s;     /**< 当前声速，毫米/秒。 */
     uint8_t min_quality;           /**< 0..100最低质量。 */
     uint32_t pair_timeout_ms;      /**< 未配对事件保留时间。 */
+    uint32_t nominal_distance_mm;  /**< 首齿初始参考；0表示禁用候选选择。 */
+    uint32_t tooth_jump_mm;        /**< 一格跳变阈值，0表示禁用。 */
+    uint8_t tooth_confirm;         /**< 连续确认次数，1..8。 */
 } SoundPairConfig;
 
 /** @brief 配对/距离输出；invalid结果用于显式报告拒绝原因；A/B会话和源时刻仅被动复制。 */
@@ -117,6 +125,10 @@ typedef struct
     uint8_t count[2];
     SoundPairResult results[SOUND_PAIR_RESULT_CAPACITY];
     uint8_t result_count;
+    uint32_t accepted_distance_mm;
+    uint32_t pending_distance_mm;
+    uint8_t accepted_valid;
+    uint8_t pending_count;
     SoundPairSnapshot stats;
 } SoundPairManager;
 
