@@ -47,9 +47,10 @@ static int64_t Q16ToNs(int32_t offset_q16)
  */
 static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *config,
                            const SoundEventRecord *a, const SoundEventRecord *b,
-                           SoundEventRecord *out)
+                           SoundEventRecord *out, uint8_t *selected_index)
 {
     *out = *b;
+    if (selected_index != NULL) { *selected_index = 0U; }
     if (config->nominal_distance_mm == 0U || b->toa_candidate_count == 0U ||
         b->toa_candidate_count > SOUND_EVENT_MAX_TOA_CANDIDATES)
     { return; }
@@ -57,6 +58,7 @@ static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *con
                                config->nominal_distance_mm;
     uint32_t best_distance = 0U;
     uint64_t best_time = b->time_ns;
+    uint8_t best_index = 0U;
     bool have_best = false;
     for (uint8_t i = 0U; i < b->toa_candidate_count; ++i)
     {
@@ -75,6 +77,7 @@ static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *con
         {
             best_distance = (uint32_t)distance;
             best_time = candidate_time;
+            best_index = i;
             have_best = true;
         }
     }
@@ -108,6 +111,7 @@ static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *con
         }
     }
     out->time_ns = best_time;
+    if (selected_index != NULL) { *selected_index = (uint8_t)(best_index + 1U); }
 }
 /** @brief 结果清零；NULL安全。 */
 static void ClearResult(SoundPairResult *result)
@@ -141,6 +145,9 @@ SoundPairStatus SoundPair_Compute(const SoundPairConfig *config,
         result->b_session = b->session;
         result->b_sequence = b->sequence;
         result->b_time_ns = b->time_ns;
+        result->b_toa_candidate_count = b->toa_candidate_count;
+        for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
+            result->b_toa_candidate_q16[i] = b->toa_candidate_q16[i];
     }
     if (!ConfigValid(config) || a == NULL || b == NULL)
     { result->status = SOUND_PAIR_BAD_ARGUMENT; return result->status; }
@@ -207,6 +214,11 @@ bool SoundPair_Init(SoundPairManager *manager, const SoundPairConfig *config)
     memset(manager, 0, sizeof *manager);
     if (!ConfigValid(config)) { return false; }
     manager->config = *config;
+    if (config->nominal_distance_mm != 0U)
+    {
+        manager->accepted_distance_mm = config->nominal_distance_mm;
+        manager->accepted_valid = 1U;
+    }
     return true;
 }
 /** @brief 提交事件副本；重复/非法/队列满返回false并计数，不覆盖已有项。 */
@@ -298,10 +310,12 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
         }
         SoundPairResult result = {0};
         SoundEventRecord selected_b;
+        uint8_t selected_index = 0U;
         SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
-                       &manager->events[1][pair_b], &selected_b);
+                       &manager->events[1][pair_b], &selected_b, &selected_index);
         (void)SoundPair_Compute(&manager->config, &manager->events[0][pair_a],
                                 &selected_b, &result);
+        result.b_toa_selected = selected_index;
         used_a[pair_a] = true;
         used_b[pair_b] = true;
         if (result.valid) { Increment(&manager->stats.paired); }

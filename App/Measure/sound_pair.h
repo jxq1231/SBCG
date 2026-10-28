@@ -107,6 +107,9 @@ typedef struct
     uint64_t a_time_ns;
     uint64_t b_time_ns;
     uint32_t sound_speed_mm_s;
+    uint8_t b_toa_candidate_count; /**< 诊断：B事件携带的TOA候选数。 */
+    uint8_t b_toa_selected;        /**< 诊断：选中的候选序号，0表示未选。 */
+    int32_t b_toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES]; /**< 诊断副本。 */
 } SoundPairResult;
 
 /** @brief 队列和拒绝原因计数；均为单调饱和。 */

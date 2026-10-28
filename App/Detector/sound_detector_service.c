@@ -461,9 +461,9 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
         }
         Emit(line,snprintf(line,sizeof line,
             "$SOUND_CAND,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",CH=%u,FIRST=%s,CONFIRMED=%s,E_AC=%" PRIu32
-            ",PEAK=%" PRIu32 ",CLIP=%u,LOCAL=1,SYNC=0,TOA_US=%s\r\n",
+            ",PEAK=%" PRIu32 ",CLIP=%u,CAND=%u,LOCAL=1,SYNC=0,TOA_US=%s\r\n",
             item.sequence,item.event.session,(unsigned)diagnostics.channel,first,confirmed,item.event.mean_square_ac,
-            item.event.peak_abs,item.event.clipped ? 1U:0U,toa_us));
+            item.event.peak_abs,item.event.clipped ? 1U:0U,(unsigned)item.toa.candidate_count,toa_us));
 #ifdef SBCG_USE_SOUND_TIME
         /* 已归还并验证且已发布的元数据副本；时间服务不访问PCM。 */
         CacheToaCandidates(item.sequence,&item.toa);

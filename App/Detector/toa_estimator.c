@@ -158,8 +158,8 @@ bool ToaEstimator_EstimateBackward(const ToaBackwardConfig *config,
  * @param   samples 非NULL连续只读PCM，至少window_frames个点，仅本次借用。
  * @param   out 非NULL输出；成功时count为1..4，失败时count=0。
  * @return  true表示至少找到一个候选；false为参数非法或无有效前沿。
- * @note    复用ToaEstimator_EstimateBackward的峰值/阈值/能量段/连续性规则；
- *          第1个候选与单值接口完全一致，后续候选只追加不改变默认路径。
+ * @note    复用峰值/阈值/连续过阈规则，但候选从窗口起点开始枚举，
+ *          以保留晚能量段之前可能存在的更早正常齿；单值接口保持原行为不变。
  */
 bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *config,
                                      const int16_t *samples,
@@ -183,24 +183,9 @@ bool ToaEstimator_EstimateCandidates(const ToaBackwardConfig *config,
     }
     if(limit==0U){return false;}
     const uint16_t frames=config->window_frames;
-    uint64_t emax=0U;
-    for(uint16_t i=0U;i<frames;++i){
-        const uint64_t energy=ToaEnergyAt(samples,frames,(int32_t)i);
-        if(energy>emax){emax=energy;}
-    }
-    if(emax==0U){return false;}
-    const uint64_t elimit=emax>>3U;
-    uint16_t seg_start=0U;
-    for(uint16_t i=0U;i<frames;++i){
-        if(ToaEnergyAt(samples,frames,(int32_t)i)>=elimit){seg_start=i;break;}
-    }
-    int32_t below=-1;
-    for(int32_t i=(int32_t)seg_start;i>=0;--i){
-        const uint32_t magnitude=(uint32_t)(samples[i]<0 ? -(int32_t)samples[i]:samples[i]);
-        if(magnitude<limit){below=i;break;}
-    }
-    if(below<0){return false;}
-    int32_t scan=below+1;
+    /* 从窗口起点枚举，避免晚能量段之前的正常齿被丢弃；单值接口仍独立使用
+       能量段回溯算法，二者共享仅峰值/阈值/连续过阈规则。 */
+    int32_t scan=1;
     while(scan<(int32_t)frames && out->count<TOA_BACKWARD_MAX_CANDIDATES){
         int32_t cross=-1;
         for(int32_t i=scan;i<(int32_t)frames;++i){
