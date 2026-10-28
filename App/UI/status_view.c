@@ -25,6 +25,14 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
  memset(out,0,sizeof *out);
  if(s==NULL)return false;
  const bool fresh=(uint32_t)(now_ms-s->captured_ms)<STATUS_MAX_AGE_MS;
+ /* 页面年龄和声音源年龄分开；持有刚刷新的页面不代表声音仍新鲜。 */
+ const uint64_t source_age_ms=(uint64_t)s->measurement_source_age_ms+
+     (uint32_t)(now_ms-s->captured_ms);
+ uint8_t range_state=s->measurement_state;
+ if(range_state>=1U && range_state<=4U && source_age_ms>=6500U)range_state=5U;
+ else if((range_state==1U || range_state==2U) && source_age_ms>=2500U)range_state=3U;
+ const bool numeric=fresh && s->measurement_valid &&
+     (range_state==0U || (range_state>=1U && range_state<=4U));
  (void)snprintf(out->role,sizeof out->role,"%s",s->role==UI_ROLE_A?"BOARD A":s->role==UI_ROLE_B?"BOARD B":"UNKNOWN BOARD");
  const char *network=!fresh?"STALE":s->network==UI_NET_UP?"LINK UP":s->network==UI_NET_DOWN?"NO LINK":"UNKNOWN";
  (void)snprintf(out->network,sizeof out->network,"%s",network);
@@ -56,21 +64,23 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
   else {char number[21];Decimal(s->candidates,number);(void)snprintf(out->counts,sizeof out->counts,"EVENTS %s",number);}
  }
  (void)snprintf(out->distance,sizeof out->distance,"-- M");
- if(fresh && s->measurement_valid && s->distance_mm>=0)(void)snprintf(out->distance,sizeof out->distance,"%" PRId32 ".%03" PRId32 " M",s->distance_mm/1000,s->distance_mm%1000);
+ if(numeric && s->distance_mm>=0)(void)snprintf(out->distance,sizeof out->distance,"%" PRId32 ".%03" PRId32 " M",s->distance_mm/1000,s->distance_mm%1000);
  (void)snprintf(out->direction,sizeof out->direction,"SIDE --");
- if(fresh && s->measurement_valid)
+ if(numeric)
   (void)snprintf(out->direction,sizeof out->direction,"%s",
    s->measurement_direction==1?"SIDE A":s->measurement_direction==2?"SIDE B":"SIDE --");
  (void)snprintf(out->quality,sizeof out->quality,"QUALITY --");
- if(s->measurement_state!=0U)
+ if(range_state!=0U)
  {
   const char *state =
-   s->measurement_state==1U?"CONFIRMING":
-   s->measurement_state==2U?(s->measurement_formal?"VALID":"CONFIRMING"):
-   s->measurement_state==3U?"HOLD":
-   s->measurement_state==4U?"REACQUIRE":
-   s->measurement_state==5U?"STALE":"FAULT";
-  (void)snprintf(out->quality,sizeof out->quality,"%s",state);
+   range_state==1U?"CONFIRMING":
+   range_state==2U?(s->measurement_formal?"VALID":"CONFIRMING"):
+   range_state==3U?"HOLD":range_state==4U?"REACQUIRE":
+   range_state==5U?"STALE":"FAULT";
+  if((range_state==3U || range_state==4U) && numeric)
+   (void)snprintf(out->quality,sizeof out->quality,"%s %u.%uS",state,
+       (unsigned)(source_age_ms/1000U),(unsigned)((source_age_ms%1000U)/100U));
+  else (void)snprintf(out->quality,sizeof out->quality,"%s",state);
  }
  else if(fresh && s->measurement_valid)
   (void)snprintf(out->quality,sizeof out->quality,"QUALITY %u",(unsigned)s->measurement_quality);

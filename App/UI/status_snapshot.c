@@ -67,6 +67,11 @@ void UI_StatusSnapshot_Read(uint32_t now_ms, UI_StatusSnapshot *out)
     out->measurement_fresh=presentation.fresh;
     out->measurement_formal=presentation.formal;
     out->measurement_revision=presentation.state_revision;
+    out->measurement_domain=presentation.time_domain;
+    out->measurement_epoch=presentation.authority_clock_epoch;
+    out->measurement_source_age_ms=presentation.source_age_ms;
+    out->measurement_source_ns=presentation.source_common_ns;
+    out->measurement_provisional=presentation.provisional;
     out->measurement_captured_ms=presentation.captured_ms;
     out->measurement_status=presentation.has_value?1U:
         presentation.state==MEASUREMENT_PRESENTATION_STALE?3U:0U;

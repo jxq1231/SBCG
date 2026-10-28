@@ -34,6 +34,10 @@ typedef struct {
  bool measurement_fresh;
  bool measurement_formal;
  uint32_t measurement_revision;
+ uint32_t measurement_domain,measurement_epoch;
+ uint32_t measurement_source_age_ms; /* 源时刻至快照的真实共同时间年龄，不是接收年龄。 */
+ uint64_t measurement_source_ns;
+ bool measurement_provisional;
 } UI_StatusSnapshot;
 /** @brief 由调用方拥有的NUL结尾ASCII文本；后续中文字体由TouchGFX视图负责。 */
 typedef struct {

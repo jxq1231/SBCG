@@ -1,7 +1,8 @@
 /**
  * @file        measurement_result.c
  * @brief       两板测距唯一权威结果的缓存与有效性处理。
- * @details     配对结果必须有效且温度/声速当前有效；距离用当前声速重算，超龄/越界不显示数值。
+ * @details     Update确认域/时钟/会话/流上下文；A共享临时与确认结果的ID/revision，
+ *              B分离原始权威载荷和本地过期展示，声音年龄只由实际共同时间推进。
  * @note        纯前台标量；无PCM/HAL/PTP/网络访问，无动态内存。
  */
 #include "measurement_result.h"
@@ -33,7 +34,31 @@ static MeasurementPresentationSnapshot presentation
     __attribute__((section(".ItcmState"), aligned(32)));
 static uint32_t presentation_id_counter;
 static uint32_t presentation_revision;
+/** @brief NOLOAD的纯CPU权威协调状态；初始化必须显式清零，不供DMA访问。 */
+typedef struct
+{
+    MeasurementContext context;
+    TemperatureSnapshot temperature;
+    MeasurementPresentationSnapshot remote_raw;
+    uint64_t now_common_ns;
+    uint64_t remote_source_ns;
+    uint64_t remote_fresh_ns;
+    uint64_t remote_display_ns;
+    uint32_t remote_id_highwater;
+    bool mode;
+    bool have_context;
+    bool healthy;
+    bool remote_seen;
+    bool remote_eligible;
+    bool remote_source_revoked;
+    bool exhausted;
+} AuthorityCache;
+static AuthorityCache authority_cache
+    __attribute__((section(".ItcmState"), aligned(32)));
 static void ClearPresentation(MeasurementPresentationState state,uint32_t now_ms);
+static bool CorrectedDistance(int64_t delta_ns,uint32_t speed_mm_s,int32_t *raw_mm,
+                              int32_t *corrected_mm);
+static void FillTrackerDiagnostic(RangingDecision decision);
 
 /** @brief 复制当前稳定窗口成员到诊断副本；窗口保持原插入顺序，供离线分析。 */
 static void FillStableDiagnostic(void)
@@ -51,7 +76,7 @@ static void FillStableDiagnostic(void)
 static void BeginDiagnostic(const SoundPairResult *pair,uint32_t now_ms)
 {
     memset(&diagnostic,0,sizeof diagnostic);
-    diagnostic.schema=1U;
+    diagnostic.schema=authority_cache.mode?2U:1U;
     diagnostic.sequence=++diagnostic_sequence;
     diagnostic.now_ms=now_ms;
     diagnostic.status=MEASUREMENT_REJECTED;
@@ -128,6 +153,11 @@ static int32_t StabilizeDistance(int32_t distance_mm,uint32_t now_ms)
     return sorted[stable_count/2U];
 }
 
+/**
+ * @brief 初始化全部旧接口状态和ITCM NOLOAD权威状态，仅在模块启动时调用。
+ * @param now_ms 当前前台毫秒计数，仅记录初始捕获时间。
+ * @return 无返回值；显式清零NOLOAD结构，关闭新模式并重置ID/revision。
+ */
 void MeasurementResult_Init(uint32_t now_ms)
 {
     memset(&latest, 0, sizeof latest);
@@ -147,20 +177,42 @@ void MeasurementResult_Init(uint32_t now_ms)
     presentation.state=MEASUREMENT_PRESENTATION_NONE;
     presentation_id_counter=0U;
     presentation_revision=0U;
+    memset(&authority_cache,0,sizeof authority_cache);
 }
 
+/**
+ * @brief 更新本地标定合同，参数变化时清样本并等待新的独立声音。
+ * @param offset_mm 标定偏移，单位mm；发布要求可表示为int16且结果不越量程。
+ * @param version 调用方提供的标定版本，原样携带到权威展示。
+ * @return 无返回值；B不重算远程结果，A保留消费身份及外层计数器。
+ */
 void MeasurementResult_SetCalibration(int32_t offset_mm,uint16_t version)
 {
     if(calibration_offset_mm!=offset_mm || calibration_version!=version)
-    { ResetStable(); }
+    {
+        ResetStable();
+        if(authority_cache.mode && authority_cache.context.authority)
+        {
+            RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,0U);
+            ClearPresentation(MEASUREMENT_PRESENTATION_ACQUIRING,0U);
+        }
+    }
     calibration_offset_mm=offset_mm;
     calibration_version=version;
 }
 
+/**
+ * @brief 在Update尚未启用新模式时维护旧距离发布接口。
+ * @param pair 调用内借用的配对结果；NULL或无效时拒绝。
+ * @param temperature 调用内借用的有效温度；NULL或零声速时拒绝。
+ * @param now_ms 本地毫秒计数，用于旧接口的2s年龄和窗口间隙。
+ * @return 旧模式发布成功时true；新模式一律false，不创建并行结果。
+ */
 bool MeasurementResult_PublishPair(const SoundPairResult *pair,
                                    const TemperatureSnapshot *temperature,
                                    uint32_t now_ms)
 {
+    if(authority_cache.mode) { return false; }
     BeginDiagnostic(pair,now_ms);
     const MeasurementResultSnapshot previous=latest;
     latest = (MeasurementResultSnapshot){0};
@@ -179,19 +231,16 @@ bool MeasurementResult_PublishPair(const SoundPairResult *pair,
         FillStableDiagnostic();
         return false;
     }
-    const uint64_t magnitude = AbsDelta(pair->delta_ns);
-    const uint64_t distance = (magnitude * temperature->sound_speed_mm_s +
-                               NS_PER_SEC / 2U) / NS_PER_SEC;
-    diagnostic.temperature_distance_mm=(uint32_t)distance;
+    int32_t raw_mm=0,corrected=0;
     diagnostic.temperature_version=temperature->version;
     diagnostic.sound_speed_mm_s=temperature->sound_speed_mm_s;
-    if (distance > MEASUREMENT_MAX_DISTANCE_MM)
+    if (!CorrectedDistance(pair->delta_ns,temperature->sound_speed_mm_s,&raw_mm,&corrected))
     {
         diagnostic.decision=MEASUREMENT_DECISION_REJECT_RANGE;
         FillStableDiagnostic();
         return false;
     }
-    const int32_t corrected=(int32_t)distance+calibration_offset_mm;
+    diagnostic.temperature_distance_mm=(uint32_t)raw_mm;
     diagnostic.corrected_mm=corrected;
     if (corrected < 0 || corrected > (int32_t)MEASUREMENT_MAX_DISTANCE_MM)
     {
@@ -227,9 +276,16 @@ bool MeasurementResult_PublishPair(const SoundPairResult *pair,
     return true;
 }
 
+/**
+ * @brief 在旧模式缓存旧线协议结果；新模式不接受此独立真值入口。
+ * @param result 调用内借用并按值复制的旧结果；非法字段拒绝。
+ * @param now_ms 旧模式接收毫秒计数，用于既有2s策略。
+ * @return 旧模式接受时true；Update启用后false且不覆盖权威展示。
+ */
 bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
                                      uint32_t now_ms)
 {
+    if(authority_cache.mode) { return false; }
     BeginDiagnostic(NULL,now_ms);
     if (result == NULL || result->status != MEASUREMENT_VALID || !result->valid ||
         result->id == 0U || result->distance_mm < 0 ||
@@ -264,8 +320,15 @@ bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
     return true;
 }
 
+/**
+ * @brief 撤销结果；新模式委托权威展示硬失效，旧模式清旧毫米窗口。
+ * @param now_ms 当前前台毫秒，仅记录诊断。
+ * @return 无返回值；新模式保留外层ID/revision及消费高水位。
+ */
 void MeasurementResult_Invalidate(uint32_t now_ms)
 {
+    if(authority_cache.mode)
+    { MeasurementResult_InvalidatePresentation(now_ms);return; }
     BeginDiagnostic(NULL,now_ms);
     diagnostic.decision=MEASUREMENT_DECISION_INVALIDATE;
     diagnostic.status=MEASUREMENT_NONE;
@@ -276,16 +339,46 @@ void MeasurementResult_Invalidate(uint32_t now_ms)
     FillStableDiagnostic();
 }
 
-/** @brief 显式撤销tracker展示状态；域/流硬边界由协调者调用，普通单点拒绝不调用。 */
+/**
+ * @brief 硬撤销跟踪器及展示资格；不能用于普通单点拒绝或静默。
+ * @param now_ms 当前前台毫秒，仅记录状态变化。
+ * @return 无返回值；B原始接收载荷保留用于拒绝重放，A样本清空。
+ */
 void MeasurementResult_InvalidatePresentation(uint32_t now_ms)
 {
+    authority_cache.healthy=false;authority_cache.remote_eligible=false;
+    authority_cache.remote_source_revoked=true;
     RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,now_ms);
     ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);
 }
 
+/**
+ * @brief 复制当前有效结果；新模式只从已推进的权威展示派生。
+ * @param now_ms 旧模式的当前毫秒；新模式年龄由Update的共同时间决定。
+ * @param out 调用方拥有的输出存储；NULL返回false，否则完整复制。
+ * @return 当前数字新鲜且有值时true；HOLD保留在展示接口，不作为有效结果返回。
+ */
 bool MeasurementResult_Get(uint32_t now_ms, MeasurementResultSnapshot *out)
 {
     if (out == NULL) { return false; }
+    if(authority_cache.mode)
+    {
+        memset(out,0,sizeof *out);
+        out->valid=presentation.has_value && presentation.fresh && authority_cache.healthy;
+        out->status=out->valid?MEASUREMENT_VALID:MEASUREMENT_NONE;
+        out->id=presentation.measurement_id;
+        out->captured_ms=presentation.captured_ms;
+        out->distance_mm=presentation.distance_mm;
+        out->direction=(SoundDirection)presentation.direction;
+        out->quality=presentation.quality;
+        out->sound_speed_mm_s=presentation.sound_speed_mm_s;
+        out->temperature_version=presentation.temperature_version;
+        out->temperature_valid=out->valid;
+        out->time_domain=presentation.time_domain;
+        out->calibration_version=presentation.calibration_version;
+        out->calibration_offset_mm=presentation.calibration_offset_mm;
+        return out->valid;
+    }
     *out = latest;
     if (out->status != MEASUREMENT_VALID) { out->valid = false; return false; }
     if ((uint32_t)(now_ms - out->captured_ms) >= MEASUREMENT_MAX_AGE_MS)
@@ -300,7 +393,11 @@ bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out)
     return true;
 }
 
-/** @brief tracker状态映射到展示状态；未知值按FAULT处理。 */
+/**
+ * @brief 映射纯跟踪器状态到展示状态。
+ * @param state 跟踪器的当前状态。
+ * @return 对应展示状态；未知值按FAULT处理。
+ */
 static MeasurementPresentationState PresentationFromTracker(RangingTrackerState state)
 {
     switch(state)
@@ -314,151 +411,452 @@ static MeasurementPresentationState PresentationFromTracker(RangingTrackerState 
     }
 }
 
-/** @brief 用温度声速和标定把pair的有符号delta换算成展示距离。 */
-static int32_t TrackedDistanceMm(const SoundPairResult *pair,
-                                 const TemperatureSnapshot *temperature)
+/**
+ * @brief 检查64位乘加和标定范围后换算距离。
+ * @param delta_ns B减A时间差，单位ns。
+ * @param speed_mm_s 非零声速，单位mm/s。
+ * @param raw_mm 非NULL原始毫米输出，失败时不写入。
+ * @param corrected_mm 非NULL标定后毫米输出，失败时不写入。
+ * @return 乘加安全、偏移可用且标定后距离在0..10000mm时true。
+ */
+static bool CorrectedDistance(int64_t delta_ns,uint32_t speed_mm_s,int32_t *raw_mm,
+                              int32_t *corrected_mm)
 {
-    const uint64_t magnitude=pair->delta_ns<0?
-        (uint64_t)(-(pair->delta_ns+1))+1U:(uint64_t)pair->delta_ns;
-    const uint64_t distance=(magnitude*temperature->sound_speed_mm_s+
-        NS_PER_SEC/2U)/NS_PER_SEC;
-    const int32_t corrected=(int32_t)distance+calibration_offset_mm;
-    return corrected<0?0:corrected;
+    const uint64_t magnitude=AbsDelta(delta_ns);
+    if(speed_mm_s==0U || magnitude>(UINT64_MAX-NS_PER_SEC/2U)/speed_mm_s ||
+       calibration_offset_mm<INT16_MIN || calibration_offset_mm>INT16_MAX)return false;
+    const uint64_t raw=(magnitude*speed_mm_s+NS_PER_SEC/2U)/NS_PER_SEC;
+    if(raw>MEASUREMENT_MAX_DISTANCE_MM)return false;
+    const int64_t corrected=(int64_t)raw+calibration_offset_mm;
+    if(corrected<0 || corrected>MEASUREMENT_MAX_DISTANCE_MM)return false;
+    *raw_mm=(int32_t)raw;*corrected_mm=(int32_t)corrected;return true;
 }
 
-/** @brief 清空展示并进入指定无值状态；保留tracker自己的历史规则。 */
+/**
+ * @brief 逐字段比较权威载荷；本地captured_ms不属于线上的状态身份。
+ * @param a 非NULL只读快照。
+ * @param b 非NULL只读快照。
+ * @return 除接收/捕获毫秒外所有公开载荷字段相等时true。
+ */
+static bool PresentationEqual(const MeasurementPresentationSnapshot *a,
+                               const MeasurementPresentationSnapshot *b)
+{
+    return a->state==b->state && a->has_value==b->has_value && a->fresh==b->fresh &&
+        a->formal==b->formal && a->provisional==b->provisional &&
+        a->filtered_delta_ns==b->filtered_delta_ns && a->distance_mm==b->distance_mm &&
+        a->direction==b->direction && a->quality==b->quality &&
+        a->evidence_kind==b->evidence_kind && a->measurement_id==b->measurement_id &&
+        a->state_revision==b->state_revision && a->time_domain==b->time_domain &&
+        a->authority_clock_epoch==b->authority_clock_epoch &&
+        a->temperature_version==b->temperature_version &&
+        a->sound_speed_mm_s==b->sound_speed_mm_s &&
+        a->source_common_ns==b->source_common_ns &&
+        a->fresh_deadline_ns==b->fresh_deadline_ns &&
+        a->display_deadline_ns==b->display_deadline_ns &&
+        a->calibration_version==b->calibration_version &&
+        a->calibration_offset_mm==b->calibration_offset_mm &&
+        a->reason==b->reason && a->detection_version==b->detection_version &&
+        a->source_key_crc32==b->source_key_crc32;
+}
+
+/**
+ * @brief 撤销数值字段，保留来源期限供诊断和防续租判断。
+ * @param value 非NULL、调用方持有的可写快照。
+ * @param state 撤值后的展示状态。
+ * @return 无返回值；无值状态不携带测量ID、方向、距离或delta。
+ */
+static void RemoveValue(MeasurementPresentationSnapshot *value,
+                         MeasurementPresentationState state)
+{
+    value->state=state;value->has_value=false;value->fresh=false;value->formal=false;
+    value->provisional=false;value->distance_mm=0;value->filtered_delta_ns=0;
+    value->measurement_id=0U;value->direction=0U;
+}
+
+/**
+ * @brief 用实际共同时间收紧展示资格；不更改源时间或截止时间。
+ * @param value 非NULL可写展示副本，调用方拥有存储。
+ * @param now_ns 当前共同时间，单位ns；健康检查由调用方完成。
+ * @return 无返回值；到新鲜截止进入HOLD，到硬截止撤值进入STALE。
+ */
+static void ExpireValue(MeasurementPresentationSnapshot *value,uint64_t now_ns)
+{
+    const uint64_t age_ms=now_ns>value->source_common_ns && value->source_common_ns!=0U?
+        (now_ns-value->source_common_ns)/RANGING_TRACKER_NS_PER_MS:0U;
+    value->source_age_ms=age_ms>UINT32_MAX?UINT32_MAX:(uint32_t)age_ms;
+    if(!value->has_value)return;
+    if(now_ns>=value->display_deadline_ns)
+    { RemoveValue(value,MEASUREMENT_PRESENTATION_STALE);return; }
+    if(now_ns>=value->fresh_deadline_ns)
+    {
+        value->fresh=false;value->formal=false;
+        if(value->state==MEASUREMENT_PRESENTATION_TRACKING ||
+           value->state==MEASUREMENT_PRESENTATION_ACQUIRING)
+        { value->state=MEASUREMENT_PRESENTATION_HOLD; }
+    }
+}
+
+/**
+ * @brief 提交A的权威内容；只有实际载荷变化才推进单一外层revision。
+ * @param value 按值拥有的下一快照，内部覆盖上下文及标定元数据。
+ * @param now_ms 当前前台毫秒，仅在内容变化时记录。
+ * @return 无返回值；计数耗尽后撤销本地值并停止新测量。
+ */
+static void CommitLocal(MeasurementPresentationSnapshot value,uint32_t now_ms)
+{
+    value.time_domain=authority_cache.context.time_domain;
+    value.authority_clock_epoch=authority_cache.context.authority_epoch;
+    value.temperature_version=authority_cache.temperature.version;
+    value.sound_speed_mm_s=authority_cache.temperature.sound_speed_mm_s;
+    if(value.sound_speed_mm_s==0U)value.sound_speed_mm_s=tracked.config.sound_speed_mm_s;
+    value.calibration_version=calibration_version;
+    value.detection_version=1U;
+    value.calibration_offset_mm=(calibration_offset_mm>=INT16_MIN &&
+        calibration_offset_mm<=INT16_MAX)?(int16_t)calibration_offset_mm:0;
+    value.state_revision=presentation_revision;
+    if(PresentationEqual(&presentation,&value))
+    { presentation.source_age_ms=value.source_age_ms;return; }
+    if(presentation_revision==UINT32_MAX)
+    {
+        authority_cache.exhausted=true;
+        RemoveValue(&presentation,MEASUREMENT_PRESENTATION_FAULT);return;
+    }
+    value.state_revision=++presentation_revision;value.captured_ms=now_ms;
+    presentation=value;
+}
+
+/**
+ * @brief 为一次新的独立源分配外层ID，临时和确认结果共享计数器。
+ * @param value 非NULL、调用方持有的待发布快照。
+ * @return 成功true；耗尽时撤值并返回false，不回绕或复用ID。
+ */
+static bool AssignSourceId(MeasurementPresentationSnapshot *value)
+{
+    if(presentation_id_counter==UINT32_MAX || authority_cache.exhausted)
+    { authority_cache.exhausted=true;return false; }
+    value->measurement_id=++presentation_id_counter;return true;
+}
+
+/**
+ * @brief 发布指定无值状态，保留外层ID和revision计数器代际。
+ * @param state 目标展示状态。
+ * @param now_ms 当前前台毫秒，仅作内容捕获记录。
+ * @return 无返回值；A使用本地权威revision，B不改写远程权威revision。
+ */
 static void ClearPresentation(MeasurementPresentationState state,uint32_t now_ms)
 {
-    presentation=(MeasurementPresentationSnapshot){0};
-    presentation.state=state;
-    presentation.captured_ms=now_ms;
-    ++presentation_revision;
-    presentation.state_revision=presentation_revision;
+    MeasurementPresentationSnapshot value=presentation;
+    RemoveValue(&value,state);
+    value.reason=state==MEASUREMENT_PRESENTATION_FAULT?RANGING_INVALIDATE_FAULT:0U;
+    if(authority_cache.context.authority)CommitLocal(value,now_ms);
+    else { value.captured_ms=now_ms;presentation=value; }
 }
 
+/**
+ * @brief 判断前台协调者提供的域/会话/时钟/流身份是否完整健康。
+ * @param context 仅调用内借用；NULL判无效。
+ * @return 所有资格和非零身份齐全时true，不读取硬件。
+ */
+static bool TrustedContext(const MeasurementContext *context)
+{
+    return context!=NULL && context->domain_valid && context->stream_valid &&
+        context->clock_valid && context->time_domain!=0U &&
+        context->authority_epoch!=0U && context->local_clock_epoch!=0U &&
+        context->a_session!=0U && context->b_session!=0U;
+}
+
+/**
+ * @brief 比较影响历史资格的上下文身份，不把健康布尔变化当成新会话。
+ * @param a 非NULL、只读的上次协调者上下文。
+ * @param b 非NULL、只读的本次协调者上下文。
+ * @return 角色、域、两种epoch、会话和源下界均相同时true。
+ */
+static bool SameContext(const MeasurementContext *a,const MeasurementContext *b)
+{
+    return a->authority==b->authority && a->time_domain==b->time_domain &&
+        a->authority_epoch==b->authority_epoch && a->local_clock_epoch==b->local_clock_epoch &&
+        a->a_session==b->a_session && a->b_session==b->b_session &&
+        a->source_floor_ns==b->source_floor_ns;
+}
+
+/**
+ * @brief 从B的原始权威载荷生成本地有效展示；局部过期不改写原始载荷。
+ * @param now_ms 当前前台毫秒，仅在本地撤值时记录。
+ * @return 无返回值；无资格时FAULT，有资格时以源截止收紧。
+ */
+static void RefreshRemote(uint32_t now_ms)
+{
+    if(!authority_cache.healthy || !authority_cache.remote_eligible)
+    { ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);return; }
+    presentation=authority_cache.remote_raw;
+    ExpireValue(&presentation,authority_cache.now_common_ns);
+}
+
+/**
+ * @brief 用可信上下文和真实共同时间推进权威缓存、温补及新鲜度。
+ * @param context 调用内借用并复制；NULL或不健康时立即撤值。
+ * @param temperature 调用内借用并复制；A要求有效非零声速，B不重算。
+ * @param now_ms 当前前台毫秒，仅用于诊断和候选接收间隔。
+ * @param now_common_ns 实际共同读时，单位ns；0或同代际倒退撤值。
+ * @return 无返回值；只有本函数可以建立健康上下文，pair/RST2不能授予资格。
+ */
+void MeasurementResult_Update(const MeasurementContext *context,
+                               const TemperatureSnapshot *temperature,
+                               uint32_t now_ms,uint64_t now_common_ns)
+{
+    const bool first=!authority_cache.have_context;
+    const bool changed=context!=NULL && (first || !SameContext(&authority_cache.context,context));
+    const bool new_clock=context!=NULL && (first ||
+        context->time_domain!=authority_cache.context.time_domain ||
+        context->local_clock_epoch!=authority_cache.context.local_clock_epoch);
+    const bool new_authority=context!=NULL && (first ||
+        context->authority!=authority_cache.context.authority ||
+        context->time_domain!=authority_cache.context.time_domain ||
+        context->authority_epoch!=authority_cache.context.authority_epoch);
+    authority_cache.mode=true;
+    if(context!=NULL) { authority_cache.context=*context;authority_cache.have_context=true; }
+    if(new_clock)authority_cache.now_common_ns=0U;
+    if(new_authority)
+    {
+        authority_cache.remote_seen=false;authority_cache.remote_eligible=false;
+        authority_cache.remote_source_revoked=false;
+        authority_cache.remote_id_highwater=0U;authority_cache.remote_source_ns=0U;
+        authority_cache.remote_fresh_ns=authority_cache.remote_display_ns=0U;
+        memset(&authority_cache.remote_raw,0,sizeof authority_cache.remote_raw);
+    }
+    if(changed)
+    {
+        RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_DOMAIN,now_ms);
+        authority_cache.remote_eligible=false;
+        ClearPresentation(MEASUREMENT_PRESENTATION_ACQUIRING,now_ms);
+    }
+    const bool temp_valid=temperature!=NULL && temperature->valid &&
+        temperature->sound_speed_mm_s!=0U;
+    const bool clock_valid=now_common_ns!=0U &&
+        now_common_ns>=authority_cache.now_common_ns;
+    if(!TrustedContext(context) || !clock_valid || authority_cache.exhausted ||
+       (authority_cache.context.authority && !temp_valid))
+    {
+        authority_cache.healthy=false;authority_cache.remote_eligible=false;
+        authority_cache.remote_source_revoked=true;
+        RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,now_ms);
+        ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);return;
+    }
+    authority_cache.now_common_ns=now_common_ns;authority_cache.healthy=true;
+    if(!context->authority) { RefreshRemote(now_ms);return; }
+    authority_cache.temperature=*temperature;
+    const RangingTrackerContext tracker_context={context->time_domain,context->a_session,
+        context->b_session,context->local_clock_epoch,true,true,true};
+    RangingTracker_SetContext(&tracked,&tracker_context,now_ms,now_common_ns);
+    RangingTracker_SetSoundSpeed(&tracked,temperature->sound_speed_mm_s);
+    RangingTracker_Tick(&tracked,now_ms,now_common_ns);
+    RangingTrackerSnapshot snapshot;RangingTracker_Get(&tracked,&snapshot);
+    MeasurementPresentationSnapshot value=presentation;
+    if(snapshot.accepted_count==0U && !value.has_value &&
+       value.state==MEASUREMENT_PRESENTATION_FAULT)
+    { value.state=MEASUREMENT_PRESENTATION_ACQUIRING; }
+    if(snapshot.state==RANGING_STATE_FAULT)
+    { ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);return; }
+    if(snapshot.accepted_count>0U)
+    { value.state=PresentationFromTracker(snapshot.state);value.fresh=snapshot.fresh; }
+    if(value.has_value)
+    {
+        int32_t raw_mm,corrected_mm;
+        if(!CorrectedDistance(value.filtered_delta_ns,temperature->sound_speed_mm_s,
+            &raw_mm,&corrected_mm))
+        {
+            RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,now_ms);
+            ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);return;
+        }
+        value.distance_mm=corrected_mm;
+    }
+    ExpireValue(&value,now_common_ns);CommitLocal(value,now_ms);
+}
+
+/**
+ * @brief 将当前支持窗口及本次跟踪决策写入schema2诊断。
+ * @param decision 本次真实tracker决策。
+ * @return 无返回值；成员按当前声速及标定转换，候选不冒充接受成员。
+ */
+static void FillTrackerDiagnostic(RangingDecision decision)
+{
+    diagnostic.schema=2U;diagnostic.tracker_decision=(uint8_t)decision;
+    diagnostic.state_revision=presentation.state_revision;
+    diagnostic.measurement_id=presentation.measurement_id;
+    diagnostic.accepted_source_common_ns=presentation.source_common_ns;
+    diagnostic.accepted_count=(uint8_t)tracked.accepted_count;
+    diagnostic.candidate_count=(uint8_t)tracked.candidate_count;
+    diagnostic.stable_count=(uint8_t)tracked.accepted_count;
+    diagnostic.status=presentation.has_value?MEASUREMENT_VALID:MEASUREMENT_NONE;
+    diagnostic.published_mm=presentation.distance_mm;
+    diagnostic.temperature_version=authority_cache.temperature.version;
+    diagnostic.sound_speed_mm_s=authority_cache.temperature.sound_speed_mm_s;
+    for(uint32_t i=0U;i<tracked.accepted_count;++i)
+    {
+        int32_t raw_mm=0,corrected_mm=0;
+        diagnostic.accepted_delta_ns[i]=tracked.accepted_ns[i];
+        if(CorrectedDistance(tracked.accepted_ns[i],diagnostic.sound_speed_mm_s,
+            &raw_mm,&corrected_mm))diagnostic.stable_mm[i]=corrected_mm;
+    }
+}
+
+/**
+ * @brief 将独立配对交给已由Update授权的A跟踪器；单包不能改变上下文。
+ * @param pair 调用内借用；必须匹配域/两侧session、源下界和新鲜预算。
+ * @param temperature 调用内借用的当前温度，非法时Update硬撤值。
+ * @param formal 上游序列门控；当前仅PROXY证据，不授予FORMAL。
+ * @param now_ms 实际前台接收毫秒计数。
+ * @param now_common_ns 实际共同读时纳秒；不允许用pair源时刻补读时失败。
+ * @return 返回真实tracker决策；临时和确认新源共享唯一外层ID计数器。
+ */
 RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair,
                                                      const TemperatureSnapshot *temperature,
-                                                     bool formal,
-                                                     uint32_t now_ms,
+                                                     bool formal,uint32_t now_ms,
                                                      uint64_t now_common_ns)
 {
-    if(pair==NULL || !pair->valid || pair->time_domain==0U)
+    (void)formal;
+    if(authority_cache.mode)
     {
-        ClearPresentation(MEASUREMENT_PRESENTATION_NONE,now_ms);
-        return RANGING_DECISION_REJECT;
+        const MeasurementContext trusted=authority_cache.context;
+        MeasurementResult_Update(&trusted,temperature,now_ms,now_common_ns);
     }
-    if(temperature==NULL || !temperature->valid || temperature->sound_speed_mm_s==0U)
-    {
-        RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_FAULT,now_ms);
-        ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);
-        return RANGING_DECISION_REJECT;
-    }
-    const RangingTrackerContext context={
-        .time_domain=pair->time_domain,
-        .a_session=pair->a_session,
-        .b_session=pair->b_session,
-        .a_clock_epoch=1U,
-        .domain_valid=true,.stream_valid=true,.temperature_valid=true};
-    RangingTracker_SetContext(&tracked,&context,now_ms,now_common_ns);
-    RangingTracker_SetSoundSpeed(&tracked,temperature->sound_speed_mm_s);
-    const RangingObservation observation={
-        .time_domain=pair->time_domain,.a_session=pair->a_session,
-        .a_sequence=pair->a_sequence,.b_session=pair->b_session,
-        .b_sequence=pair->b_sequence,.a_time_ns=pair->a_time_ns,
-        .b_time_ns=pair->b_time_ns,.delta_ns=pair->delta_ns,
-        .proxy_quality=pair->quality,.evidence_kind=RANGING_EVIDENCE_PROXY,
-        .geometry_assumed_valid=true};
-    const RangingDecision decision=RangingTracker_Push(
-        &tracked,&observation,now_ms,now_common_ns);
-    RangingTrackerSnapshot snapshot;
-    RangingTracker_Get(&tracked,&snapshot);
-    const uint64_t source_ns=pair->a_time_ns>pair->b_time_ns?
-        pair->a_time_ns:pair->b_time_ns;
-
+    BeginDiagnostic(pair,now_ms);
+    if(!authority_cache.mode || !authority_cache.healthy || !authority_cache.context.authority)
+    { diagnostic.decision=MEASUREMENT_DECISION_REJECT_INVALID;return RANGING_DECISION_REJECT; }
+    const uint64_t source_ns=pair==NULL?0U:
+        (pair->a_time_ns>pair->b_time_ns?pair->a_time_ns:pair->b_time_ns);
+    int32_t raw_mm=0,corrected_mm=0;
+    if(pair==NULL || !pair->valid || pair->time_domain!=authority_cache.context.time_domain ||
+       pair->a_session!=authority_cache.context.a_session ||
+       pair->b_session!=authority_cache.context.b_session ||
+       source_ns<authority_cache.context.source_floor_ns ||
+       (now_common_ns>=source_ns && now_common_ns-source_ns>=
+        (uint64_t)tracked.config.fresh_age_ms*RANGING_TRACKER_NS_PER_MS) ||
+       !CorrectedDistance(pair->delta_ns,authority_cache.temperature.sound_speed_mm_s,
+           &raw_mm,&corrected_mm))
+    { diagnostic.decision=MEASUREMENT_DECISION_REJECT_INVALID;
+      FillTrackerDiagnostic(RANGING_DECISION_REJECT);return RANGING_DECISION_REJECT; }
+    diagnostic.temperature_distance_mm=(uint32_t)raw_mm;diagnostic.corrected_mm=corrected_mm;
+    const RangingObservation observation={pair->time_domain,pair->a_session,pair->a_sequence,
+        pair->b_session,pair->b_sequence,pair->a_time_ns,pair->b_time_ns,pair->delta_ns,
+        pair->quality,RANGING_EVIDENCE_PROXY,true};
+    const RangingDecision decision=RangingTracker_Push(&tracked,&observation,now_ms,now_common_ns);
+    RangingTrackerSnapshot snapshot;RangingTracker_Get(&tracked,&snapshot);
+    MeasurementPresentationSnapshot value=presentation;
     if(snapshot.has_value)
     {
-        presentation=(MeasurementPresentationSnapshot){0};
-        presentation.state=PresentationFromTracker(snapshot.state);
-        presentation.has_value=true;
-        presentation.fresh=snapshot.fresh;
-        /* 当前证据仍是PROXY，不能把标准序列确认写成身份验证FORMAL；
-           A/B统一显示CONFIRMING，等A4/编码身份通过后再置FORMAL。 */
-        presentation.formal=false;
-        presentation.provisional=true;
-        (void)formal;
-        presentation.filtered_delta_ns=snapshot.filtered_delta_ns;
-        presentation.distance_mm=snapshot.distance_mm;
-        presentation.direction=(uint8_t)snapshot.direction;
-        presentation.quality=snapshot.quality;
-        presentation.evidence_kind=snapshot.evidence_kind;
-        presentation.measurement_id=snapshot.measurement_id;
-        presentation.state_revision=snapshot.state_revision;
-        presentation.time_domain=pair->time_domain;
-        presentation.authority_clock_epoch=1U;
-        presentation.temperature_version=temperature->version;
-        presentation.sound_speed_mm_s=temperature->sound_speed_mm_s;
-        presentation.source_common_ns=snapshot.source_common_ns;
-        presentation.fresh_deadline_ns=snapshot.fresh_deadline_ns;
-        presentation.display_deadline_ns=snapshot.display_deadline_ns;
-        presentation.captured_ms=now_ms;
-        if(presentation.state_revision==0U){++presentation_revision;
-            presentation.state_revision=presentation_revision;}
-        return decision;
+        value.state=PresentationFromTracker(snapshot.state);value.has_value=true;
+        value.fresh=snapshot.fresh;value.formal=false;value.provisional=true;
+        value.filtered_delta_ns=snapshot.filtered_delta_ns;
+        if(!CorrectedDistance(snapshot.filtered_delta_ns,authority_cache.temperature.sound_speed_mm_s,
+            &raw_mm,&corrected_mm))
+        { MeasurementResult_InvalidatePresentation(now_ms);return RANGING_DECISION_FAULT; }
+        value.distance_mm=corrected_mm;value.direction=(uint8_t)snapshot.direction;
+        value.quality=snapshot.quality;value.evidence_kind=snapshot.evidence_kind;
+        value.source_common_ns=snapshot.source_common_ns;
+        value.fresh_deadline_ns=snapshot.fresh_deadline_ns;
+        value.display_deadline_ns=snapshot.display_deadline_ns;
+        if(decision==RANGING_DECISION_ACCEPT && !AssignSourceId(&value))
+        { MeasurementResult_InvalidatePresentation(now_ms);return RANGING_DECISION_FAULT; }
     }
-
-    /* 首对独立事件可临时显示，但不能称为FORMAL；不足3点时tracker无确认值。 */
-    if(decision==RANGING_DECISION_CANDIDATE && pair->quality>=90U)
+    else if(decision==RANGING_DECISION_CANDIDATE && pair->quality>=90U)
     {
-        ++presentation_id_counter;
-        presentation=(MeasurementPresentationSnapshot){0};
-        presentation.state=MEASUREMENT_PRESENTATION_ACQUIRING;
-        presentation.has_value=true;
-        presentation.fresh=true;
-        presentation.provisional=true;
-        presentation.formal=false;
-        presentation.filtered_delta_ns=pair->delta_ns;
-        presentation.distance_mm=TrackedDistanceMm(pair,temperature);
-        presentation.direction=pair->delta_ns>0?1U:(pair->delta_ns<0?2U:0U);
-        presentation.quality=pair->quality;
-        presentation.evidence_kind=RANGING_EVIDENCE_PROXY;
-        presentation.measurement_id=presentation_id_counter;
-        presentation.time_domain=pair->time_domain;
-        presentation.authority_clock_epoch=1U;
-        presentation.temperature_version=temperature->version;
-        presentation.sound_speed_mm_s=temperature->sound_speed_mm_s;
-        presentation.source_common_ns=source_ns;
-        presentation.fresh_deadline_ns=source_ns+UINT64_C(2500000000);
-        presentation.display_deadline_ns=source_ns+UINT64_C(6500000000);
-        presentation.captured_ms=now_ms;
-        ++presentation_revision;
-        presentation.state_revision=presentation_revision;
-        return decision;
+        value=(MeasurementPresentationSnapshot){0};
+        value.state=MEASUREMENT_PRESENTATION_ACQUIRING;value.has_value=value.fresh=true;
+        value.provisional=true;value.filtered_delta_ns=pair->delta_ns;value.distance_mm=corrected_mm;
+        value.direction=pair->delta_ns>0?1U:(pair->delta_ns<0?2U:0U);
+        value.quality=pair->quality;value.evidence_kind=RANGING_EVIDENCE_PROXY;
+        value.source_common_ns=source_ns;
+        value.fresh_deadline_ns=source_ns+(uint64_t)tracked.config.fresh_age_ms*RANGING_TRACKER_NS_PER_MS;
+        value.display_deadline_ns=source_ns+(uint64_t)tracked.config.display_max_age_ms*RANGING_TRACKER_NS_PER_MS;
+        if(!AssignSourceId(&value))
+        { MeasurementResult_InvalidatePresentation(now_ms);return RANGING_DECISION_FAULT; }
     }
-    const MeasurementPresentationState state=snapshot.state==RANGING_STATE_FAULT?
-        MEASUREMENT_PRESENTATION_FAULT:MEASUREMENT_PRESENTATION_ACQUIRING;
-    ClearPresentation(state,now_ms);
-    return decision;
+    else if(snapshot.state==RANGING_STATE_FAULT)
+    { RemoveValue(&value,MEASUREMENT_PRESENTATION_FAULT); }
+    ExpireValue(&value,now_common_ns);CommitLocal(value,now_ms);
+    diagnostic.decision=decision==RANGING_DECISION_ACCEPT?MEASUREMENT_DECISION_ACCEPT:
+        ((decision==RANGING_DECISION_HOLD || decision==RANGING_DECISION_REACQUIRE)?
+         MEASUREMENT_DECISION_REJECT_OUTLIER:MEASUREMENT_DECISION_REJECT_INVALID);
+    FillTrackerDiagnostic(decision);return decision;
 }
 
+/**
+ * @brief 复制前台已经按真实共同时间推进的有效展示副本。
+ * @param out 调用方拥有的输出存储；NULL不操作。
+ * @return 无返回值；本函数不采样硬件、不刷新年龄、不改变revision。
+ */
 void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out)
+{ if(out!=NULL)*out=presentation; }
+
+/**
+ * @brief 检查远程展示载荷的状态、标志、期限和数值边界。
+ * @param remote 调用内借用的解码结果；NULL判非法。
+ * @return 载荷组合有效时true；不依赖结构体padding或本地温补。
+ */
+static bool RemoteValid(const MeasurementPresentationSnapshot *remote)
 {
-    if(out!=NULL)*out=presentation;
+    if(remote==NULL || remote->state>MEASUREMENT_PRESENTATION_FAULT ||
+       remote->state_revision==0U || remote->quality>100U || remote->direction>2U ||
+       remote->evidence_kind>RANGING_EVIDENCE_CODED || remote->sound_speed_mm_s==0U ||
+       (remote->formal && (!remote->has_value || !remote->fresh || remote->provisional ||
+        remote->evidence_kind==RANGING_EVIDENCE_PROXY)))return false;
+    if(!remote->has_value)return !remote->fresh && !remote->formal &&
+        remote->measurement_id==0U && remote->distance_mm==0 && remote->filtered_delta_ns==0 &&
+        remote->state!=MEASUREMENT_PRESENTATION_TRACKING &&
+        remote->state!=MEASUREMENT_PRESENTATION_HOLD && remote->state!=MEASUREMENT_PRESENTATION_REACQUIRE;
+    return remote->measurement_id!=0U && remote->source_common_ns!=0U &&
+        remote->source_common_ns>=authority_cache.context.source_floor_ns &&
+        remote->state!=MEASUREMENT_PRESENTATION_STALE && remote->state!=MEASUREMENT_PRESENTATION_FAULT &&
+        remote->state!=MEASUREMENT_PRESENTATION_NONE && remote->distance_mm>=0 &&
+        remote->distance_mm<=(int32_t)MEASUREMENT_MAX_DISTANCE_MM &&
+        remote->fresh_deadline_ns>remote->source_common_ns &&
+        remote->display_deadline_ns>=remote->fresh_deadline_ns &&
+        (!remote->fresh || (remote->state==MEASUREMENT_PRESENTATION_ACQUIRING ||
+                           remote->state==MEASUREMENT_PRESENTATION_TRACKING)) &&
+        (remote->source_common_ns<=authority_cache.now_common_ns ||
+         remote->source_common_ns-authority_cache.now_common_ns<=UINT64_C(2000000));
 }
 
+/**
+ * @brief B缓存同域同权威epoch的原始载荷，再单独计算本地有效展示。
+ * @param remote 调用内借用，接受后按值复制；captured_ms不参与同revision比较。
+ * @param time_domain 调用方当前共同域，仍须与可信Update上下文完全一致。
+ * @param now_ms 本地接收毫秒，仅记录，不延长声音源期限。
+ * @return 新载荷或完全相同的重传返回true；冲突、旧revision和续租返回false。
+ */
 bool MeasurementResult_PublishRemotePresentation(const MeasurementPresentationSnapshot *remote,
-                                                 uint32_t time_domain,
-                                                 uint32_t now_ms)
+                                                 uint32_t time_domain,uint32_t now_ms)
 {
-    if(remote==NULL || time_domain==0U || remote->time_domain!=time_domain)
-    { return false; }
-    if(presentation.time_domain==time_domain &&
-       remote->state_revision<presentation.state_revision)
-    { return false; }
-    if(presentation.time_domain==time_domain &&
-       remote->state_revision==presentation.state_revision)
-    { return true; } /* 同revision重复包不续租、不重写展示内容。 */
-    presentation=*remote;
-    presentation.captured_ms=now_ms;
-    ++presentation_revision;
-    return true;
+    if(!authority_cache.mode || !authority_cache.healthy || authority_cache.context.authority ||
+       remote==NULL || time_domain==0U || time_domain!=authority_cache.context.time_domain ||
+       remote->time_domain!=time_domain ||
+       remote->authority_clock_epoch!=authority_cache.context.authority_epoch || !RemoteValid(remote))return false;
+    if(authority_cache.remote_seen)
+    {
+        if(remote->state_revision<authority_cache.remote_raw.state_revision)return false;
+        if(remote->state_revision==authority_cache.remote_raw.state_revision)
+            return PresentationEqual(remote,&authority_cache.remote_raw);
+    }
+    if(remote->has_value)
+    {
+        if(remote->measurement_id<authority_cache.remote_id_highwater)return false;
+        if(remote->measurement_id==authority_cache.remote_id_highwater)
+        {
+            if(!authority_cache.remote_eligible || authority_cache.remote_source_revoked ||
+               remote->source_common_ns!=authority_cache.remote_source_ns ||
+               remote->fresh_deadline_ns>authority_cache.remote_fresh_ns ||
+               remote->display_deadline_ns>authority_cache.remote_display_ns)return false;
+        }
+        else if(authority_cache.remote_id_highwater!=0U &&
+                remote->source_common_ns<=authority_cache.remote_source_ns)return false;
+        authority_cache.remote_id_highwater=remote->measurement_id;
+        authority_cache.remote_source_ns=remote->source_common_ns;
+        authority_cache.remote_fresh_ns=remote->fresh_deadline_ns;
+        authority_cache.remote_display_ns=remote->display_deadline_ns;
+        authority_cache.remote_eligible=true;authority_cache.remote_source_revoked=false;
+    }
+    else { authority_cache.remote_eligible=true;authority_cache.remote_source_revoked=true; }
+    authority_cache.remote_raw=*remote;authority_cache.remote_raw.captured_ms=now_ms;
+    authority_cache.remote_seen=true;RefreshRemote(now_ms);return true;
 }

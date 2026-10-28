@@ -1,284 +1,197 @@
 /**
  * @file        test_app_udp_integration.c
- * @brief       验证真实App调度中的事件域接线及结果交换。
- * @details     使用真实域、序列、测量门控和结果模块，观察UDP边界调用与撤域顺序。
- * @note        UDP服务由边界桩替代；真实UDP逻辑由Tests/Udp独立测试，不证明硬件行为。
+ * @brief       双进程真实App/UDP/结果缓存/UI主机驱动。
+ * @details     stdin提供受控时钟、检测器标量TOA及网络输入；stdout记录生产报文和只读状态。
+ * @note        只替换硬件/检测器/LwIP收发边界，不注入pair或结果，不访问实物。
  */
 #define main unused_app_main
-#include "Tests/App/test_app_main.c"
+#define BSP_Console_Write LegacyConsoleWrite
+#define MX_LWIP_Process LegacyLwipProcess
+#include "test_app_main.c"
+#undef MX_LWIP_Process
+#undef BSP_Console_Write
 #undef main
-#include "Network/udp_sound_event.h"
-#include "Sync/time_sync.h"
-#include "Sync/time_domain.h"
-#include "Detector/sound_event_time.h"
-#include "Detector/event_classifier.h"
-#include "Detector/standard_sequence.h"
 #include "BSP/bsp_board_identity.h"
-#include <stdio.h>
+#include "BSP/bsp_ptp.h"
+#include "Detector/event_classifier.h"
+#include "Detector/sound_event_time.h"
+#include "Detector/sound_detector_service.h"
+#include "Network/udp_sound_event.h"
+#include "Sync/time_domain.h"
+#include "UI/status_snapshot.h"
+#include "lwip/netif.h"
+#include "lwip/pbuf.h"
+#include "lwip/udp.h"
+#include <inttypes.h>
 
-/* Host test hooks exported by app_main.c under SBCG_HOST_TEST. */
-void App_Test_ServiceAuthoritativeResult(uint32_t now_ms);
-void App_Test_HandleMeasurementAck(const MeasurementAck *ack);
-void App_Test_HandleDomainMessage(const DomainMessage *message);
-
+#define HOST_QUEUE 64U
+#define HOST_BYTES 128U
+typedef struct { uint16_t length; uint8_t data[HOST_BYTES]; } HostPacket;
+struct netif gnetif;
+static struct udp_pcb fake_pcb;
+static struct pbuf tx_pbuf;
+static uint8_t tx_payload[HOST_BYTES];
+static HostPacket packets[HOST_QUEUE];
+static unsigned queue_head,queue_count;
+static udp_recv_fn receive_callback;
+static void *receive_context;
+static ip_addr_t peer_ip;
 static BoardIdentityProfile identity;
-static bool send_ok=true;
-static MeasurementResultSnapshot sent_result;
-static unsigned result_sends;
-static uint32_t now_ms;
-static uint32_t udp_domain;
-static unsigned domain_updates,domain_before_loop,event_sends,udp_processes;
-static bool sync_faulted,event_pending,check_app_order,pair_pending;
+static uint64_t common_ns;
+static uint32_t audio_session=1U,clock_epoch=3U;
+static bool clock_ok=true,sync_faulted,send_ok=true,event_pending;
 static SoundEventTimeEvent next_event;
-static SoundPairResult next_pair;
-static UDPSoundEvent_ResultSink pair_sink;
-static uint32_t audio_session=1U;
-static unsigned domain_revocations;
-static unsigned domain_requests,event_takes;
+static uint32_t event_takes,event_delivered,packet_attempts;
+static TemperatureSnapshot host_temperature={false,true,1U,0U,20000,343420U};
 
+/** @brief 输出字节十六进制。 @param data 非NULL输入。 @param length 字节数。 @return 无返回值。 */
+static void Hex(const uint8_t *data,size_t length)
+{for(size_t i=0U;i<length;++i)(void)printf("%02x",data[i]);}
+/** @brief 保存实际串口投影并保留原门控断言。 @param data 非NULL行。 @param length 字节数。 @return 模拟写入结果。 */
+bool BSP_Console_Write(const char *data,uint16_t length)
+{
+    const bool result=LegacyConsoleWrite(data,length);
+    (void)printf("{\"type\":\"log\",\"tick_ms\":%" PRIu32 ",\"hex\":\"",tick_ms);
+    Hex((const uint8_t*)data,length);puts("\"}");return result;
+}
+/** @brief 返回独立进程的板身份。 @return 静态只读副本。 */
 const BoardIdentityProfile *BSP_BoardIdentity_Get(void){return &identity;}
+/** @brief 模拟同步外设卸载。 @return true。 */
 bool TimeSync_Deinit(void){return true;}
-bool TimeSync_Init(uint32_t now,const BoardIdentityProfile*p,uint32_t(*tick)(void),void(*log)(const char*,int))
-{(void)now;(void)p;(void)tick;(void)log;return true;}
-void TimeSync_Process(uint32_t now,bool allowed){(void)now;(void)allowed;}
-/** @brief 提供可控同步资格；now为本轮毫秒，out非NULL时写A板状态，无返回值。 */
+/** @brief 检查同步边界。 @param now 毫秒。 @param profile 身份。 @param tick 读时接口。 @param log 日志接口。 @return true。 */
+bool TimeSync_Init(uint32_t now,const BoardIdentityProfile *profile,uint32_t(*tick)(void),void(*log)(const char*,int))
+{assert(now==tick_ms && profile==&identity && tick && log);return true;}
+/** @brief 模拟同步轮询。 @param now 毫秒。 @param allowed DHT放行。 @return 无返回值。 */
+void TimeSync_Process(uint32_t now,bool allowed){assert(now==tick_ms && allowed==!temperature_low);}
+/** @brief 复制受控同步健康。 @param now 毫秒。 @param out 可空输出。 @return 无返回值。 */
 void TimeSync_GetSnapshot(uint32_t now,TimeSyncSnapshot *out)
-{(void)now;if(out){*out=(TimeSyncSnapshot){0};out->configured=true;out->role=identity.role;out->offset_valid=true;out->internal_locked=true;out->faulted=sync_faulted;}}
+{(void)now;if(out)*out=(TimeSyncSnapshot){.configured=true,.faulted=sync_faulted,
+    .offset_valid=!sync_faulted,.internal_locked=!sync_faulted,.role=identity.role,
+    .state=sync_faulted?CLOCK_SERVO_FAULT:CLOCK_SERVO_TRACKING};}
+/** @brief 读取受控PTP。 @param out 输出时间。 @return OK或NOT_READY。 */
+BSP_PtpStatus BSP_PTP_Read(BSP_PtpTime *out)
+{if(!clock_ok || out==NULL)return BSP_PTP_NOT_READY;out->seconds=(uint32_t)(common_ns/UINT64_C(1000000000));out->nanoseconds=(uint32_t)(common_ns%UINT64_C(1000000000));return BSP_PTP_OK;}
+/** @brief 返回本机代际，初始3，独立于权威代际。 @return 时钟代际。 */
+uint32_t BSP_PTP_GetEpoch(void){return clock_epoch;}
+/** @brief 复制网口健康。 @param now 毫秒。 @param out 可空输出。 @return 无返回值。 */
+void EthernetMonitor_GetSnapshot(uint32_t now,EthernetMonitorSnapshot *out)
+{(void)now;if(out)*out=(EthernetMonitorSnapshot){true,netif_is_link_up(&gnetif)!=0U,0U};}
+/** @brief 清检测器边界队列。 @param log 可空日志接口。 @return 无返回值。 */
+void SoundEventTime_Init(void(*log)(const char*,int)){(void)log;event_pending=false;}
+/** @brief 不生成硬件锚点。 @param now 毫秒。 @param observation 只读观测。 @return 无返回值。 */
+void SoundEventTime_Observe(uint32_t now,const AudioTimeAnchorObservation *observation){(void)now;(void)observation;}
+/** @brief 标量TOA由主机输入。 @param now 毫秒。 @param snapshot 采集快照。 @return 无返回值。 */
+void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot *snapshot){(void)now;assert(snapshot!=NULL);}
+/** @brief 消费一次TOA标量。 @param out 非NULL输出。 @return 有事件时true。 */
+bool SoundEventTime_TakeEvent(SoundEventTimeEvent *out)
+{assert(out!=NULL && !temperature_low);++event_takes;if(!event_pending){memset(out,0,sizeof *out);return false;}*out=next_event;event_pending=false;++event_delivered;return true;}
+/** @brief 不生成音频锚点。 @param out 可空输出。 @return false。 */
+bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){if(out)memset(out,0,sizeof *out);return false;}
+/** @brief 不访问PCM。 @param now 毫秒。 @param observation 只读观测。 @return 无返回值。 */
+void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation *observation){(void)now;(void)observation;}
+/** @brief 提供当前健康SAI快照。 @param out 可空输出。 @return 无返回值。 */
+void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out)
+{if(out)*out=(BSP_AudioSnapshot){.running=true,.session=audio_session,.callback_count=1U,.last_callback_ms=tick_ms};}
+/** @brief 返回检测计数元数据。 @param out 可空输出。 @return 无返回值。 */
+void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
+{if(out)*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=event_delivered};}
+/** @brief 复制温度边界值。 @param now 毫秒。 @param out 可空输出。 @return 无返回值。 */
+void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)*out=host_temperature;}
+/** @brief 保存真实TEMP解码结果。 @param now 毫秒。 @param temperature_milli_c 毫摄氏度。 @param sound_speed_mm_s 声速。 @param version 版本。 @param manual 手动标志。 @return true。 */
+bool TemperatureService_SetRemote(uint32_t now,int32_t temperature_milli_c,uint32_t sound_speed_mm_s,uint32_t version,bool manual)
+{(void)now;host_temperature=(TemperatureSnapshot){manual,true,version,0U,temperature_milli_c,sound_speed_mm_s};return true;}
 
-void SoundEventTime_Init(void(*log)(const char*,int)){(void)log;}
-void SoundEventTime_Observe(uint32_t now,const AudioTimeAnchorObservation*out){(void)now;(void)out;}
-void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot*out){(void)now;(void)out;}
-/** @brief 交付至多一个只读标量事件，out不可NULL；先检查本轮已同步域，返回是否有事件。 */
-bool SoundEventTime_TakeEvent(SoundEventTimeEvent*out)
+/** @brief 分配PCB边界对象。 @return 静态PCB。 */
+struct udp_pcb *udp_new(void){return &fake_pcb;}
+/** @brief 取消PCB注册。 @param pcb 本地PCB。 @return 无返回值。 */
+void udp_remove(struct udp_pcb *pcb){(void)pcb;receive_callback=NULL;}
+/** @brief 检查5009端口绑定。 @param pcb PCB。 @param ip 地址。 @param port 端口。 @return ERR_OK。 */
+err_t udp_bind(struct udp_pcb *pcb,const ip_addr_t *ip,u16_t port){(void)pcb;(void)ip;assert(port==5009U);return ERR_OK;}
+/** @brief 模拟网口绑定。 @param pcb PCB。 @param netif 网口。 @return 无返回值。 */
+void udp_bind_netif(struct udp_pcb *pcb,const struct netif *netif){(void)pcb;(void)netif;}
+/** @brief 保存生产接收回调。 @param pcb PCB。 @param callback 接收函数。 @param context 上下文。 @return 无返回值。 */
+void udp_recv(struct udp_pcb *pcb,udp_recv_fn callback,void *context){(void)pcb;receive_callback=callback;receive_context=context;}
+/** @brief 提供有界发送pbuf。 @param layer 层。 @param length 字节数。 @param type 类型。 @return 静态pbuf。 */
+struct pbuf *pbuf_alloc(pbuf_layer layer,u16_t length,pbuf_type type)
+{(void)layer;(void)type;assert(length<=HOST_BYTES);memset(&tx_pbuf,0,sizeof tx_pbuf);tx_pbuf.payload=tx_payload;tx_pbuf.len=tx_pbuf.tot_len=length;return &tx_pbuf;}
+/** @brief 保存生产codec字节。 @param packet pbuf。 @param data 输入。 @param length 字节数。 @return ERR_OK。 */
+err_t pbuf_take(struct pbuf *packet,const void *data,u16_t length){assert(packet==&tx_pbuf && length<=packet->tot_len);memcpy(packet->payload,data,length);return ERR_OK;}
+/** @brief 静态pbuf所有权边界。 @param packet 已处理pbuf。 @return 1。 */
+u8_t pbuf_free(struct pbuf *packet){(void)packet;return 1U;}
+/** @brief 输出真实网络字节和失败尝试。 @param pcb PCB。 @param packet pbuf。 @param destination 对端。 @param port 端口。 @return 受控结果。 */
+err_t udp_sendto(struct udp_pcb *pcb,struct pbuf *packet,const ip_addr_t *destination,u16_t port)
+{(void)pcb;assert(port==5009U && ip_addr_cmp(destination,&peer_ip));++packet_attempts;
+ (void)printf("{\"type\":\"packet\",\"tick_ms\":%" PRIu32 ",\"ok\":%u,\"hex\":\"",tick_ms,send_ok?1U:0U);
+ Hex(packet->payload,packet->tot_len);puts("\"}");return send_ok?ERR_OK:ERR_MEM;}
+/** @brief 生产接收器读取magic和完整字节。 @param packet pbuf。 @param data 输出。 @param length 字节数。 @param offset 起点。 @return 已复制数。 */
+u16_t pbuf_copy_partial(const struct pbuf *packet,void *data,u16_t length,u16_t offset)
+{assert(packet!=NULL && (uint32_t)offset+length<=packet->tot_len);memcpy(data,(const uint8_t*)packet->payload+offset,length);return length;}
+/** @brief 在App的LwIP阶段交付输入，生产Receive处理所有协议。 @return 无返回值。 */
+void MX_LWIP_Process(void)
+{LegacyLwipProcess();while(queue_count!=0U && receive_callback!=NULL){
+ HostPacket *entry=&packets[queue_head];struct pbuf packet={0};packet.payload=entry->data;packet.len=packet.tot_len=entry->length;
+ receive_callback(receive_context,&fake_pcb,&packet,&peer_ip,5009U);queue_head=(queue_head+1U)%HOST_QUEUE;--queue_count;}}
+
+/** @brief 输出生产缓存、域和UI文本；不改变年龄或缓存。 @return 无返回值。 */
+static void Snapshot(void)
 {
-    assert(out!=NULL && !temperature_low);++event_takes;
-    if(check_app_order){assert(domain_updates>domain_before_loop);}
-    if(event_pending){*out=next_event;event_pending=false;return true;}
-    memset(out,0,sizeof *out);return false;
+ MeasurementPresentationSnapshot p;MeasurementResult_GetPresentation(&p);TimeDomainSnapshot d;TimeDomain_Get(&d);
+ UI_StatusSnapshot s;UI_StatusSnapshot_Read(tick_ms,&s);UI_StatusText text;assert(UI_StatusFormat(&s,tick_ms,&text));
+ uint32_t rx_ok=0U,rx_bad=0U;UDPSoundEvent_GetSnapshot(NULL,NULL,NULL,&rx_ok,&rx_bad,NULL);
+ (void)printf("{\"type\":\"snapshot\",\"role\":\"%c\",\"tick_ms\":%" PRIu32
+ ",\"common_ns\":%" PRIu64 ",\"domain_valid\":%u,\"domain\":%" PRIu32
+ ",\"state\":%u,\"id\":%" PRIu32 ",\"rev\":%" PRIu32 ",\"epoch\":%" PRIu32
+ ",\"has\":%u,\"fresh\":%u,\"formal\":%u,\"provisional\":%u,\"mm\":%" PRId32
+ ",\"direction\":%u,\"source_ns\":%" PRIu64 ",\"fresh_deadline_ns\":%" PRIu64
+ ",\"display_deadline_ns\":%" PRIu64 ",\"temp_version\":%" PRIu32
+ ",\"distance_text\":\"%s\",\"quality_text\":\"%s\",\"rx_ok\":%" PRIu32
+ ",\"rx_bad\":%" PRIu32 ",\"packet_attempts\":%" PRIu32 ",\"event_takes\":%" PRIu32
+ ",\"audio_allowed\":%u,\"anchor_allowed\":%u}\n",
+ identity.role==BOARD_ROLE_A?'A':'B',tick_ms,common_ns,d.valid?1U:0U,d.id,(unsigned)p.state,
+ p.measurement_id,p.state_revision,p.authority_clock_epoch,p.has_value?1U:0U,p.fresh?1U:0U,
+ p.formal?1U:0U,p.provisional?1U:0U,p.distance_mm,(unsigned)p.direction,p.source_common_ns,
+ p.fresh_deadline_ns,p.display_deadline_ns,p.temperature_version,text.distance,text.quality,
+ rx_ok,rx_bad,packet_attempts,event_takes,audio_allowed,anchor_allowed);
 }
-bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation*out){if(out)memset(out,0,sizeof *out);return false;}
-void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation*obs){(void)now;(void)obs;}
-/** @brief 提供可控音频会话；out可NULL，无返回值，不提供PCM读取权。 */
-void BSP_Audio_GetSnapshot(BSP_AudioSnapshot*out)
-{if(out){*out=(BSP_AudioSnapshot){0};out->running=true;out->session=audio_session;out->callback_count=1U;}}
-
-/** @brief 结果发送边界桩：记录App实际交给UDP层的结果。 */
-bool UDPSoundEvent_SendResult(uint32_t now,const MeasurementResultSnapshot *result)
-{(void)now;assert(result!=NULL);sent_result=*result;++result_sends;return send_ok;}
-bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile*p,uint32_t(*tick)(void),UDPSoundEvent_Log log)
-{(void)now;(void)p;(void)tick;(void)log;return true;}
-/** @brief 记录App传来的有效域；id为0表示撤域，无返回值，不代替真实UDP清队逻辑。 */
-void UDPSoundEvent_SetTimeDomain(uint32_t id){udp_domain=id;++domain_updates;if(id==0U)++domain_revocations;}
-/** @brief 检查本轮域已先同步，再按需交付配对结果；now为本轮毫秒，无返回值。 */
-void UDPSoundEvent_Process(uint32_t now)
+/** @brief 排队十六进制网络输入。 @param hex 完整十六进制串。 @return 无返回值。 */
+static void Queue(const char *hex)
+{const size_t length=strcspn(hex,"\r\n ");assert(length%2U==0U && length/2U<=HOST_BYTES && queue_count<HOST_QUEUE);
+ HostPacket *entry=&packets[(queue_head+queue_count)%HOST_QUEUE];entry->length=(uint16_t)(length/2U);
+ for(size_t i=0U;i<length/2U;++i){unsigned value=0U;assert(sscanf(hex+2U*i,"%2x",&value)==1);entry->data[i]=(uint8_t)value;}++queue_count;}
+/** @brief 一个板角色的独立进程入口。 @param argc 参数数。 @param argv 角色、启动毫秒、共同时间。 @return 正常0，错误非零。 */
+int main(int argc,char **argv)
 {
-    (void)now;++udp_processes;
-    if(check_app_order)assert(domain_updates>domain_before_loop);
-    if(pair_pending){assert(pair_sink!=NULL);pair_pending=false;pair_sink(&next_pair);}
-}
-/** @brief 观察真实App声音发布，event不可NULL且必须匹配已同步有效域；now为毫秒，返回true。 */
-bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord*event)
-{(void)now;assert(event!=NULL && udp_domain!=0U && event->time_domain==udp_domain);++event_sends;return true;}
-/** @brief 保存真实App注册的前台结果消费者；s可NULL，无返回值。 */
-void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink s){pair_sink=s;}
-void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink s){(void)s;}
-void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink s){(void)s;}
-void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink s){(void)s;}
-void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink s){(void)s;}
-
-void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink){(void)sink;}
-bool UDPSoundEvent_SendTemperature(uint32_t now,const TemperatureSnapshot *temperature)
-{(void)now;(void)temperature;return true;}
-void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink){(void)sink;}
-void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink){(void)sink;}
-bool UDPSoundEvent_SendRangingStatus(uint32_t now,const RangingStatusMessage *message){(void)now;(void)message;return false;}
-bool UDPSoundEvent_SendRangingAck(uint32_t now,const RangingStatusAck *ack){(void)now;(void)ack;return false;}
-/** @brief 观察主动DOMAIN发送；now为毫秒、token为域，DHT低态禁止调用，成功返回true。 */
-bool UDPSoundEvent_SendDomainRequest(uint32_t now,uint32_t token)
-{(void)now;(void)token;assert(!temperature_low);++domain_requests;return true;}
-bool UDPSoundEvent_SendDomainAck(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
-bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
-{(void)now;(void)id;(void)domain;return true;}
-void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out)
-{(void)now;if(out){*out=(TemperatureSnapshot){0};out->valid=true;out->sound_speed_mm_s=343000U;out->version=1U;}}
-
-bool TemperatureService_SetRemote(uint32_t now,int32_t temperature_milli_c,
-                                  uint32_t sound_speed_mm_s,uint32_t version,bool manual)
-{(void)now;(void)temperature_milli_c;(void)sound_speed_mm_s;(void)version;(void)manual;return true;}
-
-/** @brief 用A身份初始化真实App及原有主机外设桩；无参数、无返回值。 */
-static void InitApp(void)
-{
-    tick_ms=0U;
-    memcpy(identity.uid_words,info_uid,sizeof info_uid);
-    identity.role=BOARD_ROLE_A;
-    identity.peer_ip[0]=192U;identity.peer_ip[1]=168U;identity.peer_ip[2]=10U;identity.peer_ip[3]=2U;
-    Reset(0U,true);
-}
-/** @brief 以当前板角色完成真实时间域握手；token为非零域，at为毫秒，无返回值。 */
-static void SetDomain(uint32_t token,uint32_t at)
-{
-    TimeSyncSnapshot sync={0};
-    sync.configured=true;sync.role=identity.role;sync.offset_valid=true;sync.internal_locked=true;
-    TimeDomain_InitWithId(token);
-    TimeDomain_Update(&sync);
-    (void)TimeDomain_OnPeerAck(token,at);
-}
-static void Publish(uint32_t now,uint32_t id_delta)
-{
-    SoundPairResult pair={0};TemperatureSnapshot temp={0};
-    temp.valid=true;temp.sound_speed_mm_s=343000U;temp.version=1U;
-    pair.valid=true;pair.status=SOUND_PAIR_OK;pair.time_domain=0x1234U;
-    pair.quality=80U;pair.direction=SOUND_DIRECTION_A;
-    pair.delta_ns=1000000U+(int64_t)id_delta;
-    pair.a_sequence=1U;pair.b_sequence=2U;pair.sound_speed_mm_s=343000U;
-    assert(MeasurementResult_PublishPair(&pair,&temp,now));
-}
-
-/**
- * @brief 运行一轮真实App，验证域同步早于事件取出、发送及配对处理。
- * @param at 本轮单调毫秒。
- * @param sequence 非零时提供一条该序号CHIRP，0表示无事件。
- * @return 无返回值；模型时间按真实标准声2s周期构造，便于建立序列资格。
- */
-static void ProcessApp(uint32_t at,uint32_t sequence)
-{
-    tick_ms=at;domain_before_loop=domain_updates;
-    next_event=(SoundEventTimeEvent){0};
-    next_event.sequence=sequence;next_event.session=audio_session;next_event.quality=80U;
-    next_event.event_class=EVENT_CLASS_CHIRP;
-    next_event.time_ns=(uint64_t)sequence*STANDARD_SEQUENCE_PERIOD_NS;
-    event_pending=sequence!=0U;
-    App_Process();
-}
-
-/** @brief 检查真实App实际调度和配对发布对当前域的门控；无参数、无返回值。 */
-static void TestAppDomainWiring(void)
-{
-    check_app_order=true;
-    SetDomain(0x1234U,10U);
-    ProcessApp(100U,1U);
-    assert(udp_domain==0x1234U && event_sends==1U && udp_processes==1U);
-    ProcessApp(1100U,2U);
-    ProcessApp(2100U,3U);
-    assert(event_sends==3U);
-    next_pair=(SoundPairResult){0};next_pair.valid=true;next_pair.status=SOUND_PAIR_OK;
-    next_pair.time_domain=0x1234U;next_pair.delta_ns=1000000U;
-    next_pair.direction=SOUND_DIRECTION_A;next_pair.quality=80U;
-    pair_pending=true;ProcessApp(2150U,0U);
-    MeasurementResultSnapshot result;
-    assert(MeasurementResult_Get(2150U,&result));
-    next_pair.time_domain=0x5678U;
-    pair_pending=true;ProcessApp(2200U,0U);
-    assert(!MeasurementResult_Get(2200U,&result));
-    assert(pair_sink!=NULL);pair_sink(NULL);
-    assert(!MeasurementResult_Get(2200U,&result));
-    sync_faulted=true;
-    ProcessApp(2250U,4U);
-    assert(udp_domain==0U && event_sends==3U && !MeasurementResult_Get(2250U,&result));
-    sync_faulted=false;
-    SetDomain(0x1234U,2300U);
-    ProcessApp(2300U,0U);
-    assert(udp_domain==0x1234U && event_sends==3U);
-    unsigned revoked=domain_revocations;
-    audio_session=2U;
-    ProcessApp(2350U,0U);
-    assert(domain_revocations==revoked+1U && udp_domain==0x1234U);
-    identity.role=BOARD_ROLE_B;
-    SetDomain(0x1234U,2400U);
-    revoked=domain_revocations;
-    audio_session=3U;
-    ProcessApp(2400U,0U);
-    assert(domain_revocations==revoked+1U && udp_domain==0x1234U);
-    ProcessApp(5400U,0U);
-    assert(udp_domain==0U);
-}
-
-/**
- * @brief 验证DHT低态仍逐轮同步撤域和同令牌恢复，并保持音频和主动DOMAIN发送门控。
- * @return 无返回值；使用真实App_Process、真实TimeDomain和可观察UDP边界，不替代UDP清队测试。
- */
-static void TestDomainDuringDhtLow(void)
-{
-    identity.role=BOARD_ROLE_A;
-    SetDomain(0x1234U,6000U);
-    ProcessApp(6000U,0U);
-    assert(udp_domain==0x1234U);
-    const unsigned revoked=domain_revocations;
-    const unsigned takes_before=event_takes,processed_before=udp_processes;
-    const unsigned sent_before=event_sends,requests_before=domain_requests;
-    const unsigned audio_before=audio_allowed,anchors_before=anchor_allowed;
-    temperature_low=true;sync_faulted=true;
-    ProcessApp(6010U,0U);
-    assert(udp_domain==0U && domain_revocations==revoked+1U &&
-           domain_updates>domain_before_loop);
-    sync_faulted=false;
-    SetDomain(0x1234U,6020U);
-    ProcessApp(6020U,0U);
-    assert(udp_domain==0x1234U && domain_revocations==revoked+1U &&
-           domain_updates>domain_before_loop);
-    assert(event_takes==takes_before && udp_processes==processed_before &&
-           event_sends==sent_before && domain_requests==requests_before &&
-           audio_allowed==audio_before && anchor_allowed==anchors_before);
-    temperature_low=false;
-}
-
-/** @brief 验证首对高质量CHIRP在标准序列确认前可临时显示；无参数、无返回值。 */
-static void TestProvisionalFirstResult(void)
-{
-    InitApp();SetDomain(0x1234U,10U);
-    ProcessApp(100U,1U);
-    ProcessApp(1100U,2U); /* 两次事件尚未形成3次标准序列 */
-    next_pair=(SoundPairResult){0};next_pair.valid=true;next_pair.status=SOUND_PAIR_OK;
-    next_pair.time_domain=0x1234U;next_pair.delta_ns=1000000U;
-    next_pair.direction=SOUND_DIRECTION_A;next_pair.quality=95U;
-    pair_pending=true;ProcessApp(1200U,0U);
-    MeasurementResultSnapshot result;
-    assert(MeasurementResult_Get(1200U,&result));
-    assert(result.direction==SOUND_DIRECTION_A);
-    puts("PASS provisional first result: high-quality first pair displays before 3-event sequence");
-}
-
-/** @brief 运行App结果交换及域同步测试；无参数，成功返回0。 */
-int main(void)
-{
-    InitApp();
-    SetDomain(0x1234U,10U);
-    Publish(100U,0U);
-    now_ms=100U;
-    App_Test_ServiceAuthoritativeResult(now_ms);
-    assert(result_sends==1U && sent_result.id==1U);
-    MeasurementAck ack={MEASUREMENT_ACK_OK,1U,0x1234U};
-    App_Test_HandleMeasurementAck(&ack);
-    App_Test_ServiceAuthoritativeResult(now_ms+1U);
-    assert(result_sends==1U);
-    /* B restart: ACK sequence regresses -> current result resent. */
-    DomainMessage d={DOMAIN_MESSAGE_ACK,BOARD_ROLE_B,DOMAIN_LOCAL_VALID,0x1234U,0x1234U,3U};
-    App_Test_HandleDomainMessage(&d);
-    d.sequence=1U;App_Test_HandleDomainMessage(&d);
-    App_Test_ServiceAuthoritativeResult(now_ms+2U);
-    assert(result_sends==2U);
-    /* Failed send is throttled by the 500ms result cadence. */
-    Publish(1000U,1U);
-    send_ok=false;
-    App_Test_ServiceAuthoritativeResult(1000U);
-    App_Test_ServiceAuthoritativeResult(1001U);
-    assert(result_sends==3U);
-    send_ok=true;
-    App_Test_ServiceAuthoritativeResult(1500U);
-    assert(result_sends==4U);
-    /* Domain loss invalidates; recovery must not resend the old result. */
-    TimeDomain_Invalidate();
-    App_Test_ServiceAuthoritativeResult(2000U);
-    MeasurementResultSnapshot out;
-    assert(!MeasurementResult_Get(2000U,&out));
-    unsigned before=result_sends;
-    SetDomain(0x1234U,2100U);
-    App_Test_ServiceAuthoritativeResult(2100U);
-    assert(result_sends==before);
-    TestAppDomainWiring();
-    TestDomainDuringDhtLow();
-    TestProvisionalFirstResult();
-    puts("PASS app+UDP boundary: send/ACK/restart resend, failure throttle, domain before events/process, wrong/null pair rejected, A/B session reset, timeout, DHT-low revoke/restore");
-    return 0;
+ assert(argc==4 && (argv[1][0]=='A' || argv[1][0]=='B'));
+ const uint32_t ids[2][3]={{0x001A002DU,0x30365105U,0x36363631U},{0x00380050U,0x35385104U,0x37313532U}};
+ memcpy(info_uid,ids[argv[1][0]=='A'?0U:1U],sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));
+ IP_ADDR4(&peer_ip,identity.peer_ip[0],identity.peer_ip[1],identity.peer_ip[2],identity.peer_ip[3]);
+ IP_ADDR4(&gnetif.ip_addr,identity.local_ip[0],identity.local_ip[1],identity.local_ip[2],identity.local_ip[3]);gnetif.flags=NETIF_FLAG_UP|NETIF_FLAG_LINK_UP;
+ common_ns=(uint64_t)strtoull(argv[3],NULL,10);Reset((uint32_t)strtoul(argv[2],NULL,10),true);
+ puts("{\"type\":\"done\"}");fflush(stdout);char command[1024];
+ while(fgets(command,sizeof command,stdin)!=NULL){
+  unsigned value=0U;uint32_t at=0U,seq=0U;uint64_t clock=0U,event_time=0U;
+  if(strncmp(command,"STEP ",5U)==0){
+   char *cursor=command+5,*end=NULL;
+   at=(uint32_t)strtoul(cursor,&end,10);cursor=end;
+   clock=(uint64_t)strtoull(cursor,&end,10);cursor=end;
+   seq=(uint32_t)strtoul(cursor,&end,10);cursor=end;
+   event_time=(uint64_t)strtoull(cursor,&end,10);
+   if(end!=cursor){
+   tick_ms=at;common_ns=clock;if(seq!=0U){assert(!event_pending);next_event=(SoundEventTimeEvent){.sequence=seq,.session=audio_session,
+    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=EVENT_CLASS_CHIRP,.quality=98U};event_pending=true;}App_Process();
+   }
+  }else if(strncmp(command,"RX ",3U)==0)Queue(command+3);
+  else if(strncmp(command,"SNAP",4U)==0)Snapshot();
+  else if(sscanf(command,"SYNC %u",&value)==1)sync_faulted=value==0U;
+  else if(sscanf(command,"CLOCK %u",&value)==1)clock_ok=value!=0U;
+  else if(sscanf(command,"EPOCH %u",&value)==1)clock_epoch=value;
+  else if(sscanf(command,"LOW %u",&value)==1)temperature_low=value!=0U;
+  else if(sscanf(command,"SESSION %u",&value)==1)audio_session=value;
+  else if(sscanf(command,"SEND %u",&value)==1)send_ok=value!=0U;
+  else if(strncmp(command,"REINIT",6U)==0)App_Init();
+  else if(sscanf(command,"TEMP %u",&value)==1){host_temperature.temperature_milli_c=(int32_t)value;host_temperature.sound_speed_mm_s=331300U+(606U*value+500U)/1000U;++host_temperature.version;}
+  else if(strncmp(command,"QUIT",4U)==0)break;
+  else {fprintf(stderr,"unknown command: %s",command);return 2;}
+  puts("{\"type\":\"done\"}");fflush(stdout);
+ }return 0;
 }

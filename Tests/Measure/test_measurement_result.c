@@ -1,3 +1,9 @@
+/**
+ * @file        test_measurement_result.c
+ * @brief       验证旧结果接口及显式可信上下文下的跟踪展示兼容性。
+ * @details     旧模式保留既有毫米稳定器；Update启用后只允许权威展示作为结果真值。
+ * @note        全部使用合成输入，不操作硬件。
+ */
 #include "Measure/measurement_result.h"
 #include <assert.h>
 #include <stdio.h>
@@ -27,6 +33,7 @@ static SoundPairResult TrackedPair(int32_t mm,uint32_t source_ms)
     p.b_time_ns=(uint64_t)((int64_t)p.a_time_ns+p.delta_ns);
     return p;
 }
+/** @brief 运行旧接口与新权威展示回归，成功返回0，断言失败退出。 */
 int main(void)
 {
     MeasurementResult_Init(0U);MeasurementResultSnapshot out;
@@ -111,12 +118,19 @@ int main(void)
     pair=Pair(true,delta320,95U,SOUND_DIRECTION_A);
     assert(MeasurementResult_PublishPair(&pair,&temp,6100U));
     assert(MeasurementResult_Get(6100U,&out) && out.distance_mm==320U);
+    /* 旧入口也不得让64位乘法回绕生成零距离。 */
+    MeasurementResult_Init(7000U);
+    pair=Pair(true,INT64_C(1)<<61,95U,SOUND_DIRECTION_A);
+    assert(!MeasurementResult_PublishPair(&pair,&temp,7000U));
 
     /* A2b展示层：首点临时，3点确认，离群HOLD，远程状态缓存。 */
     tracked_a_sequence=1U;tracked_b_sequence=1U;
     MeasurementResult_Init(8000U);
     TemperatureSnapshot tracked_temp=Temp(true,343000U,9U);
     SoundPairResult tracked=TrackedPair(315,0U);
+    MeasurementContext tracked_context={true,true,true,true,7U,41U,3U,11U,12U,900000000ULL};
+    MeasurementResult_Update(&tracked_context,&tracked_temp,8000U,
+        tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns);
     assert(MeasurementResult_PublishTrackedPair(&tracked,&tracked_temp,false,8000U,
         tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns)!=
         RANGING_DECISION_REJECT);
@@ -137,6 +151,8 @@ int main(void)
     assert(presentation.state==MEASUREMENT_PRESENTATION_TRACKING &&
            presentation.has_value && !presentation.formal &&
            presentation.provisional && presentation.distance_mm==315);
+    /* 前两次临时结果和第三次确认均来自独立源，ID不得回退复用。 */
+    assert(presentation.measurement_id==3U);
     const uint32_t formal_id=presentation.measurement_id;
     tracked=TrackedPair(245,6000U);
     assert(MeasurementResult_PublishTrackedPair(&tracked,&tracked_temp,true,14000U,
@@ -149,6 +165,9 @@ int main(void)
     assert(presentation.measurement_id==formal_id);
     const MeasurementPresentationSnapshot remote_presentation=presentation;
     MeasurementResult_Init(15000U);
+    tracked_context.authority=false;tracked_context.local_clock_epoch=9U;
+    MeasurementResult_Update(&tracked_context,&tracked_temp,15000U,
+        tracked.a_time_ns>tracked.b_time_ns?tracked.a_time_ns:tracked.b_time_ns);
     assert(MeasurementResult_PublishRemotePresentation(&remote_presentation,7U,15000U));
     MeasurementResult_GetPresentation(&presentation);
     assert(presentation.state==MEASUREMENT_PRESENTATION_HOLD &&

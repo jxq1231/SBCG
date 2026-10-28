@@ -33,6 +33,7 @@ static bool MessageValid(const RangingStatusMessage *m)
     if(m==NULL || m->state>RANGING_STATE_FAULT || m->direction>2U ||
        m->quality>100U || (m->flags & (uint16_t)~RANGING_STATUS_FLAG_KNOWN)!=0U ||
        m->evidence_kind>RANGING_EVIDENCE_CODED || m->domain==0U ||
+       m->authority_clock_epoch==0U || m->state_revision==0U ||
        m->sound_speed_mm_s==0U)
     { return false; }
     const bool has=(m->flags&RANGING_STATUS_FLAG_HAS_VALUE)!=0U;
@@ -121,9 +122,10 @@ RangingStatusWireStatus RangingStatusWire_Decode(const uint8_t *data, uint16_t l
 
 static bool AckValid(const RangingStatusAck *ack)
 {
+    /* ID=0表示确认无值状态；revision和epoch仍必须完整，不能拒绝撤销ACK。 */
     return ack!=NULL && ack->status<=RANGING_STATUS_ACK_FAULT &&
-           ack->domain!=0U && ack->state_revision!=0U &&
-           !(ack->status==RANGING_STATUS_ACK_OK && ack->measurement_id==0U);
+           ack->domain!=0U && ack->authority_clock_epoch!=0U &&
+           ack->state_revision!=0U;
 }
 
 RangingStatusWireStatus RangingStatusAck_Encode(const RangingStatusAck *ack,

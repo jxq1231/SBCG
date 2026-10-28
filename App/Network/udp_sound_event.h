@@ -13,6 +13,7 @@
 #include "Network/measurement_ack.h"
 #include "Network/temperature_wire.h"
 #include "Network/ranging_status_wire.h"
+#include "Network/ranging_session.h"
 #include "BSP/board_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -66,6 +67,13 @@ void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink);
 bool UDPSoundEvent_SendRangingStatus(uint32_t now_ms,const RangingStatusMessage *message);
 /** @brief B发送RAK2；仅B/已绑定/链路可用。 */
 bool UDPSoundEvent_SendRangingAck(uint32_t now_ms,const RangingStatusAck *ack);
+
+/** @brief 安装RSC2会话消费者；只在固定对端的NO_SYS前台调用，输入仅本次有效。 */
+typedef void (*UDPSoundEvent_RangingSessionSink)(const RangingSessionMessage *message);
+/** @brief 设置会话消费者；NULL丢弃RSC2，不改变PTP或共同域。 */
+void UDPSoundEvent_SetRangingSessionSink(UDPSoundEvent_RangingSessionSink sink);
+/** @brief 通过原5009端口发送RSC2；now_ms只作接口一致性，失败返回false。 */
+bool UDPSoundEvent_SendRangingSession(uint32_t now_ms,const RangingSessionMessage *message);
 
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,

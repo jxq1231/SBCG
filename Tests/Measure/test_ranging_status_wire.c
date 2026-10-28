@@ -108,6 +108,16 @@ int main(void)
     ack_data[4]=1U;assert(RangingStatusAck_Decode(ack_data,sizeof ack_data,&decoded_ack)!=
         RANGING_STATUS_WIRE_OK);
 
+    /* 无值撤销也必须能确认，ID=0不能与非法ACK混淆。 */
+    RangingStatusAck empty_ack={RANGING_STATUS_ACK_OK,7U,2U,3U,0U};
+    assert(RangingStatusAck_Encode(&empty_ack,ack_data,sizeof ack_data)==RANGING_STATUS_WIRE_OK);
+    assert(RangingStatusAck_Decode(ack_data,sizeof ack_data,&decoded_ack)==
+        RANGING_STATUS_WIRE_OK && decoded_ack.measurement_id==0U);
+    source=Message();source.authority_clock_epoch=0U;
+    assert(RangingStatusWire_Encode(&source,data,sizeof data)==RANGING_STATUS_WIRE_INVALID_FIELD);
+    source=Message();source.state_revision=0U;
+    assert(RangingStatusWire_Encode(&source,data,sizeof data)==RANGING_STATUS_WIRE_INVALID_FIELD);
+
     puts("PASS ranging status wire: RST2/RAK2 golden bytes, flags/deadline/state/evidence gates");
     return 0;
 }

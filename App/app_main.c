@@ -31,6 +31,7 @@
 #include "Measure/measurement_gate.h"
 #include "Calibration/calibration.h"
 #include "Measure/result_exchange_state.h"
+#include "BSP/bsp_ptp.h"
 #endif
 #ifdef SBCG_USE_PPS
 #include "Sync/pps_service.h"
@@ -81,7 +82,7 @@
  * 调用关系：下方初始化、日志回调及前台排空共用；IRQ不访问该队列。
  */
 #if defined(SBCG_USE_CHIRP)
-#define APP_FIRMWARE_ID "SBCG-M4.2-PCMCAP"
+#define APP_FIRMWARE_ID "SBCG-A2B-RANGE-R1"
 #elif defined(SBCG_USE_TOUCHGFX) && defined(SBCG_USE_RESET_DIAGNOSTIC)
 #define APP_FIRMWARE_ID "SBCG-U3.1-RESET"
 #elif defined(SBCG_USE_TOUCHGFX)
@@ -121,11 +122,14 @@
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 static StandardSequence standard_sequence;
 static bool standard_sequence_detected;
-static ResultExchangeState result_exchange;
-static uint32_t last_audio_session;
-static uint32_t acked_ranging_revision;
-static uint32_t last_ranging_tx_ms;
-static uint32_t last_ranging_revision;
+/** @brief CPU-only前台会话/确认和独立对端音频身份；Init显式清零。 */
+typedef struct {
+    RangingSession session;
+    RangingExchangeState exchange;
+    uint32_t local_audio_session,peer_audio_session;
+    uint64_t peer_source_ns;
+} RangingAppState;
+static RangingAppState ranging_app __attribute__((section(".ItcmState"),aligned(32)));
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
@@ -352,19 +356,94 @@ static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
  */
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 /**
- * @brief A处理B的MACK：只接受同共同域令牌的成功确认，停止该ID刷新。
- * @param ack 非NULL已通过UDP来源/长度/Role校验的确认，仅本次有效。
- * @return 无返回值；不改变测量距离或PPS/TimeSync资格。
+ * @brief 读取实际PTP共同时间并复核本机代际，失败不伪造源时间。
+ * @param ns 非NULL输出，成功单位ns；失败写0。
+ * @param epoch 非NULL本机代际输出，不要求与对端数字相同。
+ * @return 两次代际一致且读时成功为true，仅前台读取已有BSP。
  */
-static void HandleMeasurementAck(const MeasurementAck *ack)
+static bool ReadRangingClock(uint64_t *ns,uint32_t *epoch)
 {
-    if(ack==NULL || ack->status!=MEASUREMENT_ACK_OK)return;
+    BSP_PtpTime clock={0};
+    const uint32_t before=BSP_PTP_GetEpoch();
+    const bool ok=BSP_PTP_Read(&clock)==BSP_PTP_OK;
+    *epoch=BSP_PTP_GetEpoch();*ns=0U;
+    if(!ok || before==0U || before!=*epoch || clock.nanoseconds>=1000000000U)return false;
+    *ns=(uint64_t)clock.seconds*UINT64_C(1000000000)+clock.nanoseconds;
+    return *ns!=0U;
+}
+
+/**
+ * @brief 在收发和UI之前持续驱动状态会话与真实源期限。
+ * @param now_ms 当前HAL毫秒；音频快照之后另取时校验回调年龄。
+ * @return 无返回值；不发送报文、不读取PCM，不改变PTP/PPS配置。
+ */
+static void RefreshRanging(uint32_t now_ms)
+{
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
-    TimeDomainSnapshot domain;
-    TimeDomain_Get(&domain);
-    if(!domain.valid || domain.id!=ack->time_domain)return;
-    ResultExchange_OnAck(&result_exchange,ack->measurement_id);
+    if(profile==NULL)return;
+    TimeDomainSnapshot domain;TimeDomain_Get(&domain);
+    EthernetMonitorSnapshot network;EthernetMonitor_GetSnapshot(now_ms,&network);
+    BSP_AudioSnapshot audio;BSP_Audio_GetSnapshot(&audio);
+    const uint32_t audio_now=BSP_Console_GetTickMs();
+    const bool stream_ok=audio.running && audio.session!=0U && audio.callback_count!=0U &&
+        (uint32_t)(audio_now-audio.last_callback_ms)<1000U && audio.error_count==0U &&
+        audio.hal_error==0U && audio.dma_error==0U && audio.start_error==0U && audio.dropped_blocks==0U;
+    uint64_t common_ns;uint32_t clock_epoch;
+    const bool clock_ok=ReadRangingClock(&common_ns,&clock_epoch);
+    const bool local_changed=ranging_app.local_audio_session!=0U &&
+        audio.session!=ranging_app.local_audio_session;
+    ranging_app.local_audio_session=audio.session;
+    const bool qualified=domain.valid && network.valid && network.link_up && stream_ok && !local_changed;
+    RangingSession_Update(&ranging_app.session,qualified,domain.id,clock_epoch,
+        clock_ok,common_ns,now_ms);
+    if(RangingSession_TakeContextChanged(&ranging_app.session))
+    {
+        ranging_app.peer_audio_session=0U;ranging_app.peer_source_ns=0U;
+        RangingExchange_Init(&ranging_app.exchange);
+    }
+    RangingSessionSnapshot session;RangingSession_Get(&ranging_app.session,&session);
+    const MeasurementContext context={
+        .authority=profile->role==BOARD_ROLE_A,
+        .domain_valid=qualified && session.established,
+        .stream_valid=stream_ok,.clock_valid=clock_ok,
+        .time_domain=domain.id,.authority_epoch=session.authority_epoch,
+        .local_clock_epoch=clock_epoch,
+        .a_session=profile->role==BOARD_ROLE_A?audio.session:ranging_app.peer_audio_session,
+        .b_session=profile->role==BOARD_ROLE_B?audio.session:ranging_app.peer_audio_session,
+        .source_floor_ns=session.source_floor_ns};
+    TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now_ms,&temperature);
+    CalibrationSnapshot calibration;Calibration_Get(&calibration);
+    if(context.authority)MeasurementResult_SetCalibration(calibration.offset_mm,calibration.version);
+    MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
+}
+
+/** @brief 接收固定对端的状态握手；message仅本次借用，健康读时先于处理，返回无值。 */
+static void HandleRangingSession(const RangingSessionMessage *message)
+{
+    const uint32_t now=BSP_Console_GetTickMs();
+    RefreshRanging(now);
+    (void)RangingSession_OnMessage(&ranging_app.session,message,now);
+    RefreshRanging(now);
+}
+
+/**
+ * @brief 从已校验对端事件建立音频session身份；旧源不得自行重置当前上下文。
+ * @param event UDP层核对端点/角色/共同域后的只读副本，仅本次调用有效。
+ * @return 无返回值；不从pair采用session，不发送报文。
+ */
+static void HandlePeerSound(const SoundEventRecord *event)
+{
+    if(event==NULL || !event->valid || event->session==0U)return;
+    const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
+    RangingSessionSnapshot session;RangingSession_Get(&ranging_app.session,&session);
+    uint64_t common_ns;uint32_t epoch;
+    if(!session.established || event->time_domain!=session.domain ||
+       event->time_ns<session.source_floor_ns || !ReadRangingClock(&common_ns,&epoch) ||
+       (event->time_ns>common_ns && event->time_ns-common_ns>UINT64_C(2000000)) ||
+       event->time_ns<=ranging_app.peer_source_ns)return;
+    ranging_app.peer_source_ns=event->time_ns;
+    ranging_app.peer_audio_session=event->session;
+    RefreshRanging(now);
 }
 /**
  * @brief 处理对端域报文：B采用A令牌并回ACK；A只接受同令牌ACK。
@@ -387,7 +466,6 @@ static void HandleDomainMessage(const DomainMessage *message)
             message->role==BOARD_ROLE_B && message->state==DOMAIN_LOCAL_VALID)
     {
         /* B重启会把ACK序号重置为1；这时必须恢复当前结果重发。 */
-        ResultExchange_OnPeerAckSequence(&result_exchange,message->sequence);
         (void)TimeDomain_OnPeerAck(message->token,now);
     }
 }
@@ -405,7 +483,7 @@ static void ServiceDomain(uint32_t now_ms)
     if(profile->role==BOARD_ROLE_A)
     {
         MeasurementGate_Tick(now_ms);
-        if(MeasurementGate_TakeInvalidation())MeasurementResult_Invalidate(now_ms);
+        (void)MeasurementGate_TakeInvalidation(); /* 健康协调者负责硬撤值，静默不清历史。 */
     }
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
@@ -415,13 +493,12 @@ static void ServiceDomain(uint32_t now_ms)
     {
         if(domain.valid){
             MeasurementGate_OnDomainValid(now_ms);
-            if(!last_domain_valid)ResultExchange_OnDomainRestored(&result_exchange);
+            RangingExchange_Init(&ranging_app.exchange);
         }
         else MeasurementGate_OnDomainInvalid(now_ms);
         last_domain_valid=domain.valid;
     }
-    if(profile->role==BOARD_ROLE_A && !domain.valid)
-    { MeasurementResult_InvalidatePresentation(now_ms); }
+    RefreshRanging(now_ms);
     static bool last_valid;
     static uint32_t last_domain_log_ms;
     if(domain.valid!=last_valid)
@@ -497,130 +574,74 @@ static const char *RangeDecisionName(MeasurementDecision decision)
 }
 
 /**
- * @brief 输出一次配对决策的被动观测；不改变测量、门控或网络状态。
- * @param pair 可NULL只读配对结果；非NULL时记录原始元数据。
- * @param temperature 可NULL温度快照，仅用于温补距离诊断。
- * @param reason 调用点短原因，不能为空。
- * @param formal 是否已形成标准序列正式路径。
- * @param provisional 是否为临时首显路径。
- * @return 无返回值；长行按同一SEQ拆成DECISION/DISTANCE两条。
+ * @brief 输出一次真实tracker决策；源身份和结果链接分行，避免256字节截断。
+ * @param pair 调用内借用的pair，NULL不输出；拒绝不把其源绑到旧结果。
+ * @param temperature 保留接口，温补字段取同一次诊断副本而非重复计算。
+ * @param reason 前台短原因，不能为空。
+ * @param formal 当前真实正式资格，PROXY不得为true。
+ * @param new_measurement 是否产生新的独立源ID；HOLD/拒绝/温补为false。
+ * @return 无返回值；日志满/非法长度由统一出口累计，不改变业务状态。
  */
 static void LogRangeDecision(const SoundPairResult *pair,const TemperatureSnapshot *temperature,
-                             const char *reason,bool formal,bool provisional)
+                             const char *reason,bool formal,bool new_measurement)
 {
+    (void)temperature;
     if(pair==NULL)return;
-    MeasurementDiagnosticsSnapshot diag;
-    (void)MeasurementResult_GetDiagnostics(&diag);
-    uint32_t temperature_mm=0U;
-    int32_t corrected_mm=0;
-    if(temperature!=NULL && temperature->valid && temperature->sound_speed_mm_s!=0U)
-    {
-        const uint64_t magnitude=pair->delta_ns<0?
-            (uint64_t)(-(pair->delta_ns+1))+1U:(uint64_t)pair->delta_ns;
-        temperature_mm=(uint32_t)((magnitude*temperature->sound_speed_mm_s+
-            UINT64_C(500000000))/UINT64_C(1000000000));
-        corrected_mm=(int32_t)temperature_mm+diag.corrected_mm-(int32_t)diag.temperature_distance_mm;
-    }
-    char raw_ns[24];
-    FormatSigned64(pair->delta_ns,raw_ns);
+    MeasurementDiagnosticsSnapshot diag;MeasurementResult_GetDiagnostics(&diag);
+    MeasurementPresentationSnapshot p;MeasurementResult_GetPresentation(&p);
+    char raw_ns[24],source[24];FormatSigned64(pair->delta_ns,raw_ns);
+    FormatUnsigned64(p.source_common_ns,source);
     char line[APP_LOG_LINE_CAPACITY];
-    const int length=snprintf(line,sizeof line,
-        "$RANGE_DECISION,SCHEMA=1,SEQ=%" PRIu32 ",DOMAIN=%" PRIu32
+    int length=snprintf(line,sizeof line,
+        "$RANGE_DECISION,SCHEMA=2,SEQ=%" PRIu32 ",DOMAIN=%" PRIu32
         ",A_SESS=%" PRIu32 ",A_SEQ=%" PRIu32 ",B_SESS=%" PRIu32 ",B_SEQ=%" PRIu32
-        ",RAW_NS=%s,DEC=%s,REASON=%s,ID=%" PRIu32 ",FORMAL=%u,PROV=%u\r\n",
+        ",RAW_NS=%s,DEC=%s,REASON=%s\r\n",
         diag.sequence,pair->time_domain,pair->a_session,pair->a_sequence,
-        pair->b_session,pair->b_sequence,raw_ns,
-        RangeDecisionName(diag.decision),reason,diag.measurement_id,
-        formal?1U:0U,provisional?1U:0U);
-    if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
-    char detail[APP_LOG_LINE_CAPACITY];
-    const int detail_length=snprintf(detail,sizeof detail,
-        "$RANGE_DISTANCE,SCHEMA=1,SEQ=%" PRIu32 ",PAIR_MM=%" PRIu32
-        ",TEMP_MM=%" PRIu32 ",CORR_MM=%" PRId32 ",PUB_MM=%" PRId32
-        ",STBL_CNT=%u,STBL0=%" PRId32 ",STBL1=%" PRId32 ",STBL2=%" PRId32
-        ",STBL3=%" PRId32 ",STBL4=%" PRId32 ",QUAL=%u,SPEED=%" PRIu32 "\r\n",
-        diag.sequence,pair->distance_mm,temperature_mm,corrected_mm,diag.published_mm,
-        (unsigned)diag.stable_count,diag.stable_mm[0],diag.stable_mm[1],diag.stable_mm[2],
-        diag.stable_mm[3],diag.stable_mm[4],(unsigned)pair->quality,
-        temperature!=NULL?temperature->sound_speed_mm_s:0U);
-    if(detail_length>0 && (size_t)detail_length<sizeof detail)SendLine(detail,detail_length);
+        pair->b_session,pair->b_sequence,raw_ns,RangeDecisionName(diag.decision),reason);
+    SendLine(line,length);
+    length=snprintf(line,sizeof line,
+        "$RANGE_LINK,SCHEMA=2,SEQ=%" PRIu32 ",DOMAIN=%" PRIu32 ",EPOCH=%" PRIu32
+        ",REV=%" PRIu32 ",ID=%" PRIu32 ",NEW=%u,FORMAL=%u,PROV=%u,SRC_NS=%s\r\n",
+        diag.sequence,p.time_domain,p.authority_clock_epoch,p.state_revision,p.measurement_id,
+        new_measurement?1U:0U,formal?1U:0U,p.provisional?1U:0U,source);
+    SendLine(line,length);
+    length=snprintf(line,sizeof line,
+        "$RANGE_DISTANCE,SCHEMA=2,SEQ=%" PRIu32 ",PAIR_MM=%" PRIu32 ",TEMP_MM=%" PRIu32
+        ",CORR_MM=%" PRId32 ",PUB_MM=%" PRId32 ",STBL_CNT=%u,STBL0=%" PRId32
+        ",STBL1=%" PRId32 ",STBL2=%" PRId32 ",STBL3=%" PRId32 ",STBL4=%" PRId32 "\r\n",
+        diag.sequence,pair->distance_mm,diag.temperature_distance_mm,diag.corrected_mm,
+        diag.published_mm,(unsigned)diag.stable_count,diag.stable_mm[0],diag.stable_mm[1],
+        diag.stable_mm[2],diag.stable_mm[3],diag.stable_mm[4]);
+    SendLine(line,length);
 }
 
 /**
- * @brief 仅将当前有效共同域的配对结果交给权威测量缓存。
- * @param pair 本次调用有效的只读配对结果；NULL或非当前域时撤销测量。
- * @return 无返回值；仍须通过标准序列、测量门控及温度资格，不修改外设。
- * @note O1只增加被动日志；原发布分支、返回值和调用顺序保持。
+ * @brief 将当前上下文的独立pair先交给tracker，标准序列仅决定发布资格。
+ * @param pair 只读输入，仅调用内有效；普通拒绝不清已确认历史。
+ * @return 无返回值；不执行旧中值发布或MRES发送，不改变识别阈值。
  */
 static void PublishMeasurement(const SoundPairResult *pair)
 {
-    const uint32_t now_ms=BSP_Console_GetTickMs();
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(profile==NULL || profile->role!=BOARD_ROLE_A){return;}
-    TemperatureSnapshot temperature;
-    StandardSequenceSnapshot sequence;
-    TemperatureService_GetSnapshot(now_ms,&temperature);
-    StandardSequence_Get(&standard_sequence,&sequence);
-    TimeDomainSnapshot domain;
-    TimeDomain_Get(&domain);
-    MeasurementGateSnapshot gate;
-    MeasurementGate_Get(&gate);
-    if(pair==NULL || !domain.valid || domain.id==0U || pair->time_domain!=domain.id ||
-       !temperature.valid || temperature.sound_speed_mm_s==0U ||
-       pair->quality<50U){
-        LogRangeDecision(pair,&temperature,"INPUT",false,false);
-        MeasurementResult_Invalidate(now_ms);
-        return;
-    }
-    const bool formal=sequence.detected && sequence.quality>=50U &&
+    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
+    TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now,&temperature);
+    StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
+    MeasurementGateSnapshot gate;MeasurementGate_Get(&gate);
+    uint64_t common_ns;uint32_t epoch;
+    const bool read_ok=ReadRangingClock(&common_ns,&epoch);
+    const bool qualified=sequence.detected && sequence.quality>=50U &&
         MeasurementGate_CanPublish(&gate);
-    /* 官方要求首声2秒内显示：首对高质量CHIRP允许临时结果；标准序列确认后升级。 */
-    const bool provisional=!formal && sequence.quality>=50U &&
-        pair->quality>=90U &&
-        (gate.state==MEASUREMENT_GATE_WAIT ||
-         gate.state==MEASUREMENT_GATE_CAND ||
-         gate.state==MEASUREMENT_GATE_MEASURED);
-    if(!formal && !provisional)
-    {
-        LogRangeDecision(pair,&temperature,"GATE",false,false);
-        MeasurementResult_Invalidate(now_ms);
-        return;
-    }
-    CalibrationSnapshot calibration;
-    Calibration_Get(&calibration);
-    MeasurementResult_SetCalibration(calibration.offset_mm,calibration.version);
-    const uint64_t source_ns=pair->a_time_ns>pair->b_time_ns?
-        pair->a_time_ns:pair->b_time_ns;
-    /* A2b：pair先进入tracker；单点拒绝只产生HOLD/REACQUIRE，不清历史。 */
-    (void)MeasurementResult_PublishTrackedPair(pair,&temperature,formal,now_ms,source_ns);
-    const bool published=MeasurementResult_PublishPair(pair,&temperature,now_ms);
-    LogRangeDecision(pair,&temperature,
-        formal?"FORMAL":(provisional?"PROVISIONAL":"PUBLISH"),formal,provisional);
-    if(published && formal) { (void)MeasurementGate_OnMeasurement(now_ms); }
+    MeasurementPresentationSnapshot before;MeasurementResult_GetPresentation(&before);
+    const RangingDecision decision=MeasurementResult_PublishTrackedPair(pair,&temperature,
+        qualified,now,read_ok?common_ns:0U);
+    MeasurementPresentationSnapshot after;MeasurementResult_GetPresentation(&after);
+    const bool new_result=after.has_value && after.measurement_id!=before.measurement_id;
+    LogRangeDecision(pair,&temperature,decision==RANGING_DECISION_ACCEPT?"TRACKED":
+        decision==RANGING_DECISION_CANDIDATE?"CANDIDATE":"REJECTED",after.formal,new_result);
+    if(new_result && qualified)(void)MeasurementGate_OnMeasurement(now);
 }
-/**
- * @brief B板接收A板权威结果；共同域不匹配或非B角色时丢弃，不重算距离。
- * @param result 非NULL线协议结果，仅本次调用有效。
- * @return 无返回值；成功后B板UI显示与A相同的ID/距离。
- */
-static void PublishRemoteMeasurement(const MeasurementResultSnapshot *result)
-{
-    if(result==NULL){return;}
-    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(profile==NULL || profile->role!=BOARD_ROLE_B){return;}
-    TimeDomainSnapshot domain;
-    TimeDomain_Get(&domain);
-    if(!domain.valid || domain.id!=result->time_domain)
-    {
-        MeasurementResult_Invalidate(BSP_Console_GetTickMs());
-        return;
-    }
-    const uint32_t now=BSP_Console_GetTickMs();
-    if(MeasurementResult_PublishRemote(result,now))
-    {
-        (void)UDPSoundEvent_SendMeasurementAck(now,result->id,result->time_domain);
-    }
-}
+
 /** @brief 把RST2状态数值映射到本地展示状态。 */
 static MeasurementPresentationState PresentationFromWire(uint8_t state)
 {
@@ -645,12 +666,13 @@ static void PublishRemoteRangingStatus(const RangingStatusMessage *message)
     TimeDomain_Get(&domain);
     if(!domain.valid || domain.id==0U || domain.id!=message->domain)return;
     const uint32_t now=BSP_Console_GetTickMs();
+    RefreshRanging(now);
     MeasurementPresentationSnapshot presentation={0};
     presentation.state=PresentationFromWire(message->state);
     presentation.has_value=(message->flags&RANGING_STATUS_FLAG_HAS_VALUE)!=0U;
     presentation.fresh=(message->flags&RANGING_STATUS_FLAG_FRESH)!=0U;
     presentation.formal=(message->flags&RANGING_STATUS_FLAG_FORMAL)!=0U;
-    presentation.provisional=!presentation.formal;
+    presentation.provisional=presentation.has_value && !presentation.formal;
     presentation.filtered_delta_ns=message->filtered_delta_ns;
     presentation.distance_mm=message->distance_mm;
     presentation.direction=message->direction;
@@ -662,6 +684,11 @@ static void PublishRemoteRangingStatus(const RangingStatusMessage *message)
     presentation.authority_clock_epoch=message->authority_clock_epoch;
     presentation.temperature_version=message->temperature_version;
     presentation.sound_speed_mm_s=message->sound_speed_mm_s;
+    presentation.calibration_version=message->calibration_version;
+    presentation.calibration_offset_mm=message->calibration_offset_mm;
+    presentation.reason=message->reason;
+    presentation.source_key_crc32=message->source_key_crc32;
+    presentation.detection_version=message->detection_version;
     presentation.source_common_ns=message->source_common_ns;
     presentation.fresh_deadline_ns=message->fresh_deadline_ns;
     presentation.display_deadline_ns=message->display_deadline_ns;
@@ -673,86 +700,58 @@ static void PublishRemoteRangingStatus(const RangingStatusMessage *message)
     (void)UDPSoundEvent_SendRangingAck(now,&ack);
 }
 
-/** @brief A接收B的RAK2，记录精确revision已确认；旧ACK不续租。 */
+/** @brief A只确认当前已发出的精确四元组；ack仅借用，旧ACK不续租。 */
 static void HandleRangingAck(const RangingStatusAck *ack)
 {
-    if(ack==NULL)return;
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
-    TimeDomainSnapshot domain;
-    TimeDomain_Get(&domain);
-    if(!domain.valid || domain.id!=ack->domain)return;
-    if(ack->status==RANGING_STATUS_ACK_OK)
-    { acked_ranging_revision=ack->state_revision; }
+    if(profile!=NULL && profile->role==BOARD_ROLE_A)
+        (void)RangingExchange_OnAck(&ranging_app.exchange,ack);
 }
 
-/** @brief 将本地展示快照编码为RST2；proxy证据不冒充身份/正式。 */
+/** @brief 逐字段复制唯一权威展示，不在重传时重算期限；message为调用方输出。 */
 static bool BuildRangingStatusMessage(RangingStatusMessage *message,uint32_t now_ms)
 {
-    MeasurementPresentationSnapshot presentation;
-    MeasurementResult_GetPresentation(&presentation);
-    TimeDomainSnapshot domain;
-    TimeDomain_Get(&domain);
-    if(message==NULL || !domain.valid || domain.id==0U)return false;
-    TemperatureSnapshot temperature={0};
-    TemperatureService_GetSnapshot(now_ms,&temperature);
+    (void)now_ms;
+    MeasurementPresentationSnapshot p;MeasurementResult_GetPresentation(&p);
+    RangingSessionSnapshot session;RangingSession_Get(&ranging_app.session,&session);
+    if(message==NULL || !session.established || p.time_domain!=session.domain ||
+       p.authority_clock_epoch!=session.authority_epoch || p.state_revision==0U)return false;
     memset(message,0,sizeof *message);
-    message->domain=domain.id;
-    message->authority_clock_epoch=presentation.authority_clock_epoch!=0U?
-        presentation.authority_clock_epoch:1U;
-    message->state_revision=presentation.state_revision!=0U?
-        presentation.state_revision:1U;
-    switch(presentation.state)
-    {
-    case MEASUREMENT_PRESENTATION_TRACKING:message->state=RANGING_STATE_TRACKING;break;
-    case MEASUREMENT_PRESENTATION_HOLD:message->state=RANGING_STATE_HOLD;break;
-    case MEASUREMENT_PRESENTATION_REACQUIRE:message->state=RANGING_STATE_REACQUIRE;break;
-    case MEASUREMENT_PRESENTATION_STALE:message->state=RANGING_STATE_STALE;break;
-    case MEASUREMENT_PRESENTATION_FAULT:message->state=RANGING_STATE_FAULT;break;
-    default:message->state=RANGING_STATE_ACQUIRING;break;
-    }
-    message->direction=presentation.has_value?presentation.direction:0U;
-    message->quality=presentation.quality;
-    message->temperature_version=presentation.temperature_version!=0U?
-        presentation.temperature_version:temperature.version;
-    message->sound_speed_mm_s=presentation.sound_speed_mm_s!=0U?
-        presentation.sound_speed_mm_s:temperature.sound_speed_mm_s;
-    message->distance_mm=presentation.has_value?presentation.distance_mm:0;
-    message->filtered_delta_ns=presentation.has_value?presentation.filtered_delta_ns:0;
-    message->measurement_id=presentation.has_value?presentation.measurement_id:0U;
-    message->source_common_ns=presentation.source_common_ns;
-    message->fresh_deadline_ns=presentation.fresh_deadline_ns;
-    message->display_deadline_ns=presentation.display_deadline_ns;
-    message->detection_version=1U;
-    message->evidence_kind=RANGING_EVIDENCE_PROXY;
-    if(presentation.has_value)
-    {
-        message->flags|=RANGING_STATUS_FLAG_HAS_VALUE;
-        /* 当前仍是代理质量，不设置IDENTITY/FORMAL，避免把代理分数冒充身份。 */
-        if(presentation.fresh)message->flags|=RANGING_STATUS_FLAG_FRESH;
-    }
+    message->domain=p.time_domain;message->authority_clock_epoch=p.authority_clock_epoch;
+    message->state_revision=p.state_revision;message->measurement_id=p.has_value?p.measurement_id:0U;
+    message->state=p.state==MEASUREMENT_PRESENTATION_TRACKING?RANGING_STATE_TRACKING:
+        p.state==MEASUREMENT_PRESENTATION_HOLD?RANGING_STATE_HOLD:
+        p.state==MEASUREMENT_PRESENTATION_REACQUIRE?RANGING_STATE_REACQUIRE:
+        p.state==MEASUREMENT_PRESENTATION_STALE?RANGING_STATE_STALE:
+        p.state==MEASUREMENT_PRESENTATION_FAULT?RANGING_STATE_FAULT:RANGING_STATE_ACQUIRING;
+    message->direction=p.has_value?p.direction:0U;message->quality=p.quality;
+    message->temperature_version=p.temperature_version;message->sound_speed_mm_s=p.sound_speed_mm_s;
+    message->distance_mm=p.has_value?p.distance_mm:0;
+    message->filtered_delta_ns=p.has_value?p.filtered_delta_ns:0;
+    message->source_common_ns=p.source_common_ns;message->fresh_deadline_ns=p.fresh_deadline_ns;
+    message->display_deadline_ns=p.display_deadline_ns;
+    message->calibration_version=p.calibration_version;message->calibration_offset_mm=p.calibration_offset_mm;
+    message->reason=p.reason;message->source_key_crc32=p.source_key_crc32;
+    message->detection_version=p.detection_version;message->evidence_kind=p.evidence_kind;
+    if(p.has_value)message->flags|=RANGING_STATUS_FLAG_HAS_VALUE;
+    if(p.fresh)message->flags|=RANGING_STATUS_FLAG_FRESH;
+    if(p.formal && p.evidence_kind!=RANGING_EVIDENCE_PROXY)
+        message->flags|=RANGING_STATUS_FLAG_IDENTITY_VERIFIED|RANGING_STATUS_FLAG_FORMAL;
     return true;
 }
 
-/** @brief A按状态/revision变化或500ms重发RST2；不靠接收时刻续租。 */
+/** @brief 按精确状态确认/500ms失败退避发送；不修改源ID与期限。 */
 static void ServiceAuthoritativeStatus(uint32_t now_ms)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
-    MeasurementPresentationSnapshot presentation;
-    MeasurementResult_GetPresentation(&presentation);
-    const uint32_t revision=presentation.state_revision;
-    if(revision==0U)return;
-    if(revision==acked_ranging_revision)return;
-    if(revision==last_ranging_revision &&
-       (uint32_t)(now_ms-last_ranging_tx_ms)<500U)return;
     RangingStatusMessage message;
     if(!BuildRangingStatusMessage(&message,now_ms))return;
-    if(UDPSoundEvent_SendRangingStatus(now_ms,&message))
-    {
-        last_ranging_revision=revision;
-        last_ranging_tx_ms=now_ms;
-    }
+    const RangingStatusAck key={RANGING_STATUS_ACK_OK,message.domain,message.authority_clock_epoch,
+        message.state_revision,message.measurement_id};
+    if(!RangingExchange_ShouldSend(&ranging_app.exchange,now_ms,&key))return;
+    const bool sent=UDPSoundEvent_SendRangingStatus(now_ms,&message);
+    RangingExchange_MarkAttempt(&ranging_app.exchange,now_ms,&key,sent);
 }
 
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
@@ -788,76 +787,36 @@ static void ApplySharedTemperature(const TemperatureWireMessage *message)
 }
 #endif
 
-/**
- * @brief 1Hz输出A板当前权威结果和本地年龄；只读，不刷新网络或业务年龄。
- * @param now_ms 当前HAL毫秒，无符号差支持回绕。
- * @return 无返回值；无结果时保留NONE/REJECTED状态。
- */
+/** @brief 以1Hz调用输出权威状态；字段来自同一副本，不以接收/打印时间续租。 */
 static void LogRangeResult(uint32_t now_ms)
 {
-    MeasurementResultSnapshot result;
-    const bool fresh=MeasurementResult_Get(now_ms,&result);
-    MeasurementDiagnosticsSnapshot diag;
-    (void)MeasurementResult_GetDiagnostics(&diag);
-    const char *state=fresh?"VALID":
-        (result.status==MEASUREMENT_VALID?"STALE":
-         (result.status==MEASUREMENT_REJECTED?"REJECTED":"NONE"));
-    const char *direction=result.direction==SOUND_DIRECTION_A?"A":
-        (result.direction==SOUND_DIRECTION_B?"B":"UNKNOWN");
-    const uint32_t age_ms=now_ms-result.captured_ms;
-    char source_ns[24];
-    FormatUnsigned64(diag.source_common_ns,source_ns);
+    (void)now_ms;
+    MeasurementPresentationSnapshot p;MeasurementResult_GetPresentation(&p);
+    const char *state=p.state==MEASUREMENT_PRESENTATION_TRACKING?"TRACKING":
+        p.state==MEASUREMENT_PRESENTATION_HOLD?"HOLD":
+        p.state==MEASUREMENT_PRESENTATION_REACQUIRE?"REACQUIRE":
+        p.state==MEASUREMENT_PRESENTATION_STALE?"STALE":
+        p.state==MEASUREMENT_PRESENTATION_FAULT?"FAULT":"ACQUIRING";
+    char source[24];FormatUnsigned64(p.source_common_ns,source);
     char line[APP_LOG_LINE_CAPACITY];
     const int length=snprintf(line,sizeof line,
-        "$RANGE_RESULT,SCHEMA=1,REV=NA,ID=%" PRIu32 ",STATE=%s,MM=%" PRId32
-        ",DIR=%s,SRC_NS=%s,AGE_MS=%" PRIu32 ",HAS_VALUE=%u,FRESH=%u,EVIDENCE=PROXY\r\n",
-        result.id,state,result.status==MEASUREMENT_VALID?result.distance_mm:0,
-        direction,source_ns,age_ms,
-        result.status==MEASUREMENT_VALID?1U:0U,fresh?1U:0U);
-    if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
+        "$RANGE_RESULT,SCHEMA=2,DOMAIN=%" PRIu32 ",EPOCH=%" PRIu32 ",REV=%" PRIu32
+        ",ID=%" PRIu32 ",STATE=%s,MM=%" PRId32 ",DIR=%s,SRC_NS=%s,AGE_MS=%" PRIu32
+        ",HAS_VALUE=%u,FRESH=%u,FORMAL=%u,PROV=%u\r\n",
+        p.time_domain,p.authority_clock_epoch,p.state_revision,p.measurement_id,state,
+        p.has_value?p.distance_mm:0,p.direction==1U?"A":p.direction==2U?"B":"UNKNOWN",
+        source,p.source_age_ms,p.has_value?1U:0U,p.fresh?1U:0U,p.formal?1U:0U,p.provisional?1U:0U);
+    SendLine(line,length);
 }
 
-/**
- * @brief A板周期刷新最新权威结果，降低单包丢失导致B板旧值/无值。
- * @param now_ms 当前HAL毫秒，无符号差支持回绕。
- * @return 无返回值；同ID最多每500ms重发，ID变化立即发送。
- */
+/** @brief 只输出权威观察，不发送旧MRES；now_ms用于1Hz日志节流。 */
 static void ServiceAuthoritativeResult(uint32_t now_ms)
 {
-    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
-    if(profile==NULL || profile->role!=BOARD_ROLE_A){return;}
     static uint32_t last_range_log_ms;
     if((uint32_t)(now_ms-last_range_log_ms)>=1000U)
-    {
-        last_range_log_ms=now_ms;
-        LogRangeResult(now_ms);
-    }
-    MeasurementResultSnapshot result;
-    if(!MeasurementResult_Get(now_ms,&result)){return;}
-    TimeDomainSnapshot domain;
-    TimeDomain_Get(&domain);
-    if(!domain.valid || result.time_domain!=domain.id)
-    {
-        MeasurementResult_Invalidate(now_ms);
-        return;
-    }
-    if(!ResultExchange_ShouldSend(&result_exchange,now_ms,result.id)){return;}
-    /* Mark the attempt even on failure: a broken link must retry at the
-       500ms cadence, not once per main-loop iteration. */
-    (void)UDPSoundEvent_SendResult(now_ms,&result);
-    ResultExchange_MarkSent(&result_exchange,now_ms,result.id);
+    { last_range_log_ms=now_ms;LogRangeResult(now_ms); }
 }
-#ifdef SBCG_HOST_TEST
-/** @brief 主机集成测试钩子：驱动A结果刷新路径。 */
-void App_Test_ServiceAuthoritativeResult(uint32_t now_ms)
-{ ServiceAuthoritativeResult(now_ms); }
-/** @brief 主机集成测试钩子：注入MACK。 */
-void App_Test_HandleMeasurementAck(const MeasurementAck *ack)
-{ HandleMeasurementAck(ack); }
-/** @brief 主机集成测试钩子：注入DOMN ACK。 */
-void App_Test_HandleDomainMessage(const DomainMessage *message)
-{ HandleDomainMessage(message); }
-#endif
+
 #endif
 
 void App_Init(void)
@@ -986,8 +945,9 @@ void App_Init(void)
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
         (void)StandardSequence_Init(&standard_sequence,&sequence_config);
         standard_sequence_detected=false;
-        ResultExchange_Init(&result_exchange);
-        last_audio_session=0U;
+        memset(&ranging_app,0,sizeof ranging_app);
+        RangingSession_Init(&ranging_app.session,profile->role);
+        RangingExchange_Init(&ranging_app.exchange);
     }
     if (!UDPSoundEvent_Init(BSP_Console_GetTickMs(), profile,
                             BSP_Console_GetTickMs, SendLine))
@@ -997,12 +957,14 @@ void App_Init(void)
     }
     else {
         UDPSoundEvent_SetResultSink(PublishMeasurement);
-        UDPSoundEvent_SetMeasurementSink(PublishRemoteMeasurement);
+        UDPSoundEvent_SetMeasurementSink(NULL); /* 不以旧MRES回退新状态。 */
+        UDPSoundEvent_SetEventSink(HandlePeerSound);
         UDPSoundEvent_SetDomainSink(HandleDomainMessage);
-        UDPSoundEvent_SetAckSink(HandleMeasurementAck);
+        UDPSoundEvent_SetAckSink(NULL);
         UDPSoundEvent_SetTemperatureSink(ApplySharedTemperature);
         UDPSoundEvent_SetRangingStatusSink(PublishRemoteRangingStatus);
         UDPSoundEvent_SetRangingAckSink(HandleRangingAck);
+        UDPSoundEvent_SetRangingSessionSink(HandleRangingSession);
     }
 #endif
 #endif
@@ -1134,6 +1096,7 @@ void App_Process(void)
         TimeDomainSnapshot event_domain;
         TimeDomain_Get(&event_domain);
         UDPSoundEvent_SetTimeDomain(event_domain.valid?event_domain.id:0U);
+        RefreshRanging(BSP_Console_GetTickMs());
     }
     #endif
     CodecMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
@@ -1163,17 +1126,8 @@ void App_Process(void)
         BSP_AudioSnapshot snapshot;
         BSP_Audio_GetSnapshot(&snapshot);
 #ifdef SBCG_USE_BOARD_IDENTITY
-        const BoardIdentityProfile *audio_profile=BSP_BoardIdentity_Get();
-        if(last_audio_session!=0U && snapshot.session!=last_audio_session)
-        {
+        if(ranging_app.local_audio_session!=0U && snapshot.session!=ranging_app.local_audio_session)
             UDPSoundEvent_SetTimeDomain(0U);
-            if(audio_profile!=NULL && audio_profile->role==BOARD_ROLE_A)
-            {
-                MeasurementGate_OnStreamInvalid(BSP_Console_GetTickMs());
-                MeasurementResult_Invalidate(BSP_Console_GetTickMs());
-            }
-        }
-        last_audio_session=snapshot.session;
 #endif
         SoundEventTime_Process(BSP_Console_GetTickMs(),&snapshot);
 #ifdef SBCG_USE_BOARD_IDENTITY
@@ -1208,7 +1162,6 @@ void App_Process(void)
             TimeDomain_Get(&domain);
             if (!domain.valid || domain.id==0U)
             {
-                MeasurementResult_Invalidate(BSP_Console_GetTickMs());
                 continue;
             }
             SoundEventRecord event = {0};
@@ -1227,6 +1180,10 @@ void App_Process(void)
         }
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_BOARD_IDENTITY
+        RefreshRanging(BSP_Console_GetTickMs());
+        RangingSessionMessage outgoing;
+        if(RangingSession_TakeOutgoing(&ranging_app.session,BSP_Console_GetTickMs(),&outgoing))
+            (void)UDPSoundEvent_SendRangingSession(BSP_Console_GetTickMs(),&outgoing);
         ServiceAuthoritativeResult(BSP_Console_GetTickMs());
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #endif

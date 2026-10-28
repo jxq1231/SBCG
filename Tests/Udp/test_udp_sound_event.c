@@ -23,7 +23,7 @@ static struct pbuf fake_pbuf;
 static ip_addr_t peer_ip;
 static udp_recv_fn receive_cb;
 static void *receive_arg;
-static unsigned char sent[SOUND_EVENT_WIRE_BYTES];
+static unsigned char sent[RANGING_STATUS_WIRE_BYTES];
 static unsigned char rx_payload[SOUND_EVENT_WIRE_BYTES];
 static unsigned int sends, allocs, frees;
 static SoundPairResult paired;
@@ -32,6 +32,11 @@ static uint32_t adopted_domain;
 static DomainMessage received_domain;
 static MeasurementAck received_ack;
 static TemperatureWireMessage received_temperature;
+static RangingStatusMessage received_ranging;
+static RangingStatusAck received_ranging_ack;
+static unsigned ranging_count, ranging_ack_count;
+static RangingSessionMessage received_session;
+static unsigned session_count;
 static uint32_t tick_ms;
 
 struct udp_pcb *udp_new(void) { return &fake_pcb; }
@@ -62,6 +67,16 @@ static void AckSink(const MeasurementAck *ack)
 static void TemperatureSink(const TemperatureWireMessage *message)
 { received_temperature=*message; }
 static uint32_t Tick(void) { return tick_ms; }
+
+/** @brief 保存真实RST2接收回调的只读副本并累计次数。 */
+static void RangingSink(const RangingStatusMessage *message)
+{ received_ranging=*message; ++ranging_count; }
+/** @brief 保存真实RAK2接收回调；与DOMAIN的24字节分派独立。 */
+static void RangingAckSink(const RangingStatusAck *message)
+{ received_ranging_ack=*message; ++ranging_ack_count; }
+/** @brief 保存第三种24字节RSC2，证明不被DOMAIN/RAK2抢先消费。 */
+static void SessionSink(const RangingSessionMessage *message)
+{ received_session=*message; ++session_count; }
 
 static void ReceiveBytes(const uint8_t *wire,uint16_t length)
 {
@@ -133,6 +148,60 @@ static void TestTemperatureShare(void)
     ReceiveBytes(temp_wire,TEMPERATURE_WIRE_BYTES);
     assert(received_temperature.valid && received_temperature.version==7U);
     assert(received_temperature.temperature_milli_c==23500);
+}
+
+/**
+ * @brief 验证同长DOMAIN/RAK2分别进入正确消费者及全部无值状态确认。
+ * @return 无返回值；只替换底层LwIP，编解码与Receive分派均使用生产代码。
+ */
+static void TestRangingTransport(void)
+{
+    BoardIdentityProfile a={0},b={0};
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetRangingAckSink(RangingAckSink);
+    UDPSoundEvent_SetRangingSessionSink(SessionSink);
+    UDPSoundEvent_SetDomainSink(DomainSink);
+    UDPSoundEvent_Process(100U);
+    uint8_t ack_bytes[RANGING_STATUS_ACK_BYTES];
+    RangingStatusAck ack={RANGING_STATUS_ACK_OK,7U,3U,9U,2U};
+    assert(RangingStatusAck_Encode(&ack,ack_bytes,sizeof ack_bytes)==RANGING_STATUS_WIRE_OK);
+    unsigned before=ranging_ack_count;
+    ReceiveBytes(ack_bytes,sizeof ack_bytes);
+    assert(ranging_ack_count==before+1U && received_ranging_ack.state_revision==9U);
+    DomainMessage domain={DOMAIN_MESSAGE_ACK,BOARD_ROLE_B,DOMAIN_LOCAL_VALID,7U,7U,77U};
+    uint8_t domain_bytes[DOMAIN_WIRE_BYTES];
+    assert(DomainWire_Encode(&domain,domain_bytes,sizeof domain_bytes)==DOMAIN_WIRE_OK);
+    ReceiveBytes(domain_bytes,sizeof domain_bytes);
+    assert(received_domain.sequence==77U && ranging_ack_count==before+1U);
+    RangingSessionMessage session={RANGING_SESSION_CONFIRM,7U,41U,1000000000ULL};
+    uint8_t session_bytes[RANGING_SESSION_WIRE_BYTES];
+    assert(RangingSessionWire_Encode(&session,session_bytes,sizeof session_bytes));
+    const unsigned session_before=session_count;
+    ReceiveBytes(session_bytes,sizeof session_bytes);
+    assert(session_count==session_before+1U && received_session.authority_epoch==41U);
+    for(uint8_t state=RANGING_STATE_ACQUIRING;state<=RANGING_STATE_FAULT;++state)
+    {
+        if(state!=RANGING_STATE_ACQUIRING && state!=RANGING_STATE_STALE &&
+           state!=RANGING_STATE_FAULT)continue;
+        assert(UDPSoundEvent_Init(200U,&b,Tick,Log));
+        UDPSoundEvent_SetRangingStatusSink(RangingSink);
+        UDPSoundEvent_Process(200U);
+        RangingStatusMessage status={0};
+        status.state=state;status.domain=7U;status.authority_clock_epoch=3U;
+        status.state_revision=10U+state;status.sound_speed_mm_s=343000U;
+        uint8_t data[RANGING_STATUS_WIRE_BYTES];
+        assert(RangingStatusWire_Encode(&status,data,sizeof data)==RANGING_STATUS_WIRE_OK);
+        const unsigned status_before=ranging_count;
+        ReceiveBytes(data,sizeof data);
+        assert(ranging_count==status_before+1U && received_ranging.state==state);
+        ack.state_revision=status.state_revision;ack.measurement_id=0U;
+        assert(UDPSoundEvent_SendRangingAck(200U,&ack));
+        assert(RangingStatusAck_Decode(sent,RANGING_STATUS_ACK_BYTES,&received_ranging_ack)==
+            RANGING_STATUS_WIRE_OK && received_ranging_ack.measurement_id==0U);
+    }
 }
 
 /**
@@ -376,10 +445,11 @@ int main(void)
     ack_wire[0]='X';
     assert(MeasurementAck_Decode(ack_wire,sizeof ack_wire,&received_ack)==MEASUREMENT_ACK_WIRE_INVALID_MAGIC);
     TestTemperatureShare();
+    TestRangingTransport();
     TestDelayedPeer(&profile);
     TestExpiryAndWrap(&profile);
     TestDomainBoundary(&profile);
     TestPairingLimits(&profile);
-    puts("PASS udp sound event: both orders 500/1000/2499/2999ms, 3000ms expiry, tick wrap, domain reset, 40ms/ambiguity/capacity gates, DOMN/MACK");
+    puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;
 }

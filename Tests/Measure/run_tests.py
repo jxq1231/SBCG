@@ -25,7 +25,9 @@ for option in ('-O0','-O2'):
         ('test_ranging_status_wire','Tests/Measure/test_ranging_status_wire.c',
          ['App/Measure/ranging_tracker.c','App/Network/ranging_status_wire.c']),
         ('test_result_exchange_state','Tests/Measure/test_result_exchange_state.c',
-         ['App/Measure/result_exchange_state.c'])):
+         ['App/Measure/result_exchange_state.c']),
+        ('test_ranging_session','Tests/Measure/test_ranging_session.c',
+         ['App/Network/ranging_session.c'])):
         exe=out/(name+'_'+option[1:]+'.exe')
         command=[compiler,'-std=c11',option,'-Wall','-Wextra','-Werror','-pedantic',
                  '-I',str(ROOT/'App'),str(ROOT/test),*[str(ROOT/s) for s in sources],

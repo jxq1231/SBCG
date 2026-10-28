@@ -27,6 +27,15 @@ int main(int argc,char **argv){
  s.measurement_valid=true;s.distance_mm=1234;
  CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"1.234 M")==0);
  s.measurement_valid=false;CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"-- M")==0);
+ /* 新状态的数字受源年龄限制；页面刚刷新不能使旧声音重新有效。 */
+ s.measurement_valid=true;s.measurement_state=3U;s.measurement_source_age_ms=4500U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strstr(text.quality,"HOLD") && strstr(text.quality,"4.5S"));
+ s.measurement_source_age_ms=6500U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"-- M")==0);
+ s.measurement_state=5U;s.measurement_source_age_ms=0U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"-- M")==0 && strcmp(text.quality,"STALE")==0);
+ s.measurement_state=6U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"-- M")==0 && strcmp(text.quality,"FAULT")==0);
  CHECK(UI_RGB565(255,0,0)==0xf800 && UI_RGB565(0,255,0)==0x07e0 && UI_RGB565(0,0,255)==0x001f && UI_RGB565(255,255,255)==0xffff);
  UI_Canvas c,b;CHECK(!UI_CanvasInit(&c,full,10,480,272,480));CHECK(!UI_CanvasInit(&c,full,480*272,480,272,479));
  full[0]=full[480*272+1]=bands[0]=bands[480*272+1]=0xa55a;

@@ -31,6 +31,7 @@ static UDPSoundEvent_AckSink ack_sink;
 static UDPSoundEvent_TemperatureSink temperature_sink;
 static UDPSoundEvent_RangingStatusSink ranging_status_sink;
 static UDPSoundEvent_RangingAckSink ranging_ack_sink;
+static UDPSoundEvent_RangingSessionSink ranging_session_sink;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 static SoundPairManager pair_manager;
@@ -66,6 +67,18 @@ static bool LocalSide(SoundEventSide *side)
     if(local_profile.role==BOARD_ROLE_A){*side=SOUND_SIDE_A;return true;}
     if(local_profile.role==BOARD_ROLE_B){*side=SOUND_SIDE_B;return true;}
     return false;
+}
+/**
+ * @brief 检查分片pbuf的四字节消息标识，避免同长度的DOMAIN与RAK2混淆。
+ * @param packet 本次接收的非NULL只读pbuf；本函数不释放其所有权。
+ * @param magic 非NULL且含四个有效字节的期望标识，不依赖NUL结尾。
+ * @return 已完整读取并相符返回true，否则false；无网络或业务状态变化。
+ */
+static bool HasMagic(const struct pbuf *packet,const char *magic)
+{
+    uint8_t prefix[4];
+    return pbuf_copy_partial(packet,prefix,sizeof prefix,0)==sizeof prefix &&
+        memcmp(prefix,magic,sizeof prefix)==0;
 }
 /**
  * @brief 接收回调：验证来源、协议及声音事件当前有效域后交给前台消费者。
@@ -114,7 +127,22 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         Increment(&rx_ok);Increment(&ack_rx_ok);
         return;
     }
-    if(packet->tot_len==DOMAIN_WIRE_BYTES)
+    if(packet->tot_len==RANGING_SESSION_WIRE_BYTES && HasMagic(packet,"RSC2"))
+    {
+        uint8_t data[RANGING_SESSION_WIRE_BYTES];
+        const bool copied=pbuf_copy_partial(packet,data,sizeof data,0)==sizeof data;
+        pbuf_free(packet);
+        RangingSessionMessage message;
+        if(!copied || !RangingSessionWire_Decode(data,sizeof data,&message))
+        { Increment(&rx_bad);return; }
+        const bool from_b=message.type==RANGING_SESSION_CHALLENGE ||
+            message.type==RANGING_SESSION_CONFIRM;
+        if((local_profile.role==BOARD_ROLE_A)!=from_b)
+        { Increment(&rx_bad);return; }
+        if(ranging_session_sink!=NULL)ranging_session_sink(&message);
+        Increment(&rx_ok);return;
+    }
+    if(packet->tot_len==DOMAIN_WIRE_BYTES && HasMagic(packet,"DOMN"))
     {
         uint8_t domain_data[DOMAIN_WIRE_BYTES];
         if(pbuf_copy_partial(packet,domain_data,sizeof domain_data,0)!=sizeof domain_data)
@@ -270,7 +298,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     domain_sequence=0U;
     ack_tx_ok=ack_tx_err=ack_rx_ok=ack_rx_bad=0U;
     temperature_tx_ok=temperature_tx_err=temperature_rx_ok=temperature_rx_bad=0U;
-    ranging_status_sink=NULL;ranging_ack_sink=NULL;
+    ranging_status_sink=NULL;ranging_ack_sink=NULL;ranging_session_sink=NULL;
     configured=true;return true;
 }
 /**
@@ -306,6 +334,32 @@ void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink)
 void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink)
 {
     ranging_ack_sink=sink;
+}
+/** @brief 安装会话回调；sink可NULL，不保留任何报文指针，无返回值。 */
+void UDPSoundEvent_SetRangingSessionSink(UDPSoundEvent_RangingSessionSink sink)
+{ ranging_session_sink=sink; }
+
+/**
+ * @brief 在原5009 PCB发送固定RSC2字节，不另申请PCB或外设。
+ * @param now_ms 当前前台毫秒，重试节奏由RangingSession记录尝试时刻。
+ * @param message 非NULL调用内借用副本，返回后不保留。
+ * @return 编码与UDP发送成功为true，失败计数并释放临时pbuf。
+ */
+bool UDPSoundEvent_SendRangingSession(uint32_t now_ms,const RangingSessionMessage *message)
+{
+    (void)now_ms;
+    if(!configured || service_pcb==NULL || message==NULL || !netif_is_link_up(&gnetif))
+    { Increment(&tx_err);return false; }
+    uint8_t data[RANGING_SESSION_WIRE_BYTES];
+    if(!RangingSessionWire_Encode(message,data,sizeof data))
+    { Increment(&tx_err);return false; }
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&tx_err);return false;}
+    Increment(&tx_ok);return true;
 }
 /** @brief 安装对端事件消费者；NULL不回调。 */
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink)
