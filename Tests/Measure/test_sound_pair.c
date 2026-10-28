@@ -109,7 +109,61 @@ int main(void)
         SoundPair_Process(&tm,0U);
         assert(SoundPair_Take(&tm,&result));
         assert(result.valid && result.distance_mm==320U);
-        puts("tooth selection: B candidate set selected 320 mm");
+        assert(result.b_toa_held==false && result.b_toa_selected==2U);
+        /* 单次异常候选（只有晚齿390/455）只能进入待确认并保持320，不能把参考拖到390。 */
+        const uint64_t a_ns=2000000000U, raw_b_ns=a_ns+1137026U;
+        ta=Event(SOUND_SIDE_A,20U,a_ns);
+        tb=Event(SOUND_SIDE_B,20U,raw_b_ns);
+        tb.toa_candidate_count=2U;tb.toa_candidate_q16[0]=0;tb.toa_candidate_q16[1]=OffsetQ16(65);
+        assert(SoundPair_Submit(&tm,&ta,0U));assert(SoundPair_Submit(&tm,&tb,0U));
+        SoundPair_Process(&tm,0U);
+        assert(SoundPair_Take(&tm,&result));
+        assert(result.valid && result.distance_mm==320U && result.b_toa_held);
+        assert(tm.pending_count==1U && tm.pending_distance_mm==390U && tm.accepted_distance_mm==320U);
+        /* 下一正常候选集立即回到接受齿320：待确认清空，输出不再保持旧值。 */
+        ta=Event(SOUND_SIDE_A,21U,a_ns);
+        tb=Event(SOUND_SIDE_B,21U,raw_b_ns);
+        tb.toa_candidate_count=2U;tb.toa_candidate_q16[0]=OffsetQ16(-70);tb.toa_candidate_q16[1]=0;
+        assert(SoundPair_Submit(&tm,&ta,0U));assert(SoundPair_Submit(&tm,&tb,0U));
+        SoundPair_Process(&tm,0U);
+        assert(SoundPair_Take(&tm,&result));
+        assert(result.valid && result.distance_mm==320U && !result.b_toa_held);
+        assert(tm.pending_count==0U && tm.accepted_distance_mm==320U && result.b_toa_selected==1U);
+        ta=Event(SOUND_SIDE_A,22U,a_ns);
+        tb=Event(SOUND_SIDE_B,22U,raw_b_ns);
+        tb.toa_candidate_count=2U;tb.toa_candidate_q16[0]=OffsetQ16(-70);tb.toa_candidate_q16[1]=0;
+        assert(SoundPair_Submit(&tm,&ta,0U));assert(SoundPair_Submit(&tm,&tb,0U));
+        SoundPair_Process(&tm,0U);
+        assert(SoundPair_Take(&tm,&result) && result.distance_mm==320U && !result.b_toa_held);
+        /* 真实一跳>32mm仍按N=3确认跟随，确认前保持旧接受距离。 */
+        {
+            const uint64_t jump_b_ns=a_ns+1166181U; /* 约400mm */
+            for(uint32_t i=0U;i<2U;++i)
+            {
+                ta=Event(SOUND_SIDE_A,30U+i,a_ns);
+                tb=Event(SOUND_SIDE_B,30U+i,jump_b_ns);
+                tb.toa_candidate_count=1U;tb.toa_candidate_q16[0]=0;
+                assert(SoundPair_Submit(&tm,&ta,0U));assert(SoundPair_Submit(&tm,&tb,0U));
+                SoundPair_Process(&tm,0U);
+                assert(SoundPair_Take(&tm,&result));
+                assert(result.valid && result.distance_mm==320U && result.b_toa_held);
+            }
+            ta=Event(SOUND_SIDE_A,32U,a_ns);
+            tb=Event(SOUND_SIDE_B,32U,jump_b_ns);
+            tb.toa_candidate_count=1U;tb.toa_candidate_q16[0]=0;
+            assert(SoundPair_Submit(&tm,&ta,0U));assert(SoundPair_Submit(&tm,&tb,0U));
+            SoundPair_Process(&tm,0U);
+            assert(SoundPair_Take(&tm,&result));
+            assert(result.valid && result.distance_mm==400U && !result.b_toa_held);
+            assert(tm.accepted_distance_mm==400U && tm.pending_count==0U);
+            ta=Event(SOUND_SIDE_A,33U,a_ns);
+            tb=Event(SOUND_SIDE_B,33U,jump_b_ns);
+            tb.toa_candidate_count=1U;tb.toa_candidate_q16[0]=0;
+            assert(SoundPair_Submit(&tm,&ta,0U));assert(SoundPair_Submit(&tm,&tb,0U));
+            SoundPair_Process(&tm,0U);
+            assert(SoundPair_Take(&tm,&result) && result.distance_mm==400U && !result.b_toa_held);
+        }
+        puts("tooth selection: B candidate set selected 320 mm and abnormal teeth cannot drag the reference");
     }
     puts("PASS sound pair: distance/direction, identity gates, out-of-order, duplicate, ambiguity, timeout, tooth selection");
     return 0;

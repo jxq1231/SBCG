@@ -109,6 +109,7 @@ typedef struct
     uint32_t sound_speed_mm_s;
     uint8_t b_toa_candidate_count; /**< 诊断：B事件携带的TOA候选数。 */
     uint8_t b_toa_selected;        /**< 诊断：选中的候选序号，0表示未选。 */
+    bool b_toa_held;               /**< true表示本次输出保持旧接受齿。 */
     int32_t b_toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES]; /**< 诊断副本。 */
 } SoundPairResult;
 

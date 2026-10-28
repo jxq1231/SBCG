@@ -3,6 +3,8 @@
  * @brief       两板同一声事件的纯C配对、声程差与基线距离计算。
  * @details     在同一共同时间域内，按类型/质量/时间窗口找出唯一A-B对；声源在基线延长线时
  *              d=c(T)|tB-tA|，符号给出A侧/B侧。重复、歧义、越窗、超量程均显式拒绝。
+ *              B侧带候选齿时，以已接受（无历史时用标称）距离为唯一参考选择候选，一格以上
+ *              跳变需连续确认；确认期间显示已接受距离，异常候选不能把参考拖离接受齿。
  * @note        仅前台纯计算；无网络/PCM/HAL/动态内存；输入时间必须先由同步层证明同一时间域。
  */
 #include "sound_pair.h"
@@ -35,6 +37,11 @@ static int64_t Q16ToNs(int32_t offset_q16)
     return numerator >= 0 ? (numerator + denominator / 2) / denominator :
                             (numerator - denominator / 2) / denominator;
 }
+/** @brief 两个非NULL距离的绝对差，单位mm；不做饱和假设外的其它判断。 */
+static uint32_t DistanceGap(uint32_t first, uint32_t second)
+{
+    return first > second ? first - second : second - first;
+}
 /**
  * @brief 用A时间+已接受距离从B候选齿中选一个；无候选/未配置时保持原事件。
  * @param manager 非NULL配对状态，允许更新接受/待确认距离。
@@ -43,14 +50,18 @@ static int64_t Q16ToNs(int32_t offset_q16)
  * @param b 非NULL B事件，携带候选Q16偏移。
  * @param out 非NULL输出B事件副本；无选择时复制b。
  * @return 无返回值；只改B时间，不改A侧或配置。
- * @note 候选距离按|candidate_time-a_time|*speed计算；一格跳变需连续确认。
+ * @note 参考距离只能是已接受齿或标称齿，绝不采用待确认齿；否则一次异常候选会连续偏向
+ *       邻近齿并在N次后被错误确认。一格内直接跟随，一格以上需连续N次同向确认；
+ *       确认期间由调用方保持已接受距离输出。
  */
 static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *config,
                            const SoundEventRecord *a, const SoundEventRecord *b,
-                           SoundEventRecord *out, uint8_t *selected_index)
+                           SoundEventRecord *out, uint8_t *selected_index,
+                           bool *held)
 {
     *out = *b;
     if (selected_index != NULL) { *selected_index = 0U; }
+    if (held != NULL) { *held = false; }
     if (config->nominal_distance_mm == 0U || b->toa_candidate_count == 0U ||
         b->toa_candidate_count > SOUND_EVENT_MAX_TOA_CANDIDATES)
     { return; }
@@ -72,8 +83,8 @@ static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *con
         const uint64_t distance = (magnitude * config->sound_speed_mm_s +
                                    SOUND_PAIR_NS_PER_SEC / 2U) / SOUND_PAIR_NS_PER_SEC;
         if (!have_best ||
-            (distance > reference ? distance - reference : reference - distance) <
-            (best_distance > reference ? best_distance - reference : reference - best_distance))
+            DistanceGap((uint32_t)distance, reference) <
+            DistanceGap(best_distance, reference))
         {
             best_distance = (uint32_t)distance;
             best_time = candidate_time;
@@ -88,27 +99,27 @@ static void SelectToaTooth(SoundPairManager *manager, const SoundPairConfig *con
         manager->accepted_valid = 1U;
         manager->pending_count = 0U;
     }
-    else if ((best_distance > manager->accepted_distance_mm ?
-              best_distance - manager->accepted_distance_mm :
-              manager->accepted_distance_mm - best_distance) <= config->tooth_jump_mm)
+    else if (DistanceGap(best_distance, manager->accepted_distance_mm) <=
+             config->tooth_jump_mm)
     {
         manager->accepted_distance_mm = best_distance;
         manager->pending_count = 0U;
     }
     else
     {
-        if (manager->pending_count != 0U &&
-            (best_distance > manager->pending_distance_mm ?
-             best_distance - manager->pending_distance_mm :
-             manager->pending_distance_mm - best_distance) <= config->tooth_jump_mm)
-        { ++manager->pending_count; }
-        else
-        { manager->pending_distance_mm = best_distance; manager->pending_count = 1U; }
-        if (manager->pending_count >= config->tooth_confirm)
+        if (manager->pending_count == 0U ||
+            DistanceGap(best_distance, manager->pending_distance_mm) >
+            config->tooth_jump_mm)
+        {
+            manager->pending_distance_mm = best_distance;
+            manager->pending_count = 1U;
+        }
+        else if (++manager->pending_count >= config->tooth_confirm)
         {
             manager->accepted_distance_mm = best_distance;
             manager->pending_count = 0U;
         }
+        if (manager->pending_count != 0U && held != NULL) { *held = true; }
     }
     out->time_ns = best_time;
     if (selected_index != NULL) { *selected_index = (uint8_t)(best_index + 1U); }
@@ -311,11 +322,28 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
         SoundPairResult result = {0};
         SoundEventRecord selected_b;
         uint8_t selected_index = 0U;
+        bool held = false;
         SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
-                       &manager->events[1][pair_b], &selected_b, &selected_index);
+                       &manager->events[1][pair_b], &selected_b, &selected_index,
+                       &held);
         (void)SoundPair_Compute(&manager->config, &manager->events[0][pair_a],
                                 &selected_b, &result);
         result.b_toa_selected = selected_index;
+        result.b_toa_held = held;
+        if (held && result.valid)
+        {
+            /* 确认期间保持旧齿：用接受距离重建输出，不显示未确认的新齿。 */
+            const uint64_t magnitude_ns =
+                ((uint64_t)manager->accepted_distance_mm * SOUND_PAIR_NS_PER_SEC +
+                 manager->config.sound_speed_mm_s / 2U) /
+                manager->config.sound_speed_mm_s;
+            const int64_t delta = result.direction == SOUND_DIRECTION_A ?
+                (int64_t)magnitude_ns :
+                (result.direction == SOUND_DIRECTION_B ? -(int64_t)magnitude_ns : 0);
+            result.delta_ns = delta;
+            result.distance_mm = manager->accepted_distance_mm;
+            result.b_time_ns = (uint64_t)((int64_t)manager->events[0][pair_a].time_ns + delta);
+        }
         used_a[pair_a] = true;
         used_b[pair_b] = true;
         if (result.valid) { Increment(&manager->stats.paired); }

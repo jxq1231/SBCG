@@ -563,12 +563,12 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             emit(line,snprintf(line,sizeof line,
                 "$SOUND_PAIR,STATUS=OK,DELTA_NS=%s,DIST_MM=%" PRIu32 ",DIR=%s,"
                 "A_SEQ=%" PRIu32 ",B_SEQ=%" PRIu32 ",DOMAIN=%" PRIu32 ",QUALITY=%u,"
-                "SPEED_MM_S=%" PRIu32 ",BCAND=%u,SEL=%u,BQ0=%" PRId32 ",BQ1=%" PRId32
+                "SPEED_MM_S=%" PRIu32 ",BCAND=%u,SEL=%u,HOLD=%u,BQ0=%" PRId32 ",BQ1=%" PRId32
                 ",DIAG=1,LOCAL=1,SYNC=0\r\n",delta,result.distance_mm,
                 dir,result.a_sequence,result.b_sequence,result.time_domain,
                 result.quality,result.sound_speed_mm_s,(unsigned)result.b_toa_candidate_count,
-                (unsigned)result.b_toa_selected,result.b_toa_candidate_q16[0],
-                result.b_toa_candidate_q16[1]));
+                (unsigned)result.b_toa_selected,(unsigned)result.b_toa_held,
+                result.b_toa_candidate_q16[0],result.b_toa_candidate_q16[1]));
         }
         else
         {
