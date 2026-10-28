@@ -101,7 +101,7 @@ void RangingSession_Update(RangingSession *self,bool domain_valid,uint32_t domai
     }
     self->clock_epoch=local_clock_epoch;self->now_common_ns=now_common_ns;self->domain=domain;
     if(!domain_valid || domain==0U || !common_read_ok || now_common_ns==0U ||
-       local_clock_epoch==0U || clock_boundary || self->exhausted ||
+       local_clock_epoch==0U || clock_boundary ||
        (self->role!=BOARD_ROLE_A && self->role!=BOARD_ROLE_B)) { Close(self);return; }
     if(!self->healthy) {
         self->healthy=true;self->changed=true;self->have_tx=false;
@@ -131,7 +131,7 @@ bool RangingSession_TakeOutgoing(RangingSession *self,uint32_t now_ms,RangingSes
 {
     if(self==NULL || out==NULL)return false;
     RangingSession_Tick(self,now_ms);
-    if(!self->healthy || self->exhausted ||
+    if(!self->healthy ||
        (self->have_tx && (uint32_t)(now_ms-self->last_tx_ms)<RANGING_SESSION_RETRY_MS))return false;
     RangingSessionMessage message={0};message.domain=self->domain;
     message.authority_epoch=self->authority_epoch;message.challenge_ns=self->challenge_ns;
@@ -154,7 +154,7 @@ bool RangingSession_OnMessage(RangingSession *self,const RangingSessionMessage *
 {
     if(self==NULL || !Valid(message))return false;
     RangingSession_Tick(self,now_ms);
-    if(!self->healthy || self->exhausted || message->domain!=self->domain)return false;
+    if(!self->healthy || message->domain!=self->domain)return false;
     if(self->role==BOARD_ROLE_A) {
         if(message->type==RANGING_SESSION_CHALLENGE) {
             if(!Fresh(self,message->challenge_ns))return false;
@@ -164,7 +164,6 @@ bool RangingSession_OnMessage(RangingSession *self,const RangingSessionMessage *
             if(message->challenge_ns<=self->last_challenge_ns)return false;
             const uint32_t highest=self->retained_epoch>message->authority_epoch?
                 self->retained_epoch:message->authority_epoch;
-            if(highest==UINT32_MAX) { self->exhausted=true;Close(self);return false; }
             self->authority_epoch=highest+1U;self->retained_epoch=self->authority_epoch;
             self->request_epoch=message->authority_epoch;self->challenge_ns=message->challenge_ns;
             self->last_challenge_ns=message->challenge_ns;self->challenge_ms=now_ms;
@@ -200,8 +199,8 @@ void RangingSession_Get(const RangingSession *self,RangingSessionSnapshot *out)
     if(out==NULL)return;
     memset(out,0,sizeof *out);
     if(self==NULL)return;
-    out->established=self->healthy && self->established && !self->exhausted;
-    out->exhausted=self->exhausted;out->domain=self->domain;
+    out->established=self->healthy && self->established;
+    out->domain=self->domain;
     out->authority_epoch=self->authority_epoch;out->source_floor_ns=self->challenge_ns;
 }
 

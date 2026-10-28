@@ -1,7 +1,7 @@
 /**
  * @file        test_ranging_session.c
  * @brief       RSC2真实纯模块的主机回归与确定性重启反例。
- * @details     覆盖字节布局、三次握手、重试退避、双侧独立重启、共同读时失效与代际耗尽。
+ * @details     覆盖字节布局、三次握手、重试退避、双侧独立重启、共同读时失效与时钟代际。
  * @note        只验证软件状态，不访问网络或硬件，不证明永久启动唯一性。
  */
 #include "Network/ranging_session.h"
@@ -121,8 +121,8 @@ static void RebootsAndDomain(void)
     CHECK(!RangingSession_OnMessage(&a,&(RangingSessionMessage){RANGING_SESSION_CONFIRM,77,3,NS+UINT64_C(4000000000)},6000));
 }
 
-/** @brief 验证读时硬失效、共同时间倒退、时钟代际与计数耗尽。 @return 无返回值。 */
-static void ClockAndExhaustion(void)
+/** @brief 验证读时硬失效、共同时间倒退与时钟代际。 @return 无返回值。 */
+static void ClockFaults(void)
 {
     RangingSession a,b;RangingSessionMessage m;
     RangingSession_Init(&a,BOARD_ROLE_A);RangingSession_Init(&b,BOARD_ROLE_B);Exchange(&a,&b,0,NS);
@@ -132,10 +132,6 @@ static void ClockAndExhaustion(void)
     Healthy(&b,30,NS+30);
     RangingSession_Update(&b,true,77,2,true,NS+40,40);CHECK(!Snapshot(&b).established);
     RangingSession_Update(&b,true,77,2,true,0,50);CHECK(!Snapshot(&b).established);
-    RangingSession_Init(&a,BOARD_ROLE_A);Healthy(&a,0,NS);
-    m=(RangingSessionMessage){RANGING_SESSION_CHALLENGE,77,UINT32_MAX,NS};
-    CHECK(!RangingSession_OnMessage(&a,&m,0));CHECK(Snapshot(&a).exhausted);
-    CHECK(!RangingSession_TakeOutgoing(&a,10000,&m));
     RangingSession_Init(&a,BOARD_ROLE_A);Healthy(&a,UINT32_MAX-100U,NS);
     CHECK(RangingSession_TakeOutgoing(&a,UINT32_MAX-100U,&m));
     CHECK(!RangingSession_TakeOutgoing(&a,398,&m));CHECK(RangingSession_TakeOutgoing(&a,399,&m));
@@ -144,7 +140,7 @@ static void ClockAndExhaustion(void)
 /** @brief 执行本文件全部纯模块断言。 @return 成功0，断言失败直接退出1。 */
 int main(void)
 {
-    Codec();HandshakeAndDuplicate();RetryAndTimeout();RebootsAndDomain();ClockAndExhaustion();
+    Codec();HandshakeAndDuplicate();RetryAndTimeout();RebootsAndDomain();ClockFaults();
     puts("PASS RSC2: codec, 3-way fencing, restart epochs, expiry, failure throttle, clock faults");
     return 0;
 }

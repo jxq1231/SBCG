@@ -43,6 +43,7 @@ flags=['-DSBCG_USE_LWIP=1','-DSBCG_USE_AUDIO=1','-DSBCG_USE_AUDIO_ANCHOR=1',
        '-DSBCG_USE_BOARD_IDENTITY=1','-DSBCG_USE_SDRAM=1']
 command=[shutil.which('gcc'),'-std=c11','-Wall','-Wextra','-Werror','-pedantic',*flags,
     '-I',str(root/'Tests/App/stubs'),'-I',str(root/'App'),str(root/'Tests/Sdram/test_app_sdram.c'),
-    str(root/'App/app_main.c'),str(root/'App/BSP/board_identity.c'),'-o',str(out/'app.exe')]
+    str(root/'App/app_main.c'),str(root/'App/BSP/board_identity.c'),
+    str(root/'Tests/App/stubs/ranging_app_stubs.c'),'-o',str(out/'app.exe')]
 subprocess.run(command,check=True,timeout=30)
 subprocess.run([str(out/'app.exe')],check=True,timeout=30)

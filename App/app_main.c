@@ -417,13 +417,15 @@ static void RefreshRanging(uint32_t now_ms)
     MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
 }
 
-/** @brief 接收固定对端的状态握手；message仅本次借用，健康读时先于处理，返回无值。 */
+/**
+ * @brief 接收固定对端的状态握手；message仅本次借用，健康读时先于处理。
+ * @return 无返回值；握手结果由主循环末尾的RefreshRanging统一写入上下文。
+ */
 static void HandleRangingSession(const RangingSessionMessage *message)
 {
     const uint32_t now=BSP_Console_GetTickMs();
     RefreshRanging(now);
     (void)RangingSession_OnMessage(&ranging_app.session,message,now);
-    RefreshRanging(now);
 }
 
 /**
@@ -443,7 +445,6 @@ static void HandlePeerSound(const SoundEventRecord *event)
        event->time_ns<=ranging_app.peer_source_ns)return;
     ranging_app.peer_source_ns=event->time_ns;
     ranging_app.peer_audio_session=event->session;
-    RefreshRanging(now);
 }
 /**
  * @brief 处理对端域报文：B采用A令牌并回ACK；A只接受同令牌ACK。

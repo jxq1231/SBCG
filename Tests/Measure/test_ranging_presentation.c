@@ -55,11 +55,6 @@ static void TestProvisionalRecovery(void)
     MeasurementResult_GetPresentation(&p);
     CHECK(p.state==MEASUREMENT_PRESENTATION_HOLD && p.has_value && !p.fresh);
     CHECK(p.measurement_id==id && p.source_common_ns==source);
-    MeasurementResultSnapshot old;
-    CHECK(!MeasurementResult_Get(3500U,&old));
-    SoundPairResult pair=PairMm(315,2000U);
-    CHECK(!MeasurementResult_PublishPair(&pair,&temperature,3500U));
-    CHECK(!MeasurementResult_PublishRemote(&(MeasurementResultSnapshot){0},3500U));
     MeasurementResult_Update(&context,&temperature,7500U,deadline);
     MeasurementResult_GetPresentation(&p);CHECK(!p.has_value && p.state==MEASUREMENT_PRESENTATION_STALE);
     context.stream_valid=false;

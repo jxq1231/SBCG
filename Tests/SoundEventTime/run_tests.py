@@ -37,7 +37,7 @@ from reference_check import check
 check(bridge)
 
 for name,sources,flags in [
- ('app_time',['App/app_main.c','App/BSP/board_identity.c'],['-DSBCG_USE_LWIP=1','-DSBCG_USE_AUDIO=1','-DSBCG_USE_AUDIO_ANCHOR=1','-DSBCG_USE_AUDIO_MAP=1','-DSBCG_USE_BOARD_SYNC=1','-DSBCG_USE_BOARD_IDENTITY=1','-I',str(root/'Tests/App/stubs')]),
+ ('app_time',['App/app_main.c','App/BSP/board_identity.c','Tests/App/stubs/ranging_app_stubs.c'],['-DSBCG_USE_LWIP=1','-DSBCG_USE_AUDIO=1','-DSBCG_USE_AUDIO_ANCHOR=1','-DSBCG_USE_AUDIO_MAP=1','-DSBCG_USE_BOARD_SYNC=1','-DSBCG_USE_BOARD_IDENTITY=1','-I',str(root/'Tests/App/stubs')]),
  ('clock_time',['App/Sync/time_sync.c'],([ '-DSBCG_USE_PPS=1'] if (root/'App/Sync/pps_service.h').exists() else [])+['-Wl,--wrap=BSP_PTP_Step','-Wl,--wrap=BSP_PTP_SetFrequencyPpb'])]:
  target=out/(name+'.exe')
  cmd=[shutil.which('gcc'),'-std=c11','-Wall','-Wextra','-Werror','-pedantic','-DSBCG_USE_SOUND_TIME=1','-I',str(root/'App'),*flags,str(root/'Tests/SoundEventTime'/('test_'+name+'.c')),*[str(root/s) for s in sources],'-o',str(target)]

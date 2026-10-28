@@ -61,9 +61,6 @@ bool StandardSequence_Push(StandardSequence *s,uint64_t t,uint8_t q){(void)s;(vo
 /** @brief App测试桩：清零序列快照。 */
 void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o){(void)s;if(o)memset(o,0,sizeof *o);}
 
-/** @brief App测试桩：撤销权威测量结果。 */
-void MeasurementResult_Invalidate(uint32_t now){(void)now;}
-
 /** @brief App测试桩：无同步快照，共同域无效。 */
 void TimeSync_GetSnapshot(uint32_t now,TimeSyncSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
 /** @brief App测试桩：清空共同时间域。 */
@@ -75,12 +72,6 @@ void TimeDomain_Get(TimeDomainSnapshot *out){if(out){out->valid=false;out->id=0U
 
 /** @brief App测试桩：安装权威结果消费者。 */
 void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink){(void)sink;}
-/** @brief App测试桩：A→B权威结果发送。 */
-bool UDPSoundEvent_SendResult(uint32_t now,const MeasurementResultSnapshot *result){(void)now;(void)result;return true;}
-/** @brief App测试桩：接收并发布A板权威结果。 */
-bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,uint32_t now){(void)result;(void)now;return false;}
-/** @brief App测试桩：不读取权威结果。 */
-bool MeasurementResult_Get(uint32_t now,MeasurementResultSnapshot *out){(void)now;(void)out;return false;}
 bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out){(void)out;return false;}
 
 /** @brief App测试桩：设置A域令牌。 */
@@ -146,21 +137,6 @@ void Calibration_Init(void){}
 void Calibration_Get(CalibrationSnapshot *out){if(out)memset(out,0,sizeof *out);}
 /** @brief App测试桩：设置结果标定。 */
 void MeasurementResult_SetCalibration(int32_t offset,uint16_t version){(void)offset;(void)version;}
-
-/** @brief App测试桩：初始化结果重发状态。 */
-void ResultExchange_Init(ResultExchangeState *s){if(s)memset(s,0,sizeof *s);}
-/** @brief App测试桩：域恢复。 */
-void ResultExchange_OnDomainRestored(ResultExchangeState *s){(void)s;}
-/** @brief App测试桩：ACK序号。 */
-void ResultExchange_OnPeerAckSequence(ResultExchangeState *s,uint32_t q){(void)s;(void)q;}
-/** @brief App测试桩：成功ACK。 */
-void ResultExchange_OnAck(ResultExchangeState *s,uint32_t id){(void)s;(void)id;}
-/** @brief App测试桩：允许发送。 */
-bool ResultExchange_ShouldSend(const ResultExchangeState *s,uint32_t now,uint32_t id)
-{(void)s;(void)now;(void)id;return true;}
-/** @brief App测试桩：记录发送。 */
-void ResultExchange_MarkSent(ResultExchangeState *s,uint32_t now,uint32_t id)
-{(void)s;(void)now;(void)id;}
 
 /** @brief App测试桩：设置/撤销当前声音事件域。 */
 void UDPSoundEvent_SetTimeDomain(uint32_t id){(void)id;}

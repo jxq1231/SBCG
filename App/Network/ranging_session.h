@@ -36,7 +36,6 @@ typedef struct {
 /** @brief 资格副本；仅established=true允许该epoch结果，源必须不早于source_floor_ns。 */
 typedef struct {
     bool established;
-    bool exhausted;
     uint32_t domain;
     uint32_t authority_epoch;
     uint64_t source_floor_ns;
@@ -49,7 +48,7 @@ typedef struct {
     uint32_t request_epoch, challenge_ms, last_tx_ms;
     uint64_t now_common_ns, last_common_ns, challenge_ns, last_challenge_ns;
     uint8_t phase;
-    bool healthy, established, exhausted, changed, have_clock, have_tx;
+    bool healthy, established, changed, have_clock, have_tx;
 } RangingSession;
 
 /** @brief 初始化实例。 @param self 可NULL；非NULL清全部启动状态。 @param role A/B，否则永久不放行。 @return 无返回值。 */

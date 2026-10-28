@@ -1,7 +1,8 @@
 /**
  * @file        measurement_result.h
  * @brief       两板测距的唯一权威结果缓存：测量ID、距离、方向、质量、温度版本。
- * @details     只接受已配对的SoundPairResult并重新用当前声速计算距离；无温度/超龄/越界时结果为无效。
+ * @details     只接受前台已确认同域/会话的SoundPairResult；距离始终由当前声速和标定重算，
+ *              源期限只由真实共同时间推进。任何独立入口都不能建立健康上下文。
  * @note        前台单写单读；不访问PCM/HAL/PTP，不生成网络报文，不把无效结果补零。
  */
 #ifndef SBCG_MEASUREMENT_RESULT_H
@@ -13,7 +14,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define MEASUREMENT_MAX_AGE_MS 2000U
 #define MEASUREMENT_MAX_DISTANCE_MM 10000U
 
 /** @brief 结果状态；只有VALID在有效期内可显示数值。 */
@@ -57,8 +57,8 @@ typedef enum
 
 /**
  * @brief 最近一次测量决策的只读诊断副本。
- * @details schema=1：raw/pair/温补/标定/稳定器成员分别记录；不能把这些字段当成独立硬件精度。
- * @note 由MeasurementResult_PublishPair/Invalidate/PublishRemote更新，前台可随时复制。
+ * @details schema=2：记录真实tracker决策、接受窗口成员和发布值；不能把这些字段当成独立硬件精度。
+ * @note 由MeasurementResult_PublishTrackedPair更新，前台可随时复制。
  */
 typedef struct
 {
@@ -168,39 +168,11 @@ void MeasurementResult_Update(const MeasurementContext *context,
                                const TemperatureSnapshot *temperature,
                                uint32_t now_ms,uint64_t now_common_ns);
 
-/** @brief 复位结果和ID；now_ms仅作时间基准，不读硬件。 */
+/** @brief 复位结果和ID；now_ms保留为调用方时间基准，不读硬件。 */
 void MeasurementResult_Init(uint32_t now_ms);
 
-/** @brief 设置本地标定偏移/版本；距离发布前应用，远程结果保留原值。 */
+/** @brief 设置本地标定偏移/版本；变化时撤销当前展示，B远程结果保留原值。 */
 void MeasurementResult_SetCalibration(int32_t offset_mm,uint16_t version);
-
-/**
- * @brief 由配对结果生成权威测量；成功/拒绝都更新状态，返回是否VALID。
- * @param pair 非NULL已配对结果；无效/超窗口结果只生成REJECTED。
- * @param temperature 可NULL温度快照；无有效温度/声速时不能生成VALID。
- * @param now_ms 前台当前毫秒，用于超龄判断。
- */
-bool MeasurementResult_PublishPair(const SoundPairResult *pair,
-                                   const TemperatureSnapshot *temperature,
-                                   uint32_t now_ms);
-
-/**
- * @brief 接收A板权威结果并按原ID/距离/方向/质量发布；B板只显示，不重算。
- * @param result 非NULL已通过线协议校验的结果；captured_ms由本函数覆盖。
- * @param now_ms 接收/发布时的本地毫秒，用于2s有效期。
- * @return 字段合法且已发布返回true；否则false且不改当前结果。
- */
-bool MeasurementResult_PublishRemote(const MeasurementResultSnapshot *result,
-                                     uint32_t now_ms);
-
-/** @brief 显式撤销当前结果（时钟/流/配对边界由上层调用）；now_ms仅记录。 */
-void MeasurementResult_Invalidate(uint32_t now_ms);
-
-/** @brief 硬撤销tracker展示状态；普通pair拒绝不应调用。 */
-void MeasurementResult_InvalidatePresentation(uint32_t now_ms);
-
-/** @brief 复制结果；超龄时valid=false但status可保留REJECTED/VALID供诊断。 */
-bool MeasurementResult_Get(uint32_t now_ms, MeasurementResultSnapshot *out);
 
 /** @brief 复制最近一次测量决策诊断；NULL不操作，返回值表示有可用副本。 */
 bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out);

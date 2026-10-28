@@ -23,8 +23,8 @@ def main():
             ('search',['Tests/ChirpService/test_search_diagnostics.c',
                        'App/Detector/chirp_window.c','App/Detector/chirp_matcher.c',
                        'App/Detector/chirp_template.c','App/Detector/sound_detector.c'],[]),('app',
-            ['Tests/ChirpService/test_app_diagnostics.c','App/app_main.c'],flags),('app-direct',
-            ['Tests/ChirpService/test_app_diagnostics.c','App/app_main.c'],
+            ['Tests/ChirpService/test_app_diagnostics.c','App/app_main.c','Tests/App/stubs/ranging_app_stubs.c'],flags),('app-direct',
+            ['Tests/ChirpService/test_app_diagnostics.c','App/app_main.c','Tests/App/stubs/ranging_app_stubs.c'],
             [flag for flag in flags if flag!='-DSBCG_USE_SOUND_TIME=1'])]:
             exe=out/f'{name}-{opt[1:]}.exe'
             cmd=[shutil.which('gcc'),'-std=c11',opt,'-Wall','-Wextra','-Werror','-pedantic',
