@@ -205,7 +205,13 @@ def main():
         check(sa['has']==sb['has']==0 and sa['state']==sb['state']==5,
               'both source deadlines expire to STALE')
         check(sa['distance_text']==sb['distance_text']=='-- M','no-value UI never shows zero metres')
-        for t in range(38650,44551,50):step(t,{40000:15,42000:16,44000:17}.get(t,0))
+        for t in range(38650,44551,50):
+            step(t,{40000:15,42000:16,44000:17}.get(t,0))
+            if t in (40100,42100):
+                sa,sb=snap(a,b,'new-provisional-after-expiry')
+                check(sa['has']==sb['has']==1 and sa['state']==sb['state']==1 and
+                      sa['id']==sb['id'] and sa['mm']==sb['mm'],
+                      'first two new sounds after expiry reach B as ACQUIRING values')
         sa,sb=snap(a,b,'live-before-domain-loss')
         check(sa['has']==sb['has']==1,'domain-loss test begins with a live value')
         a.cmd('SYNC 0');b.cmd('SYNC 0');step(44600)

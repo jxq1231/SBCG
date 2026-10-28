@@ -397,7 +397,8 @@ void MeasurementResult_Update(const MeasurementContext *context,
     { value.state=MEASUREMENT_PRESENTATION_ACQUIRING; }
     if(snapshot.state==RANGING_STATE_FAULT)
     { ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);return; }
-    if(snapshot.accepted_count>0U)
+    /* 只同步同一源的确认窗口状态；旧窗口STALE不能覆盖新声的临时值。 */
+    if(snapshot.has_value && value.source_common_ns==snapshot.source_common_ns)
     { value.state=PresentationFromTracker(snapshot.state);value.fresh=snapshot.fresh; }
     if(value.has_value)
     {

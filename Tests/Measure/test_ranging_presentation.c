@@ -72,6 +72,29 @@ static void TestProvisionalRecovery(void)
     p=Push(315,12000U);CHECK(p.measurement_id>recovered_id);
 }
 
+/** @brief 确认窗口过期后，新候选必须保留自己的布防状态和源期限。 */
+static void TestNewSoundAfterExpiry(void)
+{
+    Setup();(void)Push(315,0U);(void)Push(315,2000U);
+    MeasurementPresentationSnapshot p=Push(315,4000U);
+    const uint32_t old_id=p.measurement_id;
+    current_ns=p.display_deadline_ns;
+    MeasurementResult_Update(&context,&temperature,12000U,current_ns);
+    MeasurementResult_GetPresentation(&p);CHECK(!p.has_value);
+    p=Push(450,12000U);
+    CHECK(p.has_value && p.fresh && p.state==MEASUREMENT_PRESENTATION_ACQUIRING);
+    CHECK(p.measurement_id>old_id && p.distance_mm==450);
+    const uint64_t source=p.source_common_ns,deadline=p.display_deadline_ns;
+    MeasurementResult_Update(&context,&temperature,13000U,current_ns+1000000000ULL);
+    MeasurementResult_GetPresentation(&p);
+    CHECK(p.has_value && p.fresh && p.state==MEASUREMENT_PRESENTATION_ACQUIRING);
+    CHECK(p.source_common_ns==source && p.display_deadline_ns==deadline);
+    p=Push(450,14000U);
+    CHECK(p.has_value && p.fresh && p.state==MEASUREMENT_PRESENTATION_ACQUIRING);
+    p=Push(450,16000U);
+    CHECK(p.has_value && p.fresh && p.state==MEASUREMENT_PRESENTATION_TRACKING);
+}
+
 /** @brief 验证pair不授予上下文、旧源下界及会话错配不会清除当前历史。 */
 static void TestTrustedInput(void)
 {
@@ -149,7 +172,7 @@ static void TestCalibrationContract(void)
 /** @brief 执行生命周期、同源温补与接收重放反例；成功返回0。 */
 int main(void)
 {
-    TestProvisionalRecovery();TestTrustedInput();TestRemoteRevocation();TestCalibrationContract();
+    TestProvisionalRecovery();TestNewSoundAfterExpiry();TestTrustedInput();TestRemoteRevocation();TestCalibrationContract();
     Setup();MeasurementResult_SetCalibration(20,5U);
     MeasurementPresentationSnapshot p=Push(315,0U);CHECK(p.measurement_id==1U);
     uint32_t rev=p.state_revision;
