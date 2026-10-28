@@ -1,3 +1,9 @@
+/**
+ * @file        test_ranging_tracker.c
+ * @brief       纯跟踪器状态、身份、算术及时间边界的主机回归。
+ * @details     使用独立合成声事件直接调用公开接口，覆盖确认、保持与硬恢复。
+ * @note        无硬件操作；测试纳秒值只验证软件合同，不代表声学精度。
+ */
 #include "Measure/ranging_tracker.h"
 #include <assert.h>
 #include <stdio.h>
@@ -73,7 +79,8 @@ static void Setup(void)
     next_a_sequence=1U;next_b_sequence=1U;
 }
 
-int main(void)
+/** @brief 验证既有确认、保持、方向、失效和过期路径；无返回值。 */
+static void TestLegacy(void)
 {
     Setup();
     assert(PushMm(315,0U)==RANGING_DECISION_CANDIDATE);
@@ -196,5 +203,282 @@ int main(void)
     assert(snapshot.state==RANGING_STATE_STALE && !snapshot.has_value);
 
     puts("PASS ranging tracker: confirm/hold/reacquire/switch, identity, candidate gap, inconsistent clusters, direction, fault and stale");
-    return 0;
+}
+
+/**
+ * @brief 构造指定有符号纳秒差的事件，递增两侧身份。
+ * @param delta_ns 本次B减A时间差，单位ns。
+ * @param source_ms A时刻相对1s的毫秒偏移。
+ * @return 返回按值拥有的合成事件。
+ */
+static RangingObservation MakeDelta(int64_t delta_ns,uint32_t source_ms)
+{
+    RangingObservation observation;
+    MakeObservation(0,source_ms,&observation);
+    observation.delta_ns=delta_ns;
+    observation.b_time_ns=delta_ns<0 ?
+        observation.a_time_ns-(uint64_t)(-(delta_ns+1))-1U :
+        observation.a_time_ns+(uint64_t)delta_ns;
+    return observation;
+}
+
+/**
+ * @brief 在真实共同读时不早于源的条件下提交事件。
+ * @param observation 非NULL，只在调用期间借用的输入。
+ * @param recv_ms 可回绕的前台接收毫秒计数。
+ * @return 返回真实跟踪器决策。
+ */
+static RangingDecision PushAt(const RangingObservation *observation,uint32_t recv_ms)
+{
+    const uint64_t common_ns=observation->a_time_ns>observation->b_time_ns ?
+        observation->a_time_ns:observation->b_time_ns;
+    return RangingTracker_Push(&tracker,observation,recv_ms,common_ns);
+}
+
+/** @brief 验证完整候选跨度及能够保留的最新一致后缀；无返回值。 */
+static void TestSpan(void)
+{
+    Setup();
+    const int64_t values[]={900000,920000,880000};
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation observation=MakeDelta(values[i],i*2000U);
+        assert(PushAt(&observation,1000U+i*2000U)==RANGING_DECISION_CANDIDATE);
+    }
+    assert(!Snapshot().has_value && Snapshot().candidate_count==1U);
+    Setup();
+    const int64_t suffix[]={900000,920000,930000,925000};
+    for(uint32_t i=0U;i<4U;++i)
+    {
+        RangingObservation observation=MakeDelta(suffix[i],i*2000U);
+        assert(PushAt(&observation,1000U+i*2000U)==
+            (i==3U?RANGING_DECISION_ACCEPT:RANGING_DECISION_CANDIDATE));
+    }
+    assert(Snapshot().filtered_delta_ns==925000);
+}
+
+/** @brief 验证跨零换向与近零候选也要独立三声确认；无返回值。 */
+static void TestDirection(void)
+{
+    Setup();
+    assert(PushMm(5,0U)==RANGING_DECISION_CANDIDATE);
+    assert(PushMm(5,2000U)==RANGING_DECISION_CANDIDATE);
+    assert(PushMm(5,4000U)==RANGING_DECISION_ACCEPT);
+    assert(PushMm(-5,6000U)==RANGING_DECISION_HOLD);
+    assert(Snapshot().direction==1);
+    assert(PushMm(-5,8000U)==RANGING_DECISION_REACQUIRE);
+    assert(PushMm(-5,10000U)==RANGING_DECISION_ACCEPT);
+    assert(Snapshot().direction==2);
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation observation=MakeDelta(i==1U?-1000:1000,i*2000U);
+        assert(PushAt(&observation,1000U+i*2000U)==RANGING_DECISION_CANDIDATE);
+    }
+    assert(!Snapshot().has_value);
+}
+
+/** @brief 验证超过16项后同上下文硬恢复也不重用任一侧身份；无返回值。 */
+static void TestHighwater(void)
+{
+    Setup();
+    for(uint32_t i=0U;i<20U;++i) { (void)PushMm(315,i*2000U); }
+    RangingTracker_Invalidate(&tracker,RANGING_INVALIDATE_STREAM,40000U);
+    RangingTracker_SetContext(&tracker,&context,40000U,40000000000ULL);
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation replay=MakeDelta(900000,40000U+i*2000U);
+        replay.a_sequence=i+1U;replay.b_sequence=i+1U;
+        assert(PushAt(&replay,41000U+i*2000U)==RANGING_DECISION_REJECT);
+    }
+    assert(!Snapshot().has_value && Snapshot().candidate_count==0U);
+    RangingObservation repeated=MakeDelta(900000,48000U);
+    repeated.a_sequence=20U;
+    assert(PushAt(&repeated,49000U)==RANGING_DECISION_REJECT);
+    repeated.a_sequence=next_a_sequence++;
+    repeated.b_sequence=20U;
+    assert(PushAt(&repeated,49000U)==RANGING_DECISION_REJECT);
+    ++context.a_session;
+    RangingTracker_SetContext(&tracker,&context,50000U,50000000000ULL);
+    repeated=MakeDelta(900000,50000U);
+    repeated.a_sequence=1U;repeated.b_sequence=20U;
+    assert(PushAt(&repeated,51000U)==RANGING_DECISION_REJECT);
+    repeated.b_sequence=21U;
+    assert(PushAt(&repeated,51000U)==RANGING_DECISION_CANDIDATE);
+    ++context.b_session;
+    RangingTracker_SetContext(&tracker,&context,52000U,52000000000ULL);
+    repeated=MakeDelta(900000,52000U);
+    repeated.a_sequence=2U;repeated.b_sequence=1U;
+    assert(PushAt(&repeated,53000U)==RANGING_DECISION_CANDIDATE);
+    repeated=MakeDelta(900000,54000U);
+    repeated.a_session=context.a_session-1U;
+    assert(PushAt(&repeated,55000U)==RANGING_DECISION_REJECT);
+    assert(Snapshot().candidate_count==1U);
+    ++context.time_domain;
+    RangingTracker_SetContext(&tracker,&context,56000U,56000000000ULL);
+    repeated=MakeDelta(900000,56000U);
+    repeated.a_sequence=1U;repeated.b_sequence=1U;
+    assert(PushAt(&repeated,57000U)==RANGING_DECISION_CANDIDATE);
+}
+
+/** @brief 验证纳秒差、距离乘加、截止加法和质量字段的输入边界；无返回值。 */
+static void TestArithmetic(void)
+{
+    Setup();
+    RangingObservation observation=MakeDelta(INT64_C(1)<<61,0U);
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    Setup();
+    observation=MakeDelta(DeltaForMm(10001),0U);
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    Setup();
+    observation=MakeDelta(INT64_MAX,0U);
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    Setup();
+    observation=MakeDelta(0,0U);
+    observation.a_time_ns=UINT64_MAX;observation.b_time_ns=1U;
+    observation.delta_ns=2;
+    assert(RangingTracker_Push(&tracker,&observation,1000U,UINT64_MAX)==RANGING_DECISION_REJECT);
+    Setup();
+    observation=MakeDelta(0,0U);
+    observation.a_time_ns=(UINT64_C(1)<<63)+1U;observation.b_time_ns=1U;
+    observation.delta_ns=INT64_MIN;
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    Setup();
+    observation=MakeDelta(0,0U);
+    observation.a_time_ns=UINT64_MAX-1000U;
+    observation.b_time_ns=observation.a_time_ns;
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    assert(!Snapshot().has_value && Snapshot().candidate_count==0U);
+    Setup();
+    observation=MakeDelta(900000,0U);observation.proxy_quality=101U;
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    Setup();
+    observation=MakeDelta(900000,0U);observation.a_sequence=0U;
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_REJECT);
+    Setup();
+    RangingTrackerConfig bad=RangingTracker_DefaultConfig();
+    bad.accepted_window=1U;
+    RangingTracker_Init(&tracker,&bad);
+    assert(Snapshot().state==RANGING_STATE_FAULT);
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        observation=MakeDelta(2000,i*2000U);
+        observation.a_time_ns=(uint64_t)INT64_MAX-1000U+(uint64_t)i*2000000000ULL;
+        observation.b_time_ns=observation.a_time_ns+2000U;
+        assert(PushAt(&observation,1000U+i*2000U)==
+            (i==2U?RANGING_DECISION_ACCEPT:RANGING_DECISION_CANDIDATE));
+    }
+    assert(Snapshot().filtered_delta_ns==2000);
+}
+
+/** @brief 验证新声速不得使旧候选带入越量程支持窗口；无返回值。 */
+static void TestSoundSpeed(void)
+{
+    Setup();
+    RangingObservation observation=MakeDelta(DeltaForMm(9000),0U);
+    assert(PushAt(&observation,1000U)==RANGING_DECISION_CANDIDATE);
+    RangingTracker_SetSoundSpeed(&tracker,1000000U);
+    assert(Snapshot().candidate_count==0U && !Snapshot().has_value);
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        observation=MakeDelta(DeltaForMm(9000),i*2000U);
+        (void)PushAt(&observation,1000U+i*2000U);
+    }
+    RangingTracker_SetSoundSpeed(&tracker,UINT32_MAX);
+    assert(Snapshot().state==RANGING_STATE_FAULT && !Snapshot().has_value);
+}
+
+/** @brief 验证共同读时失败或倒退立即撤值，并保留消费身份；无返回值。 */
+static void TestClock(void)
+{
+    Setup();
+    for(uint32_t i=0U;i<3U;++i) { (void)PushMm(315,i*2000U); }
+    RangingTracker_Tick(&tracker,6000U,0U);
+    assert(Snapshot().state==RANGING_STATE_FAULT && !Snapshot().has_value);
+    RangingTracker_SetContext(&tracker,&context,7000U,7000000000ULL);
+    for(uint32_t i=0U;i<3U;++i) { (void)PushMm(315,8000U+i*2000U); }
+    RangingTracker_Tick(&tracker,14000U,12000000000ULL);
+    assert(Snapshot().state==RANGING_STATE_FAULT && !Snapshot().has_value);
+    Setup();
+    RangingObservation observation=MakeDelta(900000,0U);
+    assert(RangingTracker_Push(&tracker,&observation,1000U,0U)==RANGING_DECISION_FAULT);
+    assert(!Snapshot().has_value);
+}
+
+/** @brief 验证候选接收超时、200ms抖动、毫秒回绕和4s旧簇返回；无返回值。 */
+static void TestReceiveGap(void)
+{
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation observation=MakeDelta(900000,i*2000U);
+        assert(PushAt(&observation,1000U+i*2600U)==RANGING_DECISION_CANDIDATE);
+    }
+    assert(Snapshot().candidate_count==1U);
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation observation=MakeDelta(900000,i*2000U);
+        const uint32_t recv_ms=i==1U?2800U:1200U+i*2000U;
+        assert(PushAt(&observation,recv_ms)==
+            (i==2U?RANGING_DECISION_ACCEPT:RANGING_DECISION_CANDIDATE));
+    }
+    assert(PushMm(315,8000U)==RANGING_DECISION_ACCEPT);
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation observation=MakeDelta(900000,i*2000U);
+        assert(PushAt(&observation,UINT32_MAX-1000U+i*2000U)==
+            (i==2U?RANGING_DECISION_ACCEPT:RANGING_DECISION_CANDIDATE));
+    }
+}
+
+/** @brief 验证质量/证据只来自实际支持窗口，淘汰低分后允许恢复；无返回值。 */
+static void TestQuality(void)
+{
+    Setup();
+    for(uint32_t i=0U;i<3U;++i)
+    {
+        RangingObservation observation=MakeDelta(900000,i*2000U);
+        observation.proxy_quality=i==1U?70U:95U;
+        observation.evidence_kind=RANGING_EVIDENCE_CODED;
+        (void)PushAt(&observation,1000U+i*2000U);
+    }
+    assert(Snapshot().quality==70U && Snapshot().evidence_kind==RANGING_EVIDENCE_CODED);
+    RangingObservation outlier=MakeDelta(700000,6000U);
+    outlier.proxy_quality=50U;outlier.evidence_kind=RANGING_EVIDENCE_PROXY;
+    assert(PushAt(&outlier,7000U)==RANGING_DECISION_HOLD);
+    assert(Snapshot().quality==70U && Snapshot().evidence_kind==RANGING_EVIDENCE_CODED);
+    for(uint32_t i=0U;i<5U;++i)
+    {
+        RangingObservation observation=MakeDelta(900000,8000U+i*2000U);
+        observation.proxy_quality=95U;observation.evidence_kind=RANGING_EVIDENCE_MATCHED;
+        assert(PushAt(&observation,9000U+i*2000U)==RANGING_DECISION_ACCEPT);
+    }
+    assert(Snapshot().quality==95U && Snapshot().evidence_kind==RANGING_EVIDENCE_MATCHED);
+}
+
+/**
+ * @brief 逐组运行跟踪器回归，可按名称单独复现RED。
+ * @param argc 进程参数数量。
+ * @param argv 参数仅在本函数内借用；第二项可选测试名。
+ * @return 成功返回0；未知名称返回2，断言失败立即返回非零。
+ */
+int main(int argc,char **argv)
+{
+    const struct {const char *name;void (*run)(void);} cases[]={
+        {"span",TestSpan},{"direction",TestDirection},{"highwater",TestHighwater},
+        {"arithmetic",TestArithmetic},{"sound_speed",TestSoundSpeed},{"clock",TestClock},
+        {"receive_gap",TestReceiveGap},{"quality",TestQuality},{"legacy",TestLegacy}};
+    bool found=false;
+    for(size_t i=0U;i<sizeof cases/sizeof cases[0];++i)
+    {
+        if(argc>1 && strcmp(argv[1],cases[i].name)!=0) { continue; }
+        cases[i].run();found=true;
+        printf("PASS tracker %s\n",cases[i].name);
+    }
+    printf("sizeof RangingTracker=%zu\n",sizeof tracker);
+    return found?0:2;
 }

@@ -16,6 +16,7 @@
 #define RANGING_TRACKER_CANDIDATE_WINDOW 3U
 #define RANGING_TRACKER_IDENTITY_WINDOW 16U
 #define RANGING_TRACKER_NS_PER_MS 1000000U
+#define RANGING_TRACKER_MAX_DISTANCE_MM 10000U
 
 /** @brief 观测证据来源；只用于保守质量，不代表物理真值。 */
 typedef enum
@@ -48,7 +49,7 @@ typedef enum
     RANGING_DECISION_FAULT
 } RangingDecision;
 
-/** @brief 硬/软失效原因；硬原因清历史，软原因只更新状态。 */
+/** @brief 硬/软失效原因；硬原因清样本但保留已消费身份，软原因只更新状态。 */
 typedef enum
 {
     RANGING_INVALIDATE_SOFT = 0,
@@ -134,10 +135,15 @@ typedef struct
     RangingDecision last_decision;
     RangingInvalidReason invalidation;
     int64_t accepted_ns[RANGING_TRACKER_ACCEPTED_WINDOW];
+    uint8_t accepted_quality[RANGING_TRACKER_ACCEPTED_WINDOW];
+    uint8_t accepted_evidence[RANGING_TRACKER_ACCEPTED_WINDOW];
     uint32_t accepted_count;
     int64_t candidate_ns[RANGING_TRACKER_CANDIDATE_WINDOW];
     uint64_t candidate_source_ns[RANGING_TRACKER_CANDIDATE_WINDOW];
+    uint8_t candidate_quality[RANGING_TRACKER_CANDIDATE_WINDOW];
+    uint8_t candidate_evidence[RANGING_TRACKER_CANDIDATE_WINDOW];
     uint32_t candidate_count;
+    uint32_t candidate_last_recv_ms;
     uint64_t last_source_ns;
     bool has_source;
     uint64_t last_source_ns_for_display;
@@ -148,6 +154,14 @@ typedef struct
     uint32_t measurement_id;
     uint32_t state_revision;
     uint32_t next_measurement_id;
+    struct
+    {
+        uint32_t time_domain;
+        uint32_t a_session;
+        uint32_t b_session;
+        uint32_t a_sequence;
+        uint32_t b_sequence;
+    } consumed; /**< 同域同侧session的序号高水位；硬失效不回退。 */
     struct
     {
         uint32_t a_session;

@@ -22,7 +22,9 @@ static int32_t stable_values[STABLE_WINDOW];
 static uint8_t stable_count, stable_head;
 static uint32_t stable_last_ms;
 static uint8_t stable_outliers;
-static MeasurementDiagnosticsSnapshot diagnostic;
+/* 只由前台读写的诊断副本；与tracker同放CPU-only区，给普通RAM保留堆栈余量。 */
+static MeasurementDiagnosticsSnapshot diagnostic
+    __attribute__((section(".ItcmState"), aligned(32)));
 static uint32_t diagnostic_sequence;
 /* A2b CPU-only状态放在ITCM NOLOAD段：不占320KB主RAM，不能被DMA访问。 */
 static RangingTracker tracked
