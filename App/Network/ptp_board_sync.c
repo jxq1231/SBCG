@@ -1,7 +1,7 @@
 /**
  * @file ptp_board_sync.c
  * @brief 使用MAC硬件RX/TX快照完成固定A/B单播两步PTPv2交换。
- * @details 319接收事件、320接收一般消息；全部软件状态为固定CPU存储，仅LwIP分配pbuf/PCB。
+ * @details 319接收事件、320接收一般消息；前台每秒汇总交换状态及拒绝分支，仅LwIP分配pbuf/PCB。
  * @note 不调整硬件时钟；共享现有BSP单缓冲Begin/End令牌，无新IRQ/DMA/Cache配置。
  */
 #include "ptp_board_sync.h"
@@ -33,6 +33,7 @@ typedef struct
 typedef struct
 {
     uint32_t invalid,foreign,correction,sequence,expired,missing,tx_error,send_error,bind_error,completed;
+    uint32_t sync_busy,sync_old,fu_mismatch,resp_mismatch,candidate_expired,clock_clear;
 } Stats;
 extern struct netif gnetif;
 static struct udp_pcb *event_pcb,*general_pcb;
@@ -74,7 +75,7 @@ static void ResetPeer(uint32_t now)
 /** @brief 清理过期候选。 @param now HAL毫秒。 @return 无返回值。 */
 static void Expire(uint32_t now)
 {
-    if(candidate.state!=IDLE&&(uint32_t)(now-candidate.created_ms)>=TTL_MS) { candidate.state=IDLE;++stats.expired; }
+    if(candidate.state!=IDLE&&(uint32_t)(now-candidate.created_ms)>=TTL_MS) { candidate.state=IDLE;++stats.expired;++stats.candidate_expired; }
     if((sync_tx.waiting||sync_tx.ready)&&(uint32_t)(now-sync_tx.created_ms)>=TTL_MS) { sync_tx.waiting=sync_tx.ready=false;++stats.expired; }
     if(response.ready&&(uint32_t)(now-response.created_ms)>=TTL_MS) { response.ready=false;++stats.expired; }
     if(have_output&&(uint32_t)(now-output_ms)>=TTL_MS) { have_output=false;++stats.expired; }
@@ -217,21 +218,22 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,const ip_a
     }
     if(m.type==PTP_WIRE_SYNC)
     {
-        if(candidate.state!=IDLE||have_output||(have_peer_sequence&&!Newer(m.sequence,peer_sequence))) { ++stats.sequence;return; }
+        if(candidate.state!=IDLE||have_output) { ++stats.sequence;++stats.sync_busy;return; }
+        if(have_peer_sequence&&!Newer(m.sequence,peer_sequence)) { ++stats.sequence;++stats.sync_old;return; }
         if(!rx_valid) { ++stats.missing;return; }
         peer_sequence=m.sequence;have_peer_sequence=true;last_peer_ms=now;
         memset(&candidate,0,sizeof(candidate));candidate.state=WAIT_FU;candidate.sync_sequence=m.sequence;candidate.created_ms=now;candidate.exchange.t2_b_rx_ns=rx_ns;return;
     }
     if(m.type==PTP_WIRE_FOLLOW_UP)
     {
-        if(candidate.state!=WAIT_FU||candidate.sync_sequence!=m.sequence) { ++stats.sequence;return; }
+        if(candidate.state!=WAIT_FU||candidate.sync_sequence!=m.sequence) { ++stats.sequence;++stats.fu_mismatch;return; }
         if(have_master_time&&m.timestamp_ns<=last_master_ns) { ++stats.invalid;ResetPeer(now);return; }
         last_master_ns=m.timestamp_ns;have_master_time=true;
         candidate.exchange.t1_a_tx_ns=m.timestamp_ns;candidate.state=SEND_REQ;return;
     }
     if(m.type==PTP_WIRE_DELAY_RESP)
     {
-        if(candidate.state!=WAIT_RESP||candidate.delay_sequence!=m.sequence||memcmp(m.requester,local_identity,10)!=0) { ++stats.sequence;return; }
+        if(candidate.state!=WAIT_RESP||candidate.delay_sequence!=m.sequence||memcmp(m.requester,local_identity,10)!=0) { ++stats.sequence;++stats.resp_mismatch;return; }
         if(m.timestamp_ns<candidate.exchange.t1_a_tx_ns||m.timestamp_ns-candidate.exchange.t1_a_tx_ns>UINT64_C(800000000)||
            candidate.exchange.t3_b_tx_ns<candidate.exchange.t2_b_rx_ns||candidate.exchange.t3_b_tx_ns-candidate.exchange.t2_b_rx_ns>UINT64_C(800000000))
         { ++stats.invalid;candidate.state=IDLE;return; }
@@ -275,12 +277,22 @@ static struct udp_pcb *Bind(uint16_t port)
 /** @brief 将64位纳秒转为安全十进制文本。 @param value 输入纳秒。 @param text 至少21字节输出。 @return 缓冲内首字符指针。 */
 static const char *Decimal(uint64_t value,char text[21])
 { char *p=text+20;*p=0;do { *--p=(char)('0'+value%10U);value/=10U; }while(value!=0U);return p; }
-/** @brief 限速输出传输累计计数。 @param now HAL毫秒计数。 @return 无返回值。 */
+/**
+ * @brief 前台每秒输出原累计计数及B候选状态、序号拒绝分支。
+ * @param now HAL毫秒计数；AGE_MS为当前候选年龄，IDLE时为0。
+ * @return 无返回值；只读协议状态，不在收包回调格式化或逐帧输出。
+ * @note STATE为IDLE/WAIT_FU/SEND_REQ/WAIT_TX/WAIT_RESP对应0至4；拒绝计数累计到本次初始化结束。
+ */
 static void LogStats(uint32_t now)
 {
     if(emit==NULL||(uint32_t)(now-last_log_ms)<1000U) { return; }last_log_ms=now;char line[256];
     int n=snprintf(line,sizeof(line),"$PTP_SYNC_STATS,OK=%" PRIu32 ",BAD=%" PRIu32 ",FOREIGN=%" PRIu32 ",CORRECTION=%" PRIu32 ",SEQ=%" PRIu32 ",EXPIRED=%" PRIu32 ",MISSING=%" PRIu32 ",TX_ERR=%" PRIu32 ",SEND_ERR=%" PRIu32 ",BIND_ERR=%" PRIu32 ",EPOCH=%" PRIu32 "\r\n",
         stats.completed,stats.invalid,stats.foreign,stats.correction,stats.sequence,stats.expired,stats.missing,stats.tx_error,stats.send_error,stats.bind_error,clock_epoch);
+    if(n>0&&(size_t)n<sizeof(line)) { emit(line,n); }
+    n=snprintf(line,sizeof(line),"$PTP_SYNC_DIAG,STATE=%u,AGE_MS=%" PRIu32 ",SYNC_ID=%u,REQ_ID=%u,BUSY=%" PRIu32 ",OLD=%" PRIu32 ",FU_MISMATCH=%" PRIu32 ",RESP_MISMATCH=%" PRIu32 ",CAND_EXPIRED=%" PRIu32 ",CLOCK_CLEAR=%" PRIu32 "\r\n",
+        (unsigned)candidate.state,candidate.state==IDLE?0U:(uint32_t)(now-candidate.created_ms),
+        (unsigned)candidate.sync_sequence,(unsigned)candidate.delay_sequence,
+        stats.sync_busy,stats.sync_old,stats.fu_mismatch,stats.resp_mismatch,stats.candidate_expired,stats.clock_clear);
     if(n>0&&(size_t)n<sizeof(line)) { emit(line,n); }
 }
 void PtpBoardSync_Process(uint32_t now)
@@ -330,7 +342,12 @@ bool PtpBoardSync_TakeExchange(SyncExchange *exchange,uint32_t *captured_ms)
     }
     return true;
 }
+/**
+ * @brief 时钟校正后清除旧配对，累计清理次数以区分网络拒绝与本地代际切换。
+ * @param epoch 当前本地时钟代际，不要求每次频率校正都递增。
+ * @return 无返回值；活动收发期间保持原拒绝行为，不访问硬件。
+ */
 void PtpBoardSync_NotifyClockChange(uint32_t epoch)
-{ if(active!=0U) { return; }clock_epoch=epoch;ClearPending(); }
+{ if(active!=0U) { return; }clock_epoch=epoch;++stats.clock_clear;ClearPending(); }
 bool PtpBoardSync_TakePeerReset(void)
 { bool result=peer_reset;peer_reset=false;return result; }

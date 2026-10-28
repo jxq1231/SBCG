@@ -152,5 +152,20 @@ int main(void)
     now+=6000;PtpBoardSync_Process(now);assert(PtpBoardSync_TakePeerReset());
     puts("PASS peer reset: observed clock rollback/inactivity clears history, signals foreground and quarantines without claiming unique boot identity");
     Reset(BOARD_ROLE_B,0);Ready();now+=1000;PtpBoardSync_Process(now);assert(Contains("$PTP_SYNC_STATS"));assert(PtpBoardSync_Deinit());
+    Reset(BOARD_ROLE_B,0);Ready();
+    Deliver(PTP_WIRE_SYNC,1,0);Deliver(PTP_WIRE_SYNC,2,0);
+    Deliver(PTP_WIRE_FOLLOW_UP,2,UINT64_C(10000000100));
+    PtpBoardSync_NotifyClockChange(2);
+    Deliver(PTP_WIRE_FOLLOW_UP,1,UINT64_C(10000000100));
+    Deliver(PTP_WIRE_SYNC,1,0);Deliver(PTP_WIRE_SYNC,2,0);
+    Deliver(PTP_WIRE_FOLLOW_UP,2,UINT64_C(10000000100));
+    PtpBoardSync_Process(now);Deliver(PTP_WIRE_DELAY_RESP,9,UINT64_C(10000000400));
+    now+=1000;PtpBoardSync_Process(now);
+    assert(Contains("$PTP_SYNC_DIAG,") && Contains("BUSY=1,OLD=1,FU_MISMATCH=2,RESP_MISMATCH=1,CAND_EXPIRED=1,CLOCK_CLEAR=1"));
+    assert(!PtpBoardSync_TakeExchange(&e,&captured));
+    exchange_count=1U; /* 新一轮主时钟必须晚于前面已接收的Follow_Up。 */
+    BComplete(3);assert(PtpBoardSync_TakeExchange(&e,&captured));
+    assert(PtpBoardSync_Deinit());
+    puts("PASS diagnostics: distinguish busy/old/FU/response/expiry/clock-clear without accepting rejected data");
     puts("PASS transport integration through actual legacy PtpRx/PtpTx wrappers");return 0;
 }
