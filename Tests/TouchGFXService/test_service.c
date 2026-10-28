@@ -152,7 +152,8 @@ int main(int argc,char**argv)
  assert(!strcmp(text.temperature,"30.0 C")&&!strcmp(text.temperature_source,"AUTO"));
  if(!strcmp(test,"fail")){lcd.status=BSP_TOUCHGFX_ERROR;lcd.hal_errors=1U;unsigned calls=framework_calls;Step(1001,true);Step(2000,true);assert(framework_calls==calls&&captures==2U);UI_TouchGFX_GetSnapshot(&s);assert(s.failed&&!s.ready);}
  if(!strcmp(test,"audio_error")){audio.hal_error=1U;Step(2000,true);UI_TouchGFX_GetSnapshot(&s);assert(!s.page.audio_valid&&s.page.audio_errors==1U);}
- if(!strcmp(test,"drop")){audio.dropped_blocks=1U;Step(2000,true);UI_TouchGFX_GetSnapshot(&s);assert(!s.page.audio_valid&&s.page.audio_dropped==1U);}
+ /* 历史丢块数仍展示，持续运行且回调新鲜的采集可以恢复健康。 */
+ if(!strcmp(test,"drop")){audio.dropped_blocks=1U;Step(2000,true);UI_TouchGFX_GetSnapshot(&s);assert(s.page.audio_valid&&s.page.audio_dropped==1U);}
  assert(!UI_TouchGFX_GetText(NULL,&generation)&&!UI_TouchGFX_GetText(&text,NULL));
  assert(logs>0U);printf("PASS TouchGFX service %s\n",test);return 0;
 }

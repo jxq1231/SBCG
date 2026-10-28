@@ -56,9 +56,11 @@ void UI_StatusSnapshot_Read(uint32_t now_ms, UI_StatusSnapshot *out)
     out->audio_running=audio.running; out->audio_dropped=audio.dropped_blocks;
     out->audio_errors=audio.error_count;
     if (out->audio_errors==0U && (audio.hal_error|audio.dma_error|audio.start_error)!=0U) { out->audio_errors=1U; }
+    /* DROP累计值保留显示；当前采集健康性不因历史丢块永久失效。
+       丢块后的测距撤值与重新握手由App的流连续性门控负责。 */
     out->audio_valid=audio.running && audio.session!=0U && audio.callback_count!=0U &&
         (uint32_t)(audio_now_ms-audio.last_callback_ms)<1000U && audio.error_count==0U &&
-        audio.hal_error==0U && audio.dma_error==0U && audio.dropped_blocks==0U;
+        audio.hal_error==0U && audio.dma_error==0U;
     SoundDetectorServiceSnapshot detector; SoundDetectorService_GetSnapshot(&detector);
     if (detector.configured) { out->candidates=detector.candidates; }
     MeasurementPresentationSnapshot presentation={0};

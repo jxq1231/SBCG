@@ -84,11 +84,13 @@ void ChirpService_GetSnapshot(ChirpServiceSnapshot*s){if(s)*s=(ChirpServiceSnaps
                 raw=wav.readframes(wav.getnframes())
             data=output/'standard_chirp.pcm';data.write_bytes(raw)
             for calls in ['64','5']:
-                run=subprocess.run([str(capture),str(data),calls],text=True,capture_output=True,timeout=60)
-                report=run.stdout+run.stderr
-                (output/f'capture-{option[1:]}-{calls}.txt').write_text(report,encoding='utf-8')
-                print(report,flush=True)
-                if run.returncode:return run.returncode
+                for mode in ['cold','warm']:
+                    args=[str(capture),str(data),calls]+(['warm'] if mode=='warm' else [])
+                    run=subprocess.run(args,text=True,capture_output=True,timeout=60)
+                    report=run.stdout+run.stderr
+                    (output/f'capture-{option[1:]}-{calls}-{mode}.txt').write_text(report,encoding='utf-8')
+                    print(report,flush=True)
+                    if run.returncode:return run.returncode
     diagnostics=subprocess.run([sys.executable,'-B',str(ROOT/'Tests/ChirpService/run_diagnostics_tests.py')],
                           cwd=ROOT,check=False).returncode
     if diagnostics:return diagnostics

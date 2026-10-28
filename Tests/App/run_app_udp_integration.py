@@ -1,77 +1,95 @@
-"""Two-process A/B app integration over real modules and lwip-boundary stubs.
+"""Real A/B processes: command barriers, packet faults, ACK and stream recovery.
 
-A and B run as separate host processes with real app_main wiring; UDP packets are
-looped back between them. Timeline: domain/session handshake, three chirps,
-A->B RST2 + B->A RAK2 confirmation, then source-age expiry on both screens.
+Only HAL/audio/PTP and LwIP I/O are replaced. JSON done records delimit each
+command; the reader thread only writes to Queue, and the main thread owns the
+packet history. No fixed sleeps are used as a completion condition.
 """
 from pathlib import Path
-import json,re,shutil,subprocess,sys,threading
+import json, queue, shutil, subprocess, sys, threading
 
 ROOT=Path(__file__).resolve().parents[2]
 OUT=ROOT/'Logs/App/UDPIntegration'
 EXE=OUT/'test_app_udp_integration.exe'
 
 class Board:
-    """One app process; packet/snapshot lines are consumed by a reader thread."""
+    """One real application process with one completed command at a time."""
     def __init__(self,role,start_ms,common_ns):
         self.role=role
-        self.packets=[]   # (tick_ms, ok, hex)
-        self.snapshots=[] # parsed snapshot dicts
-        self.failures=[]
+        self.messages=queue.Queue()
+        self.packets=[]
+        self.history=[]
         self.proc=subprocess.Popen([str(EXE),role,str(start_ms),str(common_ns)],
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
-            text=True,encoding='utf-8',errors='replace')
+            text=True,encoding='utf-8')
         self.reader=threading.Thread(target=self._read,daemon=True)
         self.reader.start()
+        self._done()
+
     def _read(self):
         for line in self.proc.stdout:
-            if '"type":"packet"' in line:
-                ok=0 if '"ok":0' in line else 1
-                tick=int(re.search(r'"tick_ms":(\d+)',line).group(1))
-                hexs=re.search(r'"hex":"([0-9a-f]*)"',line).group(1)
-                self.packets.append((tick,ok,hexs))
-            elif '"type":"snapshot"' in line:
-                self.snapshots.append(json.loads(line[line.index('{'):]))
-            elif 'FAIL' in line or 'Assertion' in line:
-                self.failures.append(line.strip())
+            if line.startswith('{'):
+                self.messages.put(json.loads(line))
+            else:
+                self.messages.put({'type':'error','line':line.rstrip()})
+        self.messages.put({'type':'eof'})
+
+    def _done(self):
+        snapshot=None
+        while True:
+            item=self.messages.get(timeout=10)
+            kind=item['type']
+            if kind=='done':
+                return snapshot
+            if kind=='packet':
+                self.packets.append(item)
+                self.history.append(item)
+            elif kind=='snapshot':
+                snapshot=item
+            elif kind in ('error','eof'):
+                raise AssertionError(f'{self.role}: child failed: {item}')
+
     def cmd(self,text):
         self.proc.stdin.write(text+'\n')
         self.proc.stdin.flush()
-    def stop(self):
-        try: self.proc.stdin.close()
-        except OSError: pass
-        try: self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired: self.proc.kill()
+        return self._done()
 
-def drain(a,b):
-    """Move each board's produced packets into the peer's RX queue."""
-    import time
-    # Reader threads parse stdout asynchronously; give them a moment so the
-    # packets produced by the previous STEP are visible before forwarding.
-    prev_a,prev_b=-1,-1
-    for _ in range(20):
-        time.sleep(0.01)
-        if len(a.packets)==prev_a and len(b.packets)==prev_b: break
-        prev_a,prev_b=len(a.packets),len(b.packets)
-    for _,_,hexs in a.packets: b.cmd('RX '+hexs)
-    for _,_,hexs in b.packets: a.cmd('RX '+hexs)
-    a.packets.clear(); b.packets.clear()
+    def stop(self):
+        self.proc.stdin.close()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
+        self.reader.join(timeout=5)
+        self.proc.stdout.close()
+        assert self.proc.returncode==0, (self.role,self.proc.returncode)
+
+def drain(a,b,drop_acks=False):
+    """Forward completed-command packets; failed sends never reach the peer."""
+    for source,destination in ((a,b),(b,a)):
+        pending,source.packets=source.packets,[]
+        for packet in pending:
+            if not packet['ok']:
+                continue
+            if drop_acks and packet['hex'].startswith('52414b32'):
+                continue
+            destination.cmd('RX '+packet['hex'])
 
 def snap(a,b,label):
-    a.cmd('SNAP'); b.cmd('SNAP')
-    import time
-    time.sleep(0.05)
-    sa=a.snapshots[-1] if a.snapshots else None
-    sb=b.snapshots[-1] if b.snapshots else None
-    print(f'[{label}] A state={sa["state"]} id={sa["id"]} rev={sa["rev"]} has={sa["has"]} '
-          f'mm={sa["mm"]} text="{sa["distance_text"]}" | B state={sb["state"]} id={sb["id"]} '
-          f'rev={sb["rev"]} has={sb["has"]} mm={sb["mm"]} text="{sb["distance_text"]}"')
+    sa=a.cmd('SNAP');sb=b.cmd('SNAP')
+    assert sa is not None and sb is not None
+    print(f'[{label}] A state={sa["state"]} id={sa["id"]} rev={sa["rev"]} '
+          f'has={sa["has"]} mm={sa["mm"]} | B state={sb["state"]} '
+          f'id={sb["id"]} rev={sb["rev"]} has={sb["has"]} mm={sb["mm"]}')
     return sa,sb
 
-def expect(cond,message,details=''):
-    if cond: print('PASS',message)
-    else: print('FAIL',message,details)
-    return cond
+def check(condition,message):
+    assert condition,message
+    print('PASS',message)
+
+def status_packets(board,after_ms=0):
+    return [p for p in board.history
+            if p['tick_ms']>=after_ms and p['hex'].startswith('52535432')]
 
 def main():
     gcc=shutil.which('gcc')
@@ -102,80 +120,109 @@ def main():
     build=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
     if build.returncode: print(build.stdout+build.stderr); sys.exit(build.returncode)
 
-    ok=True
-    a=Board('A',0,0); b=Board('B',0,0)
-    step_ms=50
-    chirps={2000:1,4000:2,6000:3}  # step start time -> sequence number
-    chirp_done=set()
-    delta_ns=900_000  # ~0.309 m one-way at 343.42 m/s
-    last_attempt_stable=None
-    t=0
-    while t<=7000:
-        clock_ns=t*1_000_000
-        seq=chirps.get(t,0)
-        # Chirp on A at T, on B T+delta; STEP injects the scalar TOA event.
-        a.cmd(f'STEP {t} {clock_ns} {seq} {clock_ns}')
-        b.cmd(f'STEP {t} {clock_ns} {seq} {clock_ns+delta_ns}')
-        drain(a,b)
-        if t in chirps: chirp_done.add(t)
-        t+=step_ms
-    import time; time.sleep(0.1)
-    sa,sb=snap(a,b,'after-3-chirps')
-    ok&=expect(sa and sb and sa['has']==1 and sb['has']==1,
-               'R05/A2b: both boards present a value after three chirps',f'{sa} {sb}')
-    ok&=expect(sa and sb and sa['id']==sb['id'] and sa['id']!=0,
-               'R02: A/B share one measurement id, monotonic counter',
-               f'A id={sa["id"] if sa else None} B id={sb["id"] if sb else None}')
-    ok&=expect(sa and sb and sa['mm']==sb['mm'] and abs((sb["mm"] or 0)-309)<15,
-               'A2b: B mirrors A distance within temperature conversion',
-               f'A mm={sa["mm"] if sa else None} B mm={sb["mm"] if sb else None}')
-    ok&=expect(sa and sb and sa['epoch']==sb['epoch'] and sa['epoch']!=0,
-               'R04: same authority epoch from RSC2 handshake')
-    ok&=expect(sb and sb['rx_bad']==0,
-               'R03: no 24-byte dispatch loss on B receive path',
-               f'rx_bad={sb["rx_bad"] if sb else None}')
 
-    # RAK2 stops RST2 retries: attempts must not grow without new revisions.
-    def attempts(board):
-        return board.snapshots[-1]['packet_attempts'] if board.snapshots else -1
-    before_a=attempts(a)
-    for _ in range(4):
-        a.cmd(f'STEP {t} {t*1_000_000} 0 0'); b.cmd(f'STEP {t} {t*1_000_000} 0 0')
-        drain(a,b); t+=step_ms
-    time.sleep(0.1)
-    after_a=attempts(a)
-    ok&=expect(after_a==before_a,'R09: ACK stops RST2 retransmission',
-               f'before={before_a} after={after_a}')
+    a=Board('A',0,0);b=Board('B',0,0)
+    delta_ns=900_000
+    def step(at,sequence=0,drop_acks=False):
+        a.cmd(f'STEP {at} {at*1_000_000} {sequence} {at*1_000_000}')
+        b.cmd(f'STEP {at} {at*1_000_000} {sequence} {at*1_000_000+delta_ns}')
+        drain(a,b,drop_acks)
+    try:
+        for t in range(0,7001,50):
+            step(t,{2000:1,4000:2,6000:3}.get(t,0))
+        sa,sb=snap(a,b,'three-chirps')
+        for field in ('state','id','rev','epoch','mm','direction','distance_text','quality_text'):
+            check(sa[field]==sb[field],f'A/B same {field}')
+        check(sa['has']==sb['has']==1 and sa['id']==3 and abs(sa['mm']-309)<2,
+              'three independent sounds produce measurement 3 on both boards')
+        saved_wire=status_packets(a)[-1]['hex']
+        start=len(status_packets(a))
+        for t in range(7050,8051,50):step(t)
+        sa,sb=snap(a,b,'ACK-confirmed')
+        check(len(status_packets(a))==start,'RAK2 stops RST2 attempts across 1000ms')
 
-    # Keep advancing with no new source past the 6.5 s display deadline.
-    while t<=13500:
-        a.cmd(f'STEP {t} {t*1_000_000} 0 0'); b.cmd(f'STEP {t} {t*1_000_000} 0 0')
-        drain(a,b); t+=step_ms
-    time.sleep(0.1)
-    sa,sb=snap(a,b,'after-6.5s-silence')
-    ok&=expect(sa and sb and sa['has']==0 and sb['has']==0,
-               'R01: both boards withdraw the value after the display deadline',
-               f'A has={sa["has"] if sa else None} B has={sb["has"] if sb else None}')
-    ok&=expect(sb and ('STALE' in sb['quality_text'] or 'FAULT' in sb['quality_text']),
-               'R01: B UI state text is STALE/FAULT',
-               f'text="{sb["quality_text"] if sb else None}"')
+        # All RAK2 for a new voice are lost; retransmissions must actually occur.
+        for t in range(8100,9551,50):step(t,4 if t==8100 else 0,True)
+        attempts=status_packets(a,8100)
+        check(len(attempts)>=3,'lost RAK2 causes repeated RST2 attempts')
+        check(len({p['hex'] for p in attempts})==1,
+              'ACK-loss retransmissions keep identical revision/source/deadlines')
+        check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(attempts,attempts[1:])),
+              'ACK-loss retry interval is at least 500ms')
+        for t in range(9600,10001,50):step(t)
+        sa,sb=snap(a,b,'ACK-restored')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id']==4,'ACK recovery retains source ID')
 
-    # Domain loss revokes without reviving old packets.
-    a.cmd('SYNC 0'); b.cmd('SYNC 0')
-    for _ in range(8):
-        a.cmd(f'STEP {t} {t*1_000_000} 0 0'); b.cmd(f'STEP {t} {t*1_000_000} 0 0')
-        drain(a,b); t+=step_ms
-    time.sleep(0.1)
-    sa,sb=snap(a,b,'after-domain-loss')
-    ok&=expect(sa and sb and sa['has']==0 and sb['has']==0,
-               'R01/R05: domain loss revokes presentation on both boards')
+        # A fails its sends: do not feed those datagrams to B.
+        a.cmd('SEND 0')
+        for t in range(10050,11251,50):step(t,5 if t==10050 else 0)
+        failed=status_packets(a,10050)
+        check(len(failed)>=3 and all(not p['ok'] for p in failed),'send failures are observed')
+        check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(failed,failed[1:])),
+              'failed sends preserve 500ms retry cadence')
+        sa,sb=snap(a,b,'failed-sends')
+        check(sa['id']==5 and sb['id']==4,'failed RST2 packets never arrive at B')
+        a.cmd('SEND 1')
+        for t in range(11300,12001,50):step(t)
+        sa,sb=snap(a,b,'send-recovered')
+        check(sa['id']==sb['id']==5 and sa['has']==sb['has']==1,'successful retry updates B')
 
-    for board in (a,b):
-        ok&=expect(not board.failures,f'{board.role}: no device-side assertion',
-                   ';'.join(board.failures[:3]))
-        board.stop()
-    print('RESULT', 'PASS' if ok else 'FAIL')
-    sys.exit(0 if ok else 1)
+        # A single cumulative gap must revoke once, then permit new good blocks.
+        a.cmd('PROCESS 0');a.cmd('DROP 1');step(12050)
+        sa,sb=snap(a,b,'gap-observed')
+        check(sa['has']==0,'new gap immediately revokes A old value')
+        before=sum(p['hex'].startswith('52534332') for p in a.history)
+        for t in range(12100,12551,50):step(t)
+        check(sum(p['hex'].startswith('52534332') for p in a.history)==before,
+              'fresh callbacks alone cannot restart RSC2 before a successful block')
+        a.cmd('PROCESS 1')
+        for t in range(12600,13501,50):step(t)
+        sa,sb=snap(a,b,'gap-no-new-sound')
+        check(sa['has']==sb['has']==0,'requalification alone cannot revive old distance')
+        for t in range(13550,18551,50):step(t,{14000:6,16000:7,18000:8}.get(t,0))
+        sa,sb=snap(a,b,'gap-recovered')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['id']>5,
+              'good blocks and new sounds recover without reset')
+        check(sa['audio_dropped']==1 and sa['audio_valid']==1,
+              'recovery preserves cumulative DROP=1 while audio is healthy')
+        a.cmd('DROP 2');step(18600)
+        sa,sb=snap(a,b,'second-gap')
+        check(sa['has']==0,'a second gap revokes again')
+        for t in range(18650,25551,50):step(t,{21000:9,23000:10,25000:11}.get(t,0))
+        sa,sb=snap(a,b,'second-recovery')
+        check(sa['has']==sb['has']==1 and sa['audio_dropped']==2,'second gap also recovers')
+
+        b.cmd('DROP 1');step(25600)
+        sa,sb=snap(a,b,'B-gap-observed')
+        check(sb['has']==0,'B gap immediately withdraws its live value')
+        for t in range(25650,32551,50):step(t,{28000:12,30000:13,32000:14}.get(t,0))
+        sa,sb=snap(a,b,'B-gap-recovered')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sb['audio_dropped']==1,
+              'B also recovers through handshake and new independent sounds')
+
+        for t in range(32600,38601,50):step(t)
+        sa,sb=snap(a,b,'silence-expired')
+        check(sa['has']==sb['has']==0 and sa['state']==sb['state']==5,
+              'both source deadlines expire to STALE')
+        check(sa['distance_text']==sb['distance_text']=='-- M','no-value UI never shows zero metres')
+        for t in range(38650,44551,50):step(t,{40000:15,42000:16,44000:17}.get(t,0))
+        sa,sb=snap(a,b,'live-before-domain-loss')
+        check(sa['has']==sb['has']==1,'domain-loss test begins with a live value')
+        a.cmd('SYNC 0');b.cmd('SYNC 0');step(44600)
+        sa,sb=snap(a,b,'domain-lost')
+        check(sa['has']==sb['has']==0 and sa['state']==sb['state']==6,
+              'domain loss withdraws a live value on A/B')
+        b.cmd('RX '+saved_wire);step(44650)
+        sa,sb=snap(a,b,'replayed-while-invalid')
+        check(sa['has']==sb['has']==0,'old RST2 cannot resurrect a value during domain loss')
+        a.cmd('SYNC 1');b.cmd('SYNC 1')
+        for t in range(44700,47001,50):step(t)
+        b.cmd('RX '+saved_wire);step(47050)
+        sa,sb=snap(a,b,'replayed-after-requalification')
+        check(sa['has']==sb['has']==0,'old authority packet rejected after domain recovery')
+    finally:
+        a.stop();b.stop()
+    print('RESULT PASS')
 
 if __name__=='__main__':
     main()

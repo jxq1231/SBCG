@@ -128,6 +128,8 @@ typedef struct {
     RangingExchangeState exchange;
     uint32_t local_audio_session,peer_audio_session;
     uint64_t peer_source_ns;
+    uint32_t observed_drops,recover_after_processed;
+    bool gap_pending;
 } RangingAppState;
 static RangingAppState ranging_app __attribute__((section(".ItcmState"),aligned(32)));
 #endif
@@ -385,13 +387,25 @@ static void RefreshRanging(uint32_t now_ms)
     EthernetMonitorSnapshot network;EthernetMonitor_GetSnapshot(now_ms,&network);
     BSP_AudioSnapshot audio;BSP_Audio_GetSnapshot(&audio);
     const uint32_t audio_now=BSP_Console_GetTickMs();
-    const bool stream_ok=audio.running && audio.session!=0U && audio.callback_count!=0U &&
-        (uint32_t)(audio_now-audio.last_callback_ms)<1000U && audio.error_count==0U &&
-        audio.hal_error==0U && audio.dma_error==0U && audio.start_error==0U && audio.dropped_blocks==0U;
-    uint64_t common_ns;uint32_t clock_epoch;
-    const bool clock_ok=ReadRangingClock(&common_ns,&clock_epoch);
     const bool local_changed=ranging_app.local_audio_session!=0U &&
         audio.session!=ranging_app.local_audio_session;
+    /* DROP是累计计数：变化时撤值，等变化之后一个完整End成功再允许重新握手。
+       保留计数供观测；会话改变时独立建立基线，不靠重启DMA清除历史。 */
+    if(local_changed || ranging_app.local_audio_session==0U ||
+       audio.dropped_blocks!=ranging_app.observed_drops)
+    {
+        ranging_app.observed_drops=audio.dropped_blocks;
+        ranging_app.recover_after_processed=audio.processed_blocks;
+        ranging_app.gap_pending=audio.dropped_blocks!=0U;
+    }
+    else if(ranging_app.gap_pending &&
+            audio.processed_blocks!=ranging_app.recover_after_processed)
+    { ranging_app.gap_pending=false; }
+    const bool stream_ok=audio.running && audio.session!=0U && audio.callback_count!=0U &&
+        (uint32_t)(audio_now-audio.last_callback_ms)<1000U && audio.error_count==0U &&
+        audio.hal_error==0U && audio.dma_error==0U && audio.start_error==0U && !ranging_app.gap_pending;
+    uint64_t common_ns;uint32_t clock_epoch;
+    const bool clock_ok=ReadRangingClock(&common_ns,&clock_epoch);
     ranging_app.local_audio_session=audio.session;
     const bool qualified=domain.valid && network.valid && network.link_up && stream_ok && !local_changed;
     RangingSession_Update(&ranging_app.session,qualified,domain.id,clock_epoch,

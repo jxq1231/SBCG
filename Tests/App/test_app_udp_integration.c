@@ -39,7 +39,8 @@ static ip_addr_t peer_ip;
 static BoardIdentityProfile identity;
 static uint64_t common_ns;
 static uint32_t audio_session=1U,clock_epoch=3U;
-static bool clock_ok=true,sync_faulted,send_ok=true,event_pending;
+static uint32_t audio_dropped, audio_processed;
+static bool clock_ok=true,sync_faulted,send_ok=true,event_pending,process_blocks=true;
 static SoundEventTimeEvent next_event;
 static uint32_t event_takes,event_delivered,packet_attempts;
 static TemperatureSnapshot host_temperature={false,true,1U,0U,20000,343420U};
@@ -89,9 +90,10 @@ bool SoundEventTime_TakeEvent(SoundEventTimeEvent *out)
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){if(out)memset(out,0,sizeof *out);return false;}
 /** @brief 不访问PCM。 @param now 毫秒。 @param observation 只读观测。 @return 无返回值。 */
 void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation *observation){(void)now;(void)observation;}
-/** @brief 提供当前健康SAI快照。 @param out 可空输出。 @return 无返回值。 */
+/** @brief 提供受控SAI快照；DROP注入累计缺口，PROCESS决定后续STEP是否完成新块。 @param out 可空输出。 @return 无返回值。 */
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out)
-{if(out)*out=(BSP_AudioSnapshot){.running=true,.session=audio_session,.callback_count=1U,.last_callback_ms=tick_ms};}
+{if(out)*out=(BSP_AudioSnapshot){.running=true,.session=audio_session,.callback_count=1U,
+    .last_callback_ms=tick_ms,.dropped_blocks=audio_dropped,.processed_blocks=audio_processed};}
 /** @brief 返回检测计数元数据。 @param out 可空输出。 @return 无返回值。 */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 {if(out)*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=event_delivered};}
@@ -146,12 +148,12 @@ static void Snapshot(void)
  ",\"display_deadline_ns\":%" PRIu64 ",\"temp_version\":%" PRIu32
  ",\"distance_text\":\"%s\",\"quality_text\":\"%s\",\"rx_ok\":%" PRIu32
  ",\"rx_bad\":%" PRIu32 ",\"packet_attempts\":%" PRIu32 ",\"event_takes\":%" PRIu32
- ",\"audio_allowed\":%u,\"anchor_allowed\":%u}\n",
+ ",\"audio_allowed\":%u,\"anchor_allowed\":%u,\"audio_valid\":%u,\"audio_dropped\":%" PRIu32 "}\n",
  identity.role==BOARD_ROLE_A?'A':'B',tick_ms,common_ns,d.valid?1U:0U,d.id,(unsigned)p.state,
  p.measurement_id,p.state_revision,p.authority_clock_epoch,p.has_value?1U:0U,p.fresh?1U:0U,
  p.formal?1U:0U,p.provisional?1U:0U,p.distance_mm,(unsigned)p.direction,p.source_common_ns,
  p.fresh_deadline_ns,p.display_deadline_ns,p.temperature_version,text.distance,text.quality,
- rx_ok,rx_bad,packet_attempts,event_takes,audio_allowed,anchor_allowed);
+ rx_ok,rx_bad,packet_attempts,event_takes,audio_allowed,anchor_allowed,s.audio_valid?1U:0U,s.audio_dropped);
 }
 /** @brief 排队十六进制网络输入。 @param hex 完整十六进制串。 @return 无返回值。 */
 static void Queue(const char *hex)
@@ -177,7 +179,7 @@ int main(int argc,char **argv)
    seq=(uint32_t)strtoul(cursor,&end,10);cursor=end;
    event_time=(uint64_t)strtoull(cursor,&end,10);
    if(end!=cursor){
-   tick_ms=at;common_ns=clock;if(seq!=0U){assert(!event_pending);next_event=(SoundEventTimeEvent){.sequence=seq,.session=audio_session,
+   tick_ms=at;common_ns=clock;if(process_blocks)++audio_processed;if(seq!=0U){assert(!event_pending);next_event=(SoundEventTimeEvent){.sequence=seq,.session=audio_session,
     .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=EVENT_CLASS_CHIRP,.quality=98U};event_pending=true;}App_Process();
    }
   }else if(strncmp(command,"RX ",3U)==0)Queue(command+3);
@@ -188,6 +190,8 @@ int main(int argc,char **argv)
   else if(sscanf(command,"LOW %u",&value)==1)temperature_low=value!=0U;
   else if(sscanf(command,"SESSION %u",&value)==1)audio_session=value;
   else if(sscanf(command,"SEND %u",&value)==1)send_ok=value!=0U;
+  else if(sscanf(command,"DROP %u",&value)==1)audio_dropped=value;
+  else if(sscanf(command,"PROCESS %u",&value)==1)process_blocks=value!=0U;
   else if(strncmp(command,"REINIT",6U)==0)App_Init();
   else if(sscanf(command,"TEMP %u",&value)==1){host_temperature.temperature_milli_c=(int32_t)value;host_temperature.sound_speed_mm_s=331300U+(606U*value+500U)/1000U;++host_temperature.version;}
   else if(strncmp(command,"QUIT",4U)==0)break;
