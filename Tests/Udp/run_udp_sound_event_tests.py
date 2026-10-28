@@ -24,6 +24,7 @@ cmd += [str(ROOT/'Tests/Udp/test_udp_sound_event.c'),
         str(ROOT/'App/Measure/ranging_tracker.c'),
         str(ROOT/'App/Temperature/sound_speed.c'),
         str(ROOT/'App/Measure/sound_pair.c'),
+        str(ROOT/'App/Measure/waveform_tdoa.c'),
         '-o',str(out/'test_udp_sound_event.exe')]
 built=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
 if built.returncode:

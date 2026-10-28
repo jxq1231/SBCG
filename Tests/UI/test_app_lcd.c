@@ -1,6 +1,7 @@
 /** @file test_app_sdram.c @brief 真实App入口的SDRAM启动顺序/前台门控/日志节流测试。 */
 #define main unused_app_main
 #include "../App/test_app_main.c"
+#include "Detector/chirp_service.h"
 #undef main
 #include "BSP/bsp_sdram.h"
 #include "Detector/sound_event_time.h"
@@ -35,6 +36,7 @@ bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *profile,
 void UDPSoundEvent_Process(uint32_t now){(void)now;}
 /** @brief App测试桩：不发送UDP事件。 */
 bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice){(void)slice;}
 /** @brief App测试桩：清空权威测量缓存。 */
 void MeasurementResult_Init(uint32_t now){(void)now;}
 /** @brief App测试桩：不生成权威测量。 */

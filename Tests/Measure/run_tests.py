@@ -12,6 +12,7 @@ result=0
 for option in ('-O0','-O2'):
     for name,test,sources in (
         ('test_sound_pair','Tests/Measure/test_sound_pair.c',['App/Measure/sound_pair.c']),
+        ('test_waveform_tdoa','Tests/Measure/test_waveform_tdoa.c',['App/Measure/waveform_tdoa.c']),
         ('test_sound_event_wire','Tests/Measure/test_sound_event_wire.c',
          ['App/Measure/sound_pair.c','App/Network/sound_event_wire.c']),
         ('test_measurement_wire','Tests/Measure/test_measurement_wire.c',

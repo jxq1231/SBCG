@@ -232,6 +232,16 @@ bool SoundPair_Init(SoundPairManager *manager, const SoundPairConfig *config)
     }
     return true;
 }
+/**
+ * @brief 安装或清除波形时差精化回调；不改变队列或已接受距离。
+ * @param manager 非NULL管理器。
+ * @param refiner 可为NULL；安装后配对优先使用其输出。
+ * @return 无返回值，仅前台。
+ */
+void SoundPair_SetTdoaRefiner(SoundPairManager *manager, SoundPairTdoaRefiner refiner)
+{
+    if (manager != NULL) { manager->tdoa_refiner = refiner; }
+}
 /** @brief 提交事件副本；重复/非法/队列满返回false并计数，不覆盖已有项。 */
 bool SoundPair_Submit(SoundPairManager *manager, const SoundEventRecord *event,
                       uint32_t now_ms)
@@ -323,13 +333,34 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
         SoundEventRecord selected_b;
         uint8_t selected_index = 0U;
         bool held = false;
-        SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
-                       &manager->events[1][pair_b], &selected_b, &selected_index,
-                       &held);
+        bool refined = false;
+        if (manager->tdoa_refiner != NULL)
+        {
+            int64_t delta_ns = 0;
+            if (manager->tdoa_refiner(manager->events[0][pair_a].sequence,
+                                      manager->events[1][pair_b].sequence, &delta_ns))
+            {
+                /* 两板实际波形对齐结果优先；仍走同一套身份/质量/域/量程校验。 */
+                const int64_t a_time = (int64_t)manager->events[0][pair_a].time_ns;
+                if (delta_ns >= -a_time)
+                {
+                    selected_b = manager->events[1][pair_b];
+                    selected_b.time_ns = (uint64_t)(a_time + delta_ns);
+                    refined = true;
+                }
+            }
+        }
+        if (!refined)
+        {
+            SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
+                           &manager->events[1][pair_b], &selected_b, &selected_index,
+                           &held);
+        }
         (void)SoundPair_Compute(&manager->config, &manager->events[0][pair_a],
                                 &selected_b, &result);
         result.b_toa_selected = selected_index;
         result.b_toa_held = held;
+        result.waveform_refined = refined;
         if (held && result.valid)
         {
             /* 确认期间保持旧齿：用接受距离重建输出，不显示未确认的新齿。 */

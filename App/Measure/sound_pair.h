@@ -72,6 +72,7 @@ typedef struct
     uint32_t session;             /**< 板本地采集会话，仅诊断。 */
     uint32_t sequence;             /**< 板本地事件序号。 */
     uint64_t time_ns;              /**< 本地PTP模型时间，纳秒。 */
+    uint64_t frame;                /**< time_ns对应的本地模型进度帧；0表示旧协议未携带。 */
     uint8_t toa_candidate_count;   /**< 0..4，B侧TOA早/晚候选数；0表示旧单值。 */
     int32_t toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES];
                                    /**< 相对time_ns的候选偏移，1/65536帧。 */
@@ -110,6 +111,7 @@ typedef struct
     uint8_t b_toa_candidate_count; /**< 诊断：B事件携带的TOA候选数。 */
     uint8_t b_toa_selected;        /**< 诊断：选中的候选序号，0表示未选。 */
     bool b_toa_held;               /**< true表示本次输出保持旧接受齿。 */
+    bool waveform_refined;         /**< true表示时差已由两板波形互相关精化。 */
     int32_t b_toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES]; /**< 诊断副本。 */
 } SoundPairResult;
 
@@ -119,6 +121,17 @@ typedef struct
     uint32_t accepted, duplicate, expired, ambiguous, paired, rejected, result_dropped;
     uint8_t pending_a, pending_b, pending_results;
 } SoundPairSnapshot;
+
+/**
+ * @brief 外部波形时差精化回调。
+ * @param a_sequence A板事件序号。
+ * @param b_sequence B板事件序号。
+ * @param delta_ns 非NULL输出；成功写入精化后的b-a时差，纳秒。
+ * @return true表示已用两板实际波形对齐得到时差，false表示不可用并回退候选齿选择。
+ * @note 回调由上层安装，纯前台执行；实现不得重入配对或修改管理器。
+ */
+typedef bool (*SoundPairTdoaRefiner)(uint32_t a_sequence, uint32_t b_sequence,
+                                    int64_t *delta_ns);
 
 /** @brief 前台单消费者管理器；固定数组，无动态内存。 */
 typedef struct
@@ -133,11 +146,20 @@ typedef struct
     uint32_t pending_distance_mm;
     uint8_t accepted_valid;
     uint8_t pending_count;
+    SoundPairTdoaRefiner tdoa_refiner;
     SoundPairSnapshot stats;
 } SoundPairManager;
 
 /** @brief 初始化管理器并复制配置；参数非法返回false并清空。 */
 bool SoundPair_Init(SoundPairManager *manager, const SoundPairConfig *config);
+/**
+ * @brief 安装或清除波形时差精化回调。
+ * @param manager 非NULL管理器。
+ * @param refiner 可为NULL；安装后配对优先使用其输出，不可用时回退候选齿选择。
+ * @return 无返回值；不改变已接受距离或队列。
+ * @note 管理器重新初始化会清除回调，调用方须在初始化后再次安装。
+ */
+void SoundPair_SetTdoaRefiner(SoundPairManager *manager, SoundPairTdoaRefiner refiner);
 
 /** @brief 提交一个事件副本；重复/非法/队列满返回false并计数，不覆盖已有项。 */
 bool SoundPair_Submit(SoundPairManager *manager, const SoundEventRecord *event,

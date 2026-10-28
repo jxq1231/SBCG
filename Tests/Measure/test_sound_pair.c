@@ -14,6 +14,11 @@ static SoundPairConfig Config(void)
 {
     const SoundPairConfig c={40000000U,10000U,343000U,50U,50U,0U,0U,0U};return c;
 }
+static int64_t refiner_delta;static uint32_t refiner_calls;
+static bool Refiner(uint32_t a_seq,uint32_t b_seq,int64_t *delta)
+{(void)a_seq;(void)b_seq;++refiner_calls;*delta=refiner_delta;return true;}
+static bool RefinerFail(uint32_t a_seq,uint32_t b_seq,int64_t *delta)
+{(void)a_seq;(void)b_seq;(void)delta;return false;}
 /** @brief 距离差mm转1/65536帧时间偏移，测试用343m/s。 */
 static int32_t OffsetQ16(int32_t delta_mm)
 {
@@ -164,6 +169,27 @@ int main(void)
             assert(SoundPair_Take(&tm,&result) && result.distance_mm==400U && !result.b_toa_held);
         }
         puts("tooth selection: B candidate set selected 320 mm and abnormal teeth cannot drag the reference");
+    }
+    /* 波形精化：回调用互相关时差覆盖原始单值和候选齿，失败时完全回退旧路径。 */
+    {
+        SoundPairManager wm;
+        assert(SoundPair_Init(&wm,&config));
+        refiner_calls=0U;refiner_delta=950000; /* 约326mm，与原始514mm无关 */
+        SoundPair_SetTdoaRefiner(&wm,Refiner);
+        SoundEventRecord wa=Event(SOUND_SIDE_A,40U,2000000000U);
+        SoundEventRecord wb=Event(SOUND_SIDE_B,40U,2001500000U);
+        assert(SoundPair_Submit(&wm,&wa,0U));assert(SoundPair_Submit(&wm,&wb,0U));
+        SoundPair_Process(&wm,0U);
+        assert(SoundPair_Take(&wm,&result));
+        assert(result.valid && result.waveform_refined && result.distance_mm==326U);
+        assert(result.b_toa_selected==0U && refiner_calls==1U);
+        assert(SoundPair_Init(&wm,&config));
+        SoundPair_SetTdoaRefiner(&wm,RefinerFail);
+        assert(SoundPair_Submit(&wm,&wa,0U));assert(SoundPair_Submit(&wm,&wb,0U));
+        SoundPair_Process(&wm,0U);
+        assert(SoundPair_Take(&wm,&result));
+        assert(result.valid && !result.waveform_refined && result.distance_mm==515U);
+        puts("waveform refine: external TDOA overrides raw and falls back when unavailable");
     }
     puts("PASS sound pair: distance/direction, identity gates, out-of-order, duplicate, ambiguity, timeout, tooth selection");
     return 0;

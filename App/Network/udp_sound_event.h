@@ -9,6 +9,7 @@
 
 #include "Measure/sound_pair.h"
 #include "Measure/measurement_result.h"
+#include "Detector/chirp_service.h"
 #include "Network/domain_wire.h"
 #include "Network/measurement_ack.h"
 #include "Network/temperature_wire.h"
@@ -19,6 +20,13 @@
 #include <stdint.h>
 
 typedef void (*UDPSoundEvent_Log)(const char *line, int length);
+/**
+ * @brief   保存一次捕获切片中用于跨板互相关的波形储备。
+ * @param   slice 非NULL只读捕获切片，仅本调用借用；模块内部复制固定长度PCM。
+ * @return  无返回值；未配置或切片越界时跳过，事件发布自动回退候选齿选择。
+ * @note    由应用在ChirpService捕获回调中调用；每事件覆盖上一份储备，不保存指针。
+ */
+void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice);
 /** @brief 配对结果回调；仅前台Process调用，不保留指针。 */
 typedef void (*UDPSoundEvent_ResultSink)(const SoundPairResult *result);
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */

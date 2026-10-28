@@ -343,7 +343,13 @@ static void ReportReset(void)
  * @return 无返回值。
  */
 static void ChirpCaptureToUdp(const ChirpCaptureSlice *slice)
-{(void)UDPChirpCapture_Send(slice);}
+{
+    /* 同一捕获切片既下传PC诊断，也留一份波形储备供两板互相关精化时差。 */
+#ifdef SBCG_USE_SOUND_TIME
+    UDPSoundEvent_OnCapture(slice);
+#endif
+    (void)UDPChirpCapture_Send(slice);
+}
 #endif
 
 /**
@@ -1190,6 +1196,7 @@ void App_Process(void)
             event.session = notice.session;
             event.sequence = notice.sequence;
             event.time_ns = notice.time_ns;
+            event.frame = notice.frame;
             SoundDetectorServiceToaCandidates candidates;
             if (SoundDetectorService_GetToaCandidates(notice.sequence, &candidates))
             {

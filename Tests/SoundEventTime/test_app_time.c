@@ -1,6 +1,7 @@
 /** @file test_app_time.c @brief 真实App入口单次消费/双路分发/DHT门控及快照后刷新时间的主机验证。 */
 #define main unused_app_main
 #include "../App/test_app_main.c"
+#include "Detector/chirp_service.h"
 #undef main
 #include "Detector/sound_event_time.h"
 #include "Detector/sound_detector_service.h"
@@ -50,6 +51,7 @@ void UDPSoundEvent_Process(uint32_t now){(void)now;}
 void UDPSoundEvent_SetTimeDomain(uint32_t id){(void)id;}
 /** @brief App测试桩：不发送事件UDP。 */
 bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice){(void)slice;}
 /** @brief App测试桩：清空权威测量缓存。 */
 void MeasurementResult_Init(uint32_t now){(void)now;}
 /** @brief App测试桩：不生成权威测量。 */
