@@ -2,6 +2,8 @@
  * @file sound_event_time.h
  * @brief 已验证候选的传输完成坐标到本地PTP模型时间查询接口。
  * @details 固定4锚点/4候选；FIRST+1为传输组完成坐标，非声学到达时刻。
+ *          相位连续的成功调频保留队列与锚点，仅按已知频率差加宽跨界模型边界；相位跳变、
+ *          流边界与未知时钟变化仍撤销。
  * @note 串行前台；复制元数据，不访问PCM/HAL，不配置外设，LOCAL=1/SYNC=0。
  */
 #ifndef SBCG_SOUND_EVENT_TIME_H
@@ -80,10 +82,20 @@ bool SoundEventTime_SubmitToa(uint32_t now_ms,uint32_t sequence,
 void SoundEventTime_Observe(uint32_t now_ms,const AudioTimeAnchorObservation *observation);
 /**
  * @brief 在新时间域或流边界撤销旧配对。
- * @param reason CLOCK为任何校时/调频，STREAM为确认历史/块连续性失效。
+ * @param reason CLOCK为相位动作、失败调频或未知时钟变化，STREAM为确认历史/块连续性失效。
  * @return 无返回值；仅将排队结果标拒绝并清锚点，不打印、不重启外设。
+ * @note 成功且相位连续的调频不调用本接口，改用SoundEventTime_NotifyFrequencyChange。
  */
 void SoundEventTime_Invalidate(SoundTimeReset reason);
+/**
+ * @brief 记录一次成功且相位连续的绝对频率修订，不撤销声音队列与锚点。
+ * @param delta_ppb 新绝对频率减旧绝对频率，单位ppb，可正可负；调用方在写硬件前按已知修订量通报。
+ * @return 无返回值，不打印、不清队列、不改锚点。
+ * @note 仅前台；PTP时间连续但速率改变，跨修订锚点区间的线性插值不再精确，后续查询按
+ *       累计|Δf|×区间跨度保守加宽模型边界；不改变中点估计，也不表示同步精度通过。
+ *       若该次写入随后失败或回读不一致，调用方仍须用SoundEventTime_Invalidate撤销。
+ */
+void SoundEventTime_NotifyFrequencyChange(int32_t delta_ppb);
 /**
  * @brief 按新鲜流快照与已有锚点查询队首；250ms至多一结果，1000ms至多一状态。
  * @param now_ms 快照之后刷新取得的HAL毫秒；候选等待2500ms超时。

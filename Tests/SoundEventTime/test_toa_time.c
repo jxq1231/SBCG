@@ -39,6 +39,19 @@ int main(void)
     assert(Has("FRAME=72000,Q16=16384,STATUS=OK"));
     assert(Has("EST_NS=1499994792,LO_NS=1499984375,HI_NS=1500005209"));
 
+    /* Successful continuous frequency revision keeps the queue and event copies; only
+       anchor pairs spanning the revision get the conservative widened bounds. */
+    Init();Observe(1,1000,48000,1);p=Position(71999U,0U);
+    assert(SoundEventTime_SubmitToa(1250,1,&c,&p));
+    SoundEventTime_NotifyFrequencyChange(1000);
+    Observe(2,2000,96000,2);Process(2000);
+    assert(Has("$SOUND_TOA_TIME,SEQ=1,SESSION=1,FRAME=72000,Q16=0,STATUS=OK"));
+    assert(Has("EST_NS=1499989583,LO_NS=1499978166,HI_NS=1500001000"));
+    SoundEventTimeEvent kept;assert(SoundEventTime_TakeEvent(&kept) && kept.sequence==1U);
+    Init();Pair();p=Position(71999U,0U);assert(SoundEventTime_SubmitToa(2000,1,&c,&p));
+    Process(2250);assert(SoundEventTime_TakeEvent(&event));
+    SoundEventTime_NotifyFrequencyChange(-250);assert(!SoundEventTime_TakeEvent(&event));
+
     /* Missing TOA is explicit: no model/anchors, and no FIRST+1 fallback in the TOA line. */
     Init();Pair();p=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U,0U,{0,0,0,0}};
     assert(SoundEventTime_SubmitToa(2000,1,&c,&p));Process(2250);

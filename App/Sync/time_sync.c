@@ -1,8 +1,10 @@
 /**
  * @file        time_sync.c
  * @brief       协调固定A参考/B跟随的硬件四时刻交换与B时钟校正。
- * @details     B端先检查250ms结果时效及100ms交换历时，再交给纯C伺服；每次实际硬件动作之前清理所有旧时域
- *              配对、锚点及模型，随后立即向伺服提交有界BSP结果。A只推进协议，不运行伺服或写时钟。
+ * @details     B端先检查250ms结果时效及100ms交换历时，再交给纯C伺服。相位动作在写时钟前撤销旧时域
+ *              配对、锚点及模型；成功且相位连续的调频保留声音队列与采锚节拍，仅按已知频率差扩大
+ *              跨界时间误差界；调频失败或未知时钟变化仍撤销。随后立即向伺服提交有界BSP结果。
+ *              A只推进协议，不运行伺服或写时钟。
  * @note        仅NO_SYS串行前台，放行信号为false时整次返回。旧服务须先安装，新服务须先卸载；SYNC固定为0，
  *              内部锁定仅是闭环观测状态，不代表独立精度验收。无新的IRQ/DMA/缓存配置。
  */
@@ -141,7 +143,8 @@ static void Fault(uint32_t now_ms)
  * @brief   清除所有可能跨时间或速率边界的前台消费者记录。
  * @param   now_ms 当前HAL毫秒计数，供音频重新等待一秒。
  * @return  true表示旧UDP回调不活动且所有消费者均已通知；false时未继续清理其它消费者。
- * @note    必须在任何硬件命令之前完成，不调用ClockServo_Invalidate，避免取消待提交动作。
+ * @note    相位动作、流/会话边界与未知时钟变化使用本全量撤销；必须在任何硬件命令之前完成，
+ *          不调用ClockServo_Invalidate，避免取消待提交动作。
  */
 static bool InvalidateConsumers(uint32_t now_ms)
 {
@@ -152,6 +155,28 @@ static bool InvalidateConsumers(uint32_t now_ms)
     if (!UDPTimeExchange_NotifyClockChange()) { return false; }
     PtpClock_NotifyClockChange();
     AudioTimeAnchor_NotifyClockChange(now_ms);
+    AudioTimeMapMonitor_NotifyClockChange();
+    SyncObservation_NotifyClockChange();
+    PtpBoardSync_NotifyClockChange(BSP_PTP_GetEpoch());
+    return true;
+}
+
+/**
+ * @brief   为一次成功的相位连续调频保留声音模型与采锚节拍，只通报速率修订。
+ * @param   delta_ppb 本次绝对频率修订量，单位ppb，可正可负。
+ * @return  true表示旧UDP回调不活动且通知完成；false时未改动声音队列且不得继续写时钟。
+ * @note    仅B前台；PTP时间连续，故不撤销SoundEventTime队列/锚点、也不重置AudioTimeAnchor的
+ *          采锚节拍，改由声音模型按|Δf|加宽跨界误差界；其余诊断消费者仍按原约定清历史。
+ */
+static bool NotifyContinuousFrequencyChange(int32_t delta_ppb)
+{
+    if (!UDPTimeExchange_NotifyClockChange()) { return false; }
+    PtpClock_NotifyClockChange();
+#ifdef SBCG_USE_SOUND_TIME
+    SoundEventTime_NotifyFrequencyChange(delta_ppb);
+#else
+    (void)delta_ppb;
+#endif
     AudioTimeMapMonitor_NotifyClockChange();
     SyncObservation_NotifyClockChange();
     PtpBoardSync_NotifyClockChange(BSP_PTP_GetEpoch());
@@ -174,16 +199,31 @@ static void PublishClockGeneration(void)
  * @param   now_ms 与本次Observe相同的前台毫秒值。
  * @param   action 非NULL，必须是核心刚生成且尚未提交的原样动作。
  * @return  无返回值；失败使核心FAULT，不重试硬件。
- * @note    正phase推进B，正frequency加快B；仅实际BSP_OK允许成功提交。
+ * @note    正phase推进B，正frequency加快B；仅实际BSP_OK允许成功提交。相位动作始终先撤销模型；
+ *          调频先保留声音模型并按频率差通报，写入失败或回读不一致时再撤销，避免调频盲窗丢声音。
  */
 static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
 {
     BSP_PtpStatus status=BSP_PTP_TxClean();
-    bool issued=false;
+    bool issued=false,frequency_model_retained=false;
 #ifdef SBCG_USE_PPS
     bool frequency_prepared=false;
 #endif
-    if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
+    if (status==BSP_PTP_OK)
+    {
+        if (action->kind==CLOCK_SERVO_STEP)
+        {
+            if (!InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
+        }
+        else if (action->kind==CLOCK_SERVO_FREQUENCY)
+        {
+            /* 旧绝对频率仍记录在伺服中；差值为本次实际速率修订量。 */
+            const int32_t delta_ppb=action->frequency_ppb-servo.frequency_ppb;
+            if (!NotifyContinuousFrequencyChange(delta_ppb)) { status=BSP_PTP_NOT_READY; }
+            else { frequency_model_retained=true; }
+        }
+        else { status=BSP_PTP_BAD_CONFIG; }
+    }
     if (status==BSP_PTP_OK)
     {
         if (action->kind==CLOCK_SERVO_STEP)
@@ -194,7 +234,7 @@ static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
 #endif
             { issued=true; status=BSP_PTP_Step(action->phase_ns); }
         }
-        else if (action->kind==CLOCK_SERVO_FREQUENCY)
+        else
         {
 #ifdef SBCG_USE_PPS
             frequency_prepared=PpsService_BeforeFrequency(now_ms,servo.frequency_ppb,action->frequency_ppb);
@@ -203,16 +243,25 @@ static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
 #endif
             { issued=true; status=BSP_PTP_SetFrequencyPpb(action->frequency_ppb); }
         }
-        else { status=BSP_PTP_BAD_CONFIG; }
     }
     ClockServo_Commit(&servo,now_ms,action,status==BSP_PTP_OK);
 #ifdef SBCG_USE_PPS
     if (frequency_prepared) { PpsService_AfterFrequency(now_ms,status==BSP_PTP_OK); }
     if (status!=BSP_PTP_OK) { (void)PpsService_Invalidate(now_ms); }
 #endif
-    if (status!=BSP_PTP_OK) { faulted=true; Increment(&errors); }
+    if (status!=BSP_PTP_OK)
+    {
+        /* 调频失败或实际未执行：硬件速率状态不确定，已保留的旧模型必须撤销。 */
+        if (frequency_model_retained) { (void)InvalidateConsumers(now_ms); }
+        faulted=true; Increment(&errors);
+    }
     if (issued) { PublishClockGeneration(); }
-    if (BSP_PTP_GetFrequencyPpb()!=servo.frequency_ppb) { Fault(now_ms); }
+    if (BSP_PTP_GetFrequencyPpb()!=servo.frequency_ppb)
+    {
+        /* 回读与提交不一致属于未知时钟变化，保留中的声音模型同样撤销。 */
+        if (frequency_model_retained && status==BSP_PTP_OK) { (void)InvalidateConsumers(now_ms); }
+        Fault(now_ms);
+    }
     char phase[22]; SignedDecimal(action->phase_ns,phase);
     Emit(snprintf(line,sizeof line,
         "$SYNC_ADJUST,KIND=%s,PHASE_NS=%s,FREQ_PPB=%" PRId32 ",STATUS=%u,EPOCH=%" PRIu32

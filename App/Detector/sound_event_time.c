@@ -2,7 +2,8 @@
  * @file sound_event_time.c
  * @brief 用已完成传输组坐标或固定窗口TOA查询本地PTP模型时间。
  * @details 固定队列等右锚；旧接口保留FIRST+1整数语义，新接口使用Q16窗口TOA并输出独立记录。
- *          任何时域/流边界撤销旧配对，失败省略所有模型时间。
+ *          相位动作、流边界与未知时钟变化撤销旧配对；成功且相位连续的调频保留队列与锚点，
+ *          仅按累计已知|Δf|加宽跨修订区间的模型边界。失败省略所有模型时间。
  * @note 仅串行前台，无PCM/HAL/动态分配；所有输出LOCAL=1/SYNC=0，不代表物理声学精度。
  */
 #include "sound_event_time.h"
@@ -25,6 +26,9 @@ typedef struct
     const char *failure;
 } Pending;
 static AudioTimeAnchorObservation anchors[SOUND_TIME_CAPACITY];
+/* 与anchors一一对应的累计|Δf|快照，单位ppb；跨界锚点对据此加宽误差界。 */
+static uint64_t anchor_rate_abs_cum[SOUND_TIME_CAPACITY];
+static uint64_t rate_abs_cum_ppb;
 static Pending pending[SOUND_TIME_CAPACITY];
 static uint8_t anchor_count, count;
 static bool have_anchor_sequence, have_event_sequence, have_stream;
@@ -77,12 +81,14 @@ void SoundEventTime_Init(void (*log)(const char *, int))
 {
     logger = log;
     anchor_count = count = 0U;
+    rate_abs_cum_ppb = 0U;
     have_anchor_sequence = have_event_sequence = have_stream = false;
     last_anchor_sequence = last_event_sequence = last_result_ms = last_state_ms = 0U;
     last_dropped = stream_session = 0U;
     stats = (SoundEventTimeSnapshot){0};
     toa_event_count = 0U;
     memset(anchors, 0, sizeof anchors);
+    memset(anchor_rate_abs_cum, 0, sizeof anchor_rate_abs_cum);
     memset(pending, 0, sizeof pending);
     memset(toa_events, 0, sizeof toa_events);
 }
@@ -92,6 +98,19 @@ void SoundEventTime_Invalidate(SoundTimeReset reason)
     toa_event_count = 0U;
     memset(toa_events, 0, sizeof toa_events);
     Invalidate(reason == SOUND_TIME_CLOCK ? "CLOCK" : "STREAM");
+}
+/**
+ * @brief 记录一次成功且相位连续的绝对频率修订；只累计|Δf|，不撤销队列或锚点。
+ * @param delta_ppb 新绝对频率减旧绝对频率，单位ppb，可正可负。
+ * @return 无返回值，不打印、不清队列、不改锚点、不覆盖累计基数。
+ * @note 仅前台；累计值随新锚点快照，跨界锚点对按差值加宽边界。饱和风险由调用方可控的
+ *       ±CLOCK_SERVO_MAX_FREQUENCY_PPB单次范围与有限运行时间约束，此处不做回绕处理。
+ *       调用方随后确认写入失败时必须再调用SoundEventTime_Invalidate撤销旧模型。
+ */
+void SoundEventTime_NotifyFrequencyChange(int32_t delta_ppb)
+{
+    if (delta_ppb < 0) { rate_abs_cum_ppb += (uint64_t)(-(delta_ppb + 1)) + 1U; }
+    else { rate_abs_cum_ppb += (uint64_t)delta_ppb; }
 }
 /** @brief 校验公共候选字段和序号；不访问PCM，成功返回true。 */
 static bool CandidateValid(const SoundCandidate *candidate, uint32_t sequence,
@@ -152,6 +171,36 @@ static uint64_t Time(const AudioTimeMapAnchor *a)
 {
     return (uint64_t)a->sec * UINT64_C(1000000000) + a->nsec;
 }
+/**
+ * @brief   把跨频率修订锚点区间的保守时间误差并入模型上下界。
+ * @param   left_index 左锚在anchors中的下标，0..SOUND_TIME_CAPACITY-2。
+ * @param   right_index left_index+1，须对应时间与帧均更大的右锚。
+ * @param   result 非NULL本次模型输出，仅AUDIO_TIME_MAP_OK时调用；不是错误输出。
+ * @return  无返回值；中点估计不变，仅饱和加宽model_lower_ns/model_upper_ns。
+ * @note    区间内累计|Δf|（ppb）×跨度（秒）即线性插值的保守误差上界（ppb×秒=ns）；
+ *          逐次修订分别累加，故可覆盖一个锚点区间内的多次修订；同修订区间的锚点对边界为零。
+ */
+static void WidenAcrossFrequencyChange(uint8_t left_index, uint8_t right_index,
+                                       AudioTimeMapResult *result)
+{
+    const uint64_t delta_ppb =
+        anchor_rate_abs_cum[right_index] - anchor_rate_abs_cum[left_index];
+    const uint64_t window_ns =
+        Time(&anchors[right_index].anchor) - Time(&anchors[left_index].anchor);
+    if (delta_ppb == 0U || window_ns == 0U) { return; }
+    uint64_t extra_ns;
+    if (delta_ppb > UINT64_MAX / UINT64_C(1000000000))
+    { extra_ns = UINT64_MAX; }
+    else
+    {
+        extra_ns = (window_ns / UINT64_C(1000000000)) * delta_ppb +
+            ((window_ns % UINT64_C(1000000000)) * delta_ppb) / UINT64_C(1000000000);
+    }
+    result->model_lower_ns = result->model_lower_ns > extra_ns ?
+        result->model_lower_ns - extra_ns : 0U;
+    result->model_upper_ns = result->model_upper_ns > UINT64_MAX - extra_ns ?
+        UINT64_MAX : result->model_upper_ns + extra_ns;
+}
 /** @brief 保存now_ms下新鲜的observation副本；非法/缺序/会话变更清旧模型，无返回值不打印。 */
 void SoundEventTime_Observe(uint32_t now_ms, const AudioTimeAnchorObservation *observation)
 {
@@ -172,8 +221,15 @@ void SoundEventTime_Observe(uint32_t now_ms, const AudioTimeAnchorObservation *o
     have_anchor_sequence = true;
     last_anchor_sequence = observation->sequence;
     if (anchor_count == SOUND_TIME_CAPACITY)
-    { memmove(anchors, anchors + 1, (SOUND_TIME_CAPACITY - 1U) * sizeof anchors[0]); --anchor_count; }
-    anchors[anchor_count++] = *observation;
+    {
+        memmove(anchors, anchors + 1, (SOUND_TIME_CAPACITY - 1U) * sizeof anchors[0]);
+        memmove(anchor_rate_abs_cum, anchor_rate_abs_cum + 1,
+                (SOUND_TIME_CAPACITY - 1U) * sizeof anchor_rate_abs_cum[0]);
+        --anchor_count;
+    }
+    anchors[anchor_count] = *observation;
+    anchor_rate_abs_cum[anchor_count] = rate_abs_cum_ppb;
+    ++anchor_count;
 }
 /**
  * @brief 旧整数模型：查询候选onset+1；返回NULL表示等待右锚，否则为结果/拒绝原因。
@@ -210,6 +266,7 @@ static const char *ResolveLegacy(uint32_t now_ms, const Pending *item,
             *left = anchors[i - 1U].sequence;
             *right = anchors[i].sequence;
             *core = AudioTimeMap_Estimate(a, b, item->candidate.session, position, result);
+            if (*core == AUDIO_TIME_MAP_OK) { WidenAcrossFrequencyChange(i - 1U, i, result); }
             return *core == AUDIO_TIME_MAP_OK ? "OK" : "CORE";
         }
     }
@@ -257,6 +314,7 @@ static const char *ResolveToa(uint32_t now_ms, const Pending *item,
             *right = anchors[i].sequence;
             *core = AudioTimeMap_EstimateQ16(a, b, item->candidate.session,
                                              &position_q16, result);
+            if (*core == AUDIO_TIME_MAP_OK) { WidenAcrossFrequencyChange(i - 1U, i, result); }
             return *core == AUDIO_TIME_MAP_OK ? "OK" : "CORE";
         }
     }

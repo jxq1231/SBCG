@@ -267,12 +267,17 @@ int main(void)
     assert(observe_calls==1U && last_reference==UINT64_C(1000000000) && last_offset==-200 && last_delay==1000);
     assert(commit_calls==0U && clock_writes==0U);
     ClearTrace(); requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,-100}; Sample();
-    assert(strcmp(trace,"PTUCAMSNFKN")==0);
+    assert(strcmp(trace,"PTUCMSNFKN")==0 && strchr(trace,'A')==NULL);
     assert(active_servo->frequency_ppb==-100 && hardware_frequency==-100 && invalidate_calls==0U);
     assert(strstr(logs,"$SYNC_ADJUST,") && strstr(logs,"FREQ_PPB=-100") && !strstr(logs,"SYNC=1"));
     ClearTrace(); requested=(ClockServoAction){CLOCK_SERVO_STEP,-500,0}; Sample();
     assert(strcmp(trace,"PTUCAMSNHKN")==0 && active_servo->frequency_ppb==-100);
-    puts("PASS: matched estimate uses A reference and clock actions invalidate all consumers before writes and immediate commit");
+    puts("PASS: matched estimate uses A reference; phase actions invalidate all consumers, continuous frequency keeps the anchor cadence");
+    Reset(); Init(BOARD_ROLE_B); requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,20};
+    write_status=BSP_PTP_UPDATE_TIMEOUT; Sample();
+    assert(clock_writes==1U && active_servo->state==CLOCK_SERVO_FAULT);
+    assert(strstr(trace,"FKUCAMSN")!=NULL);
+    puts("PASS: a failed frequency write revokes the consumers that a successful one would have kept");
 
     Reset(); Init(BOARD_ROLE_B); requested=(ClockServoAction){CLOCK_SERVO_STEP,10,0}; clean_status=BSP_PTP_NOT_READY;
     Sample(); assert(clock_writes==0U && active_servo->state==CLOCK_SERVO_FAULT && commit_calls==1U);

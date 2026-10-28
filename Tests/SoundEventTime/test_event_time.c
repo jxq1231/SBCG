@@ -28,6 +28,13 @@ int main(void){
  Init();Pair();assert(SoundEventTime_Submit(2000,1,&c));BSP_AudioSnapshot bad={.running=true,.callback_count=2,.session=1,.last_callback_ms=2250,.index_faults=1};SoundEventTime_Process(2250,&bad);assert(strstr(output,"STATUS=STREAM") && !strstr(output,"EST_NS="));
  Init();assert(SoundEventTime_Submit(UINT32_MAX-1000,1,&c));Process(500);assert(strstr(output,"$SOUND_TIME,")==NULL);Process(1600);assert(strstr(output,"STATUS=TIMEOUT"));
  Init();Pair();assert(SoundEventTime_Submit(10000,1,&c));Process(10250);assert(strstr(output,"STATUS=STALE") && !strstr(output,"EST_NS="));
+ /* 成功且相位连续的调频保留队列与锚点，只在跨界锚点区间按累计|Δf|加宽模型边界。 */
+ Init();Observe(1,1000,48000,1);assert(SoundEventTime_Submit(1250,1,&c));
+ SoundEventTime_NotifyFrequencyChange(300);SoundEventTime_NotifyFrequencyChange(-700);Observe(2,2000,96000,2);Process(2000);
+ assert(strstr(output,"STATUS=OK") && strstr(output,"EST_NS=1499989583,LO_NS=1499978166,HI_NS=1500001000"));
+ /* 同修订区间内的锚点对不因后续调频而加宽，队列也不被通报撤销。 */
+ Init();Pair();assert(SoundEventTime_Submit(2000,1,&c));SoundEventTime_NotifyFrequencyChange(500);Process(2250);
+ assert(strstr(output,"STATUS=OK") && strstr(output,"EST_NS=1499989583,LO_NS=1499979166,HI_NS=1500000000"));
  Init();SoundEventTime_Init(NULL);assert(!SoundEventTime_Submit(2000,1,&c));SoundEventTime_GetSnapshot(NULL);
  puts("PASS event time: FIRST+1, delayed right anchor, clock/stream/session/gap invalidation, timeout, no-left, queues, rate, wrap and bounded logs");return 0;
 }
