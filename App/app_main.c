@@ -153,6 +153,7 @@ static uint32_t heartbeat_seq;
 /* CHIRP构建：迄今最大前台循环总时长及同一轮AudioCapture/UI/其余耗时，仅诊断。 */
 #ifdef SBCG_USE_CHIRP
 static uint32_t max_loop_ms,max_loop_audio_ms,max_loop_ui_ms,max_loop_other_ms;
+static uint32_t prof_lwip_max_ms,prof_temp_max_ms,prof_sound_max_ms;
 static uint32_t max_loop_flush_ms;
 #ifdef SBCG_USE_AUDIO
 static uint32_t last_profile_ms;
@@ -1023,6 +1024,98 @@ void App_Init(void)
 }
 
 /**
+ * @brief   发布一条已解析声音事件：更新序列/门控并送出事件。
+ * @param   notice 非NULL只读事件副本，包含序号、会话、模型帧与PTP时间。
+ * @return  无返回值；非CHIRP、无身份或域无效时丢弃。
+ * @note    仅A/B身份构建前台；事件发送同时携带波形窗口所需模型帧。
+ */
+static void PublishSoundNotice(const SoundEventTimeEvent *notice)
+{
+    const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
+    if (event_profile == NULL) { return; }
+    if (notice->event_class != EVENT_CLASS_CHIRP) { return; }
+    if(event_profile->role==BOARD_ROLE_A)
+        MeasurementGate_OnChirp(BSP_Console_GetTickMs(),notice->session);
+    const bool sequence_detected=StandardSequence_Push(
+        &standard_sequence,notice->time_ns,notice->quality);
+    if(sequence_detected && event_profile->role==BOARD_ROLE_A)
+        MeasurementGate_OnSequence(BSP_Console_GetTickMs());
+    if(sequence_detected!=standard_sequence_detected){
+        StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
+        char sequence_line[256];
+        (void)snprintf(sequence_line,sizeof sequence_line,
+            "$STANDARD_SEQUENCE,STATUS=%s,EVENTS=%u,ERR_NS=%" PRIu32 ",QUALITY=%u,DIAG=1,LOCAL=1,SYNC=0\r\n",
+            sequence.detected?"DETECTED":"RESET",(unsigned)sequence.events,
+            (uint32_t)sequence.max_period_error_ns,(unsigned)sequence.quality);
+        SendLine(sequence_line,(int)strlen(sequence_line));
+        standard_sequence_detected=sequence_detected;
+    }
+    TimeDomainSnapshot domain;
+    TimeDomain_Get(&domain);
+    if (!domain.valid || domain.id==0U) { return; }
+    SoundEventRecord event = {0};
+    event.valid = true;
+    event.type = SOUND_EVENT_CHIRP;
+    event.quality = notice->quality;
+    event.side = event_profile->role == BOARD_ROLE_A ? SOUND_SIDE_A : SOUND_SIDE_B;
+    event.time_domain = domain.id;
+    event.session = notice->session;
+    event.sequence = notice->sequence;
+    event.time_ns = notice->time_ns;
+    event.frame = notice->frame;
+    SoundDetectorServiceToaCandidates candidates;
+    if (SoundDetectorService_GetToaCandidates(notice->sequence, &candidates))
+    {
+        event.toa_candidate_count = candidates.count;
+        for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
+            event.toa_candidate_q16[i] = candidates.offset_q16[i];
+    }
+    (void)UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
+}
+/** @brief 事件发布延迟：等待同一次扫频的波形捕获完成，避免窗口晚于事件。 */
+#define SOUND_NOTICE_DELAY_MS 700U
+#define SOUND_NOTICE_MAX 4U
+static SoundEventTimeEvent notice_pending[SOUND_NOTICE_MAX];
+static uint32_t notice_pending_ms[SOUND_NOTICE_MAX];
+static uint8_t notice_pending_count;
+/** @brief 暂存或立即发布一条事件；队满时立即发布最旧一条以保序。 */
+static void SoundNoticeEnqueue(const SoundEventTimeEvent *notice)
+{
+    if (notice_pending_count >= SOUND_NOTICE_MAX)
+    {
+        PublishSoundNotice(&notice_pending[0]);
+        for (uint8_t i = 1U; i < notice_pending_count; ++i)
+        {
+            notice_pending[i - 1U] = notice_pending[i];
+            notice_pending_ms[i - 1U] = notice_pending_ms[i];
+        }
+        --notice_pending_count;
+    }
+    notice_pending[notice_pending_count] = *notice;
+    notice_pending_ms[notice_pending_count] = BSP_Console_GetTickMs();
+    ++notice_pending_count;
+}
+/** @brief 到达延迟后按序发布；无返回值。 */
+static void SoundNoticeDrain(uint32_t now_ms)
+{
+    uint8_t keep = 0U;
+    for (uint8_t i = 0U; i < notice_pending_count; ++i)
+    {
+        if ((uint32_t)(now_ms - notice_pending_ms[i]) >= SOUND_NOTICE_DELAY_MS)
+        { PublishSoundNotice(&notice_pending[i]); }
+        else
+        {
+            if (keep != i)
+            {
+                notice_pending[keep] = notice_pending[i];
+                notice_pending_ms[keep] = notice_pending_ms[i];
+            }
+            ++keep;
+        }
+    }
+    notice_pending_count = keep;
+}
+/**
  * ==================== 模块：主循环协同调度 ====================
  * 作用：先处理LwIP收包/定时器/链路，再执行网络和本地时钟观测、温度与音频服务。
  * 调度顺序：温度服务先更新当前DATA状态，后续模块据此门控，末尾最多排空一行日志。
@@ -1048,10 +1141,14 @@ void App_Process(void)
     /* 同循环归因：记录本轮入口及AudioCapture/UI耗时，结束时只在最大循环更新分解。 */
     const uint32_t loop_begin_ms = BSP_Console_GetTickMs();
     uint32_t loop_audio_ms = 0U, loop_ui_ms = 0U;
+    uint32_t prof_begin_ms = loop_begin_ms;
 #endif
 #ifdef SBCG_USE_LWIP
     /* Every loop, before logs: service RX, protocol timers and link changes. */
+    prof_begin_ms = BSP_Console_GetTickMs();
     MX_LWIP_Process();
+    { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
+      if (d > prof_lwip_max_ms) { prof_lwip_max_ms = d; } }
 #endif
     const uint32_t now_ms = BSP_Console_GetTickMs();
 #ifdef SBCG_USE_LWIP
@@ -1088,7 +1185,10 @@ void App_Process(void)
     UDPTimeExchange_Process(BSP_Console_GetTickMs());
     SyncObservation_Process(BSP_Console_GetTickMs());
 #endif
+    prof_begin_ms = BSP_Console_GetTickMs();
     TemperatureService_Process(BSP_Console_GetTickMs());
+    { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
+      if (d > prof_temp_max_ms) { prof_temp_max_ms = d; } }
     TemperatureConsole_Process(BSP_Console_GetTickMs());
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
     ShareTemperature(BSP_Console_GetTickMs());
@@ -1136,6 +1236,7 @@ void App_Process(void)
     AudioTimeAnchor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
 #ifdef SBCG_USE_SOUND_TIME
+    prof_begin_ms = BSP_Console_GetTickMs();
     /* 单次消费锚点，同一副本分发给旧自检与候选模型，DHT低态不发布。 */
     if(!TemperatureService_IsStartLowActive())
     {
@@ -1159,56 +1260,8 @@ void App_Process(void)
         /* 按本板身份与当前有效共同域发布成功TOA；域资格不代表外部同步精度验收，
            诊断输出仍保持DIAG/LOCAL=1、SYNC=0的边界。 */
         SoundEventTimeEvent notice;
-        while (SoundEventTime_TakeEvent(&notice))
-        {
-#ifdef SBCG_USE_BOARD_IDENTITY
-            const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
-            if (event_profile == NULL) { break; }
-            if (notice.event_class != EVENT_CLASS_CHIRP) { continue; }
-            if(event_profile->role==BOARD_ROLE_A)
-                MeasurementGate_OnChirp(BSP_Console_GetTickMs(),notice.session);
-            const bool sequence_detected=StandardSequence_Push(
-                &standard_sequence,notice.time_ns,notice.quality);
-            if(sequence_detected && event_profile->role==BOARD_ROLE_A)
-                MeasurementGate_OnSequence(BSP_Console_GetTickMs());
-            if(sequence_detected!=standard_sequence_detected){
-                StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
-                char sequence_line[256];
-                (void)snprintf(sequence_line,sizeof sequence_line,
-                    "$STANDARD_SEQUENCE,STATUS=%s,EVENTS=%u,ERR_NS=%" PRIu32 ",QUALITY=%u,DIAG=1,LOCAL=1,SYNC=0\r\n",
-                    sequence.detected?"DETECTED":"RESET",(unsigned)sequence.events,
-                    (uint32_t)sequence.max_period_error_ns,(unsigned)sequence.quality);
-                SendLine(sequence_line,(int)strlen(sequence_line));
-                standard_sequence_detected=sequence_detected;
-            }
-            TimeDomainSnapshot domain;
-            TimeDomain_Get(&domain);
-            if (!domain.valid || domain.id==0U)
-            {
-                continue;
-            }
-            SoundEventRecord event = {0};
-            event.valid = true;
-            event.type = SOUND_EVENT_CHIRP;
-            event.quality = notice.quality;
-            event.side = event_profile->role == BOARD_ROLE_A ? SOUND_SIDE_A : SOUND_SIDE_B;
-            event.time_domain = domain.id;
-            event.session = notice.session;
-            event.sequence = notice.sequence;
-            event.time_ns = notice.time_ns;
-            event.frame = notice.frame;
-            SoundDetectorServiceToaCandidates candidates;
-            if (SoundDetectorService_GetToaCandidates(notice.sequence, &candidates))
-            {
-                event.toa_candidate_count = candidates.count;
-                for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
-                    event.toa_candidate_q16[i] = candidates.offset_q16[i];
-            }
-            (void)UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
-#else
-            (void)notice;
-#endif
-        }
+        while (SoundEventTime_TakeEvent(&notice)) { SoundNoticeEnqueue(&notice); }
+        SoundNoticeDrain(BSP_Console_GetTickMs());
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_BOARD_IDENTITY
         RefreshRanging(BSP_Console_GetTickMs());
@@ -1219,6 +1272,8 @@ void App_Process(void)
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #endif
     }
+    { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
+      if (d > prof_sound_max_ms) { prof_sound_max_ms = d; } }
 #elif defined(SBCG_USE_AUDIO_MAP)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
@@ -1287,6 +1342,11 @@ void App_Process(void)
             max_loop_ms, max_loop_audio_ms, max_loop_ui_ms, max_loop_other_ms,
             max_loop_flush_ms);
         if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+        length = snprintf(line, sizeof(line),
+            "$PROFILE2,LWIP_MS=%" PRIu32 ",TEMP_MS=%" PRIu32 ",SND_MS=%" PRIu32 "\r\n",
+            prof_lwip_max_ms, prof_temp_max_ms, prof_sound_max_ms);
+        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+        prof_lwip_max_ms = prof_temp_max_ms = prof_sound_max_ms = 0U;
         length = snprintf(line, sizeof(line),
             "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
             ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32

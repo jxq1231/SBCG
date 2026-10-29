@@ -73,19 +73,16 @@ static bool LocalSide(SoundEventSide *side)
 }
 
 /* ==================== 跨板波形片段与时差精化 ==================== */
-/* B在事件到达后截取chirp体内512点波形随事件发给A；A按同一模型帧位置截取本板窗口，
-   用互相关修正事件时间差，消除单板阈值起跳±1齿（约65mm）混叠。仅前台CPU，无DMA。 */
+/* 每板在捕获时从"匹配扫频起点(raw_first)"后固定偏移截取512点，B随事件发给A；A用自身
+   同位置窗口做互相关，修正事件时间差，消除单板阈值起跳±1齿（约65mm）混叠。仅前台CPU。 */
 #define WAVE_MAGIC "WFR1"
 #define WAVE_HEADER_BYTES 24U
-#define WAVE_WINDOW_FRAMES 384U   /* 8ms窗口，仍完整落在50ms chirp内部 */
-#define WAVE_RESERVOIR_FRAMES 768U
-#define WAVE_CAPTURE_OFFSET 384U   /* 捕获hint后384帧起保存储备，覆盖事件帧+K的窗口起点 */
-#define WAVE_WINDOW_OFFSET 512U    /* 窗口起点在事件模型帧后512帧（约10.7ms） */
+#define WAVE_WINDOW_FRAMES 384U   /* 8ms窗口，完整落在50ms chirp内部 */
+#define WAVE_WINDOW_OFFSET 512U   /* 窗口起点在匹配起点后512帧（约10.7ms） */
 #define WAVE_SLOTS 2U
-#define WAVE_CAPTURE_SLOTS 6U      /* 未发布事件前可能插入其它捕获，保留最近6份储备 */
+#define WAVE_CAPTURE_SLOTS 6U     /* 未发布事件前可能插入其它捕获，保留最近6份 */
+#define WAVE_CAPTURE_MATCH_FRAMES 600U /* 捕获匹配起点与事件模型帧的最大偏差 */
 #define WAVE_AGE_MS 5000U
-/** @brief 事件时间到窗口起点的纳秒偏移，按48kHz标称帧长四舍五入。 */
-#define WAVE_WINDOW_NS ((uint64_t)(((uint64_t)WAVE_WINDOW_OFFSET*UINT64_C(1000000000)+24000U)/48000U))
 typedef struct
 {
     bool valid;
@@ -94,14 +91,14 @@ typedef struct
     uint64_t start_ns;
     int16_t samples[WAVE_WINDOW_FRAMES];
 } WaveSlot;
-/** @brief 一次候选捕获的波形储备；捕获与事件发布之间可能有多份。 */
+/** @brief 一次候选捕获的波形副本；按匹配起点与会话对应到事件。 */
 typedef struct
 {
     bool valid;
-    uint64_t hint_frame;
+    uint64_t first_frame;      /* 扫频匹配起点(raw_first)，两板语义一致 */
     uint32_t session;
     uint32_t stored_ms;
-    int16_t samples[WAVE_RESERVOIR_FRAMES];
+    int16_t samples[WAVE_WINDOW_FRAMES];
 } WaveCapture;
 /* 波形槽与储备仅CPU前台访问，放ITCM，避免挤占DTCM/heap/audio DMA静态预算。 */
 static WaveSlot local_waves[WAVE_SLOTS] __attribute__((section(".ItcmState"),aligned(32)));
@@ -121,83 +118,102 @@ static void ClearWaveforms(void)
     local_wave_next=remote_wave_next=wave_capture_next=0U;
 }
 /**
- * @brief 保存一次捕获切片的波形储备；按环形覆盖最近三份。
+ * @brief 保存一次捕获切片的波形副本；从匹配起点后固定偏移复制窗口。
  * @param slice 非NULL只读切片，回调期间有效；内部复制，不保存指针。
  * @return 无返回值；越界/未配置时跳过，事件发布时自然回退旧单值路径。
- * @note 仅前台捕获回调；事件发布晚于捕获时仍能按会话和帧关系找到对应储备。
+ * @note 仅前台捕获回调；每候选一份，环形覆盖最近6份，事件按会话与匹配起点对应。
  */
 void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice)
 {
-    if(!configured || slice==NULL || slice->samples==NULL)return;
-    const uint64_t start=slice->hint_frame+WAVE_CAPTURE_OFFSET;
+    if(!configured || slice==NULL || slice->samples==NULL ||
+       slice->raw_first_frame==0U)return;
+    const uint64_t start=slice->raw_first_frame+WAVE_WINDOW_OFFSET;
     if(start<slice->first_frame)return;
     const uint64_t offset=start-slice->first_frame;
-    if(offset+(uint64_t)WAVE_RESERVOIR_FRAMES>(uint64_t)slice->frames)return;
+    if(offset+(uint64_t)WAVE_WINDOW_FRAMES>(uint64_t)slice->frames)return;
     WaveCapture *capture=&wave_captures[wave_capture_next];
     memcpy(capture->samples,slice->samples+(size_t)offset,
-           WAVE_RESERVOIR_FRAMES*sizeof(int16_t));
-    capture->hint_frame=slice->hint_frame;
+           WAVE_WINDOW_FRAMES*sizeof(int16_t));
+    capture->first_frame=slice->raw_first_frame;
     capture->session=slice->session;
     capture->stored_ms=read_tick!=NULL?read_tick():0U;
     capture->valid=true;
     wave_capture_next=(uint8_t)((wave_capture_next+1U)%WAVE_CAPTURE_SLOTS);
 }
 /**
- * @brief 按事件会话与模型帧从最近捕获储备中截取本板窗口。
- * @param event 非NULL事件，使用session/frame；帧0表示旧协议不参与。
- * @param out 非NULL512点输出。
- * @return true表示找到同会话且覆盖窗口位置的储备。
- * @note 以|窗口起点−(hint+偏移)|最小的储备为准，避免把相邻候选的波形错配给本事件。
+ * @brief 找到与本事件同会话、匹配起点最近的捕获副本。
+ * @param event 非NULL事件，使用session/frame。
+ * @param capture 非NULL输出，成功时指向内部槽位（仅调用期间有效）。
+ * @param delta_frames 非NULL输出，窗口起点相对事件模型帧的有符号帧差。
+ * @return true表示找到可用捕获且仍新鲜。
+ * @note 偏差超过WAVE_CAPTURE_MATCH_FRAMES视为无对应捕获，避免用邻近声事件的波形。
  */
-static bool CutWaveWindow(const SoundEventRecord *event,int16_t *out)
+static bool FindCapture(const SoundEventRecord *event,const WaveCapture **capture,
+                        int64_t *delta_frames)
 {
-    if(event==NULL || out==NULL || event->frame==0U)return false;
-    const int64_t window_frame=(int64_t)event->frame+WAVE_WINDOW_OFFSET;
+    if(event==NULL || capture==NULL || delta_frames==NULL || event->frame==0U)
+    {return false;}
+    uint32_t now=read_tick!=NULL?read_tick():0U;
     const WaveCapture *best=NULL;
     int64_t best_gap=0;
     for(uint8_t i=0U;i<WAVE_CAPTURE_SLOTS;++i)
     {
-        const WaveCapture *capture=&wave_captures[i];
-        if(!capture->valid || capture->session!=event->session)continue;
-        const int64_t local=window_frame-((int64_t)capture->hint_frame+WAVE_CAPTURE_OFFSET);
-        if(local<0 || local+(int64_t)WAVE_WINDOW_FRAMES>(int64_t)WAVE_RESERVOIR_FRAMES)
-        {continue;}
-        const int64_t gap=local>WAVE_RESERVOIR_FRAMES/2 ?
-            local-WAVE_RESERVOIR_FRAMES/2 : WAVE_RESERVOIR_FRAMES/2-local;
-        if(best==NULL || gap<best_gap){best=capture;best_gap=gap;}
+        const WaveCapture *candidate=&wave_captures[i];
+        if(!candidate->valid || candidate->session!=event->session)continue;
+        const int64_t gap=(int64_t)candidate->first_frame-(int64_t)event->frame;
+        const int64_t magnitude=gap<0?-gap:gap;
+        if(magnitude>(int64_t)WAVE_CAPTURE_MATCH_FRAMES)continue;
+        if((uint32_t)(now-candidate->stored_ms)>WAVE_AGE_MS)continue;
+        if(best==NULL || magnitude<best_gap){best=candidate;best_gap=magnitude;}
     }
     if(best==NULL)return false;
-    const int64_t local=window_frame-((int64_t)best->hint_frame+WAVE_CAPTURE_OFFSET);
-    memcpy(out,best->samples+local,WAVE_WINDOW_FRAMES*sizeof(int16_t));
+    *capture=best;
+    *delta_frames=(int64_t)best->first_frame+WAVE_WINDOW_OFFSET-(int64_t)event->frame;
     return true;
+}
+/** @brief 帧差换算纳秒，按48kHz标称帧长四舍五入，无硬件访问。 */
+static int64_t FrameDeltaNs(int64_t delta_frames)
+{
+    int64_t numerator=delta_frames*INT64_C(1000000000);
+    numerator=numerator>=0?numerator+24000:numerator-24000;
+    return numerator/48000;
+}
+/** @brief 在事件时间上叠加载获窗口相对事件模型帧的偏移，得到窗口起点PTP时间。 */
+static uint64_t WindowStartNs(const SoundEventRecord *event,int64_t delta_frames)
+{
+    const int64_t start=(int64_t)event->time_ns+FrameDeltaNs(delta_frames);
+    return start<0?0U:(uint64_t)start;
 }
 /** @brief A板在发布自身事件前保存本板窗口；无返回值，窗口不可用则跳过。 */
 static void PrepareLocalWaveform(const SoundEventRecord *event)
 {
+    const WaveCapture *capture=NULL;
+    int64_t delta_frames=0;
+    if(!FindCapture(event,&capture,&delta_frames))return;
     WaveSlot *slot=&local_waves[local_wave_next];
-    if(!CutWaveWindow(event,slot->samples))return;
+    memcpy(slot->samples,capture->samples,sizeof slot->samples);
     slot->sequence=event->sequence;
     slot->stored_ms=read_tick!=NULL?read_tick():0U;
-    slot->start_ns=event->time_ns+WAVE_WINDOW_NS;
+    slot->start_ns=WindowStartNs(event,delta_frames);
     slot->valid=true;
     local_wave_next=(uint8_t)((local_wave_next+1U)%WAVE_SLOTS);
 }
 /**
  * @brief B板把本事件窗口发送给A；须先于事件本身发送，A收到事件时窗口已就绪。
  * @param event 非NULL只读事件，使用sequence/frame/time_ns。
- * @return true为已提交UDP；false为未配置/链路/窗口不可用并计错误。
+ * @return true为已提交UDP；false为未配置/链路/无对应捕获并计错误。
  */
 static bool SendWaveform(const SoundEventRecord *event)
 {
-    if(!configured || service_pcb==NULL || event->frame==0U ||
-       !netif_is_link_up(&gnetif))
+    if(!configured || service_pcb==NULL || !netif_is_link_up(&gnetif))
     {Increment(&wave_tx_err);return false;}
-    int16_t window[WAVE_WINDOW_FRAMES];
-    if(!CutWaveWindow(event,window))
+    const WaveCapture *capture=NULL;
+    int64_t delta_frames=0;
+    if(!FindCapture(event,&capture,&delta_frames))
     {Increment(&wave_tx_err);return false;}
     uint8_t data[WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES];
-    memcpy(data+WAVE_HEADER_BYTES,window,sizeof window);
-    const uint64_t start_ns=event->time_ns+WAVE_WINDOW_NS;
+    memcpy(data+WAVE_HEADER_BYTES,capture->samples,sizeof capture->samples);
+    const uint64_t start_ns=WindowStartNs(event,delta_frames);
     data[0]='W';data[1]='F';data[2]='R';data[3]='1';
     data[4]=1U;data[5]=(uint8_t)SOUND_SIDE_B;data[6]=0U;data[7]=0U;
     data[8]=(uint8_t)(event->sequence>>24U);data[9]=(uint8_t)(event->sequence>>16U);
