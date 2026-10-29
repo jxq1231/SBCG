@@ -1,8 +1,8 @@
 /**
  * @file        sound_event_wire.c
  * @brief       两板声音事件最小线协议编解码实现。
- * @details     big-endian v3固定64字节；v2的56字节后追加模型进度帧；兼容解码v1(36)/v2(56)
- *              旧事件；无socket、配对或同步行为。
+ * @details     big-endian v4固定66字节；v3的64字节后追加Q16子帧分数；兼容解码v1(36)/
+ *              v2(56)/v3(64)旧事件；无socket、配对或同步行为。
  * @note        失败不返回部分有效事件；协议本身不代表跨板时间已同步。
  */
 #include "sound_event_wire.h"
@@ -25,6 +25,7 @@
 #define WIRE_OFF_CANDIDATE_Q16 40U
 #define WIRE_OFF_FRAME_HIGH 56U
 #define WIRE_OFF_FRAME_LOW 60U
+#define WIRE_OFF_FRACTION_Q16 64U
 #define NSEC_PER_SEC UINT64_C(1000000000)
 
 static void Put32(uint8_t *p, uint32_t value)
@@ -82,6 +83,8 @@ SoundEventWireStatus SoundEventWire_Encode(const SoundEventRecord *event,
     /* v3追加本地模型进度帧，两板用它在同一音频位置截取波形窗口。 */
     Put32(out + WIRE_OFF_FRAME_HIGH, (uint32_t)(event->frame >> 32U));
     Put32(out + WIRE_OFF_FRAME_LOW, (uint32_t)event->frame);
+    out[WIRE_OFF_FRACTION_Q16] = (uint8_t)(event->fraction_q16 >> 8U);
+    out[WIRE_OFF_FRACTION_Q16 + 1U] = (uint8_t)event->fraction_q16;
     return SOUND_EVENT_WIRE_OK;
 }
 
@@ -92,7 +95,7 @@ SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
     memset(event, 0, sizeof *event);
     if (data == NULL) { return SOUND_EVENT_WIRE_BAD_ARGUMENT; }
     if (length != SOUND_EVENT_WIRE_V1_BYTES && length != SOUND_EVENT_WIRE_V2_BYTES &&
-        length != SOUND_EVENT_WIRE_BYTES)
+        length != SOUND_EVENT_WIRE_V3_BYTES && length != SOUND_EVENT_WIRE_BYTES)
     { return SOUND_EVENT_WIRE_BAD_LENGTH; }
     if (data[WIRE_OFF_MAGIC] != 'S' || data[WIRE_OFF_MAGIC + 1U] != 'E' ||
         data[WIRE_OFF_MAGIC + 2U] != 'V' || data[WIRE_OFF_MAGIC + 3U] != 'T')
@@ -100,7 +103,8 @@ SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
     const uint8_t version = data[WIRE_OFF_VERSION];
     if (!((version == 1U && length == SOUND_EVENT_WIRE_V1_BYTES) ||
           (version == 2U && length == SOUND_EVENT_WIRE_V2_BYTES) ||
-          (version == 3U && length == SOUND_EVENT_WIRE_BYTES)))
+          (version == 3U && length == SOUND_EVENT_WIRE_V3_BYTES) ||
+          (version == 4U && length == SOUND_EVENT_WIRE_BYTES)))
     { return SOUND_EVENT_WIRE_BAD_VERSION; }
     if (data[WIRE_OFF_SIDE] > (uint8_t)SOUND_SIDE_B) { return SOUND_EVENT_WIRE_BAD_FIELD; }
     const SoundEventType type = (SoundEventType)data[WIRE_OFF_TYPE];
@@ -138,10 +142,15 @@ SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
                 (int32_t)Get32(data + WIRE_OFF_CANDIDATE_Q16 + 4U * i);
         }
     }
-    if (version == 3U)
+    if (version >= 3U)
     {
         event->frame = (uint64_t)Get32(data + WIRE_OFF_FRAME_HIGH) << 32U |
                        Get32(data + WIRE_OFF_FRAME_LOW);
+    }
+    if (version == 4U)
+    {
+        event->fraction_q16 = (uint16_t)((uint16_t)data[WIRE_OFF_FRACTION_Q16] << 8U |
+                                         data[WIRE_OFF_FRACTION_Q16 + 1U]);
     }
     return SOUND_EVENT_WIRE_OK;
 }

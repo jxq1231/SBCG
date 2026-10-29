@@ -3,7 +3,8 @@
  * @brief       两板同一段PCM波形的互相关时差精化实现。
  * @details     对每个候选滞后在重叠区内去除各自均值后计算归一化相关系数，取最大峰并
  *              用相邻三点抛物线插值得到亚采样滞后；结合事件模型粗时差得到精化TDOA。
- * @note        纯计算；所有累加使用double，典型512点×49滞后约2.5万次乘加，前台可接受。
+ * @note        纯计算；PCM乘积和使用int64精确累加，每个滞后仅在归一化时转double，
+ *              避免Cortex-M7单精度FPU上的逐采样软件双精度运算；实际耗时须上板观察。
  */
 #include "waveform_tdoa.h"
 #include <math.h>
@@ -20,6 +21,8 @@
  * @param   frames 窗口长度。
  * @param   lag 滞后，正数表示用a的靠后部分对b的靠前部分（与事件时间约定一致）。
  * @return  相关系数，重叠不足或窗口无起伏时返回-1.0。
+ * @note    int16乘积在int32范围内，最多1024点的累加绝对值不超过2^40；转double仍精确，
+ *          后续去均值、归一化的运算顺序保持不变，不改变相关门限或峰选择规则。
  */
 static double Correlation(const int16_t *a, const int16_t *b, uint16_t frames, int lag)
 {
@@ -28,17 +31,21 @@ static double Correlation(const int16_t *a, const int16_t *b, uint16_t frames, i
     if (n < WAVEFORM_TDOA_MIN_OVERLAP) { return -1.0; }
     const uint16_t x0 = lag >= 0 ? shift : 0U;
     const uint16_t y0 = lag >= 0 ? 0U : shift;
-    double sum_ab = 0.0, sum_aa = 0.0, sum_bb = 0.0, sum_a = 0.0, sum_b = 0.0;
+    int64_t sum_ab_int = 0, sum_aa_int = 0, sum_bb_int = 0;
+    int64_t sum_a_int = 0, sum_b_int = 0;
     for (uint16_t i = 0U; i < n; ++i)
     {
-        const double av = (double)a[x0 + i];
-        const double bv = (double)b[y0 + i];
-        sum_ab += av * bv;
-        sum_aa += av * av;
-        sum_bb += bv * bv;
-        sum_a += av;
-        sum_b += bv;
+        const int32_t av = a[x0 + i];
+        const int32_t bv = b[y0 + i];
+        sum_ab_int += av * bv;
+        sum_aa_int += av * av;
+        sum_bb_int += bv * bv;
+        sum_a_int += av;
+        sum_b_int += bv;
     }
+    const double sum_ab = (double)sum_ab_int, sum_aa = (double)sum_aa_int;
+    const double sum_bb = (double)sum_bb_int, sum_a = (double)sum_a_int;
+    const double sum_b = (double)sum_b_int;
     const double variance_a = sum_aa - sum_a * sum_a / n;
     const double variance_b = sum_bb - sum_b * sum_b / n;
     /* 每个采样至少1 LSB方差才可能有可分辨峰；否则直流/静音窗口的舍入残差会产生伪相关。 */

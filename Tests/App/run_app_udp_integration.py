@@ -91,6 +91,16 @@ def status_packets(board,after_ms=0):
     return [p for p in board.history
             if p['tick_ms']>=after_ms and p['hex'].startswith('52535432')]
 
+def group_status_packets(packets):
+    """Keep every RST2 attempt, grouped by domain/authority epoch/revision/ID."""
+    groups={}
+    for packet in packets:
+        wire=bytes.fromhex(packet['hex'])
+        key=tuple(int.from_bytes(wire[offset:offset+4],'big')
+                  for offset in (12,16,20,24))
+        groups.setdefault(key,[]).append(packet)
+    return groups
+
 def main():
     gcc=shutil.which('gcc')
     if gcc is None: print('gcc not found',file=sys.stderr); sys.exit(2)
@@ -113,7 +123,8 @@ def main():
          str(ROOT/'App/Network/domain_wire.c'),str(ROOT/'App/Network/measurement_wire.c'),
          str(ROOT/'App/Network/measurement_ack.c'),str(ROOT/'App/Network/ranging_status_wire.c'),
          str(ROOT/'App/Network/temperature_wire.c'),str(ROOT/'App/Network/sound_event_wire.c'),
-         str(ROOT/'App/Measure/sound_pair.c'),str(ROOT/'App/Temperature/sound_speed.c'),
+         str(ROOT/'App/Measure/sound_pair.c'),str(ROOT/'App/Measure/waveform_tdoa.c'),
+         str(ROOT/'App/Temperature/sound_speed.c'),
          str(ROOT/'App/UI/status_snapshot.c'),str(ROOT/'App/UI/status_view.c'),
          str(ROOT/'App/BSP/board_identity.c'),
          '-o',str(EXE)]
@@ -145,17 +156,23 @@ def main():
         for t in range(8100,9551,50):step(t,4 if t==8100 else 0,True)
         attempts=status_packets(a,8100)
         check(len(attempts)>=3,'lost RAK2 causes repeated RST2 attempts')
-        check(len({p['hex'] for p in attempts})==1,
-              'ACK-loss retransmissions keep identical revision/source/deadlines')
-        check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(attempts,attempts[1:])),
-              'ACK-loss retry interval is at least 500ms')
+        # A pending older result can change state before the new sound is published.
+        # Each authority key owns its retry cadence; a new revision may send immediately.
+        attempts_by_key=group_status_packets(attempts)
+        check(any(len(group)>=2 for group in attempts_by_key.values()),
+              'lost RAK2 retransmits at least one exact authority key')
+        for key,group in attempts_by_key.items():
+            check(len({p['hex'] for p in group})==1,
+                  f'ACK-loss key {key} keeps identical packet/source/deadlines')
+            check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(group,group[1:])),
+                  f'ACK-loss key {key} retry interval is at least 500ms')
         for t in range(9600,10001,50):step(t)
         sa,sb=snap(a,b,'ACK-restored')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id']==4,'ACK recovery retains source ID')
 
         # A fails its sends: do not feed those datagrams to B.
         a.cmd('SEND 0')
-        for t in range(10050,11251,50):step(t,5 if t==10050 else 0)
+        for t in range(10050,11301,50):step(t,5 if t==10050 else 0)
         failed=status_packets(a,10050)
         domain_failed=[p for p in a.history if p['tick_ms']>=10050 and
                        p['hex'].startswith('444f4d4e') and not p['ok']]
@@ -163,12 +180,18 @@ def main():
               all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(domain_failed,domain_failed[1:])),
               'failed DOMAIN requests also preserve 500ms retry cadence')
         check(len(failed)>=3 and all(not p['ok'] for p in failed),'send failures are observed')
-        check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(failed,failed[1:])),
-              'failed sends preserve 500ms retry cadence')
+        failed_by_key=group_status_packets(failed)
+        check(any(len(group)>=2 for group in failed_by_key.values()),
+              'failed sends retry at least one exact authority key')
+        for key,group in failed_by_key.items():
+            check(len({p['hex'] for p in group})==1,
+                  f'failed-send key {key} keeps identical packet/source/deadlines')
+            check(all(q['tick_ms']-p['tick_ms']>=500 for p,q in zip(group,group[1:])),
+                  f'failed-send key {key} preserves 500ms retry cadence')
         sa,sb=snap(a,b,'failed-sends')
         check(sa['id']==5 and sb['id']==4,'failed RST2 packets never arrive at B')
         a.cmd('SEND 1')
-        for t in range(11300,12001,50):step(t)
+        for t in range(11350,12001,50):step(t)
         sa,sb=snap(a,b,'send-recovered')
         check(sa['id']==sb['id']==5 and sa['has']==sb['has']==1,'successful retry updates B')
 
@@ -212,7 +235,8 @@ def main():
         check(sa['distance_text']==sb['distance_text']=='-- M','no-value UI never shows zero metres')
         for t in range(38650,44551,50):
             step(t,{40000:15,42000:16,44000:17}.get(t,0))
-            if t in (40100,42100):
+            # App waits 700ms for waveform capture; allow two 50ms packet handoffs.
+            if t in (40800,42800):
                 sa,sb=snap(a,b,'new-provisional-after-expiry')
                 check(sa['has']==sb['has']==1 and sa['state']==sb['state']==1 and
                       sa['id']==sb['id'] and sa['mm']==sb['mm'],

@@ -1023,6 +1023,7 @@ void App_Init(void)
     FlushOneLine();
 }
 
+#if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
 /**
  * @brief   发布一条已解析声音事件：更新序列/门控并送出事件。
  * @param   notice 非NULL只读事件副本，包含序号、会话、模型帧与PTP时间。
@@ -1063,6 +1064,7 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
     event.sequence = notice->sequence;
     event.time_ns = notice->time_ns;
     event.frame = notice->frame;
+    event.fraction_q16 = notice->fraction_q16;
     SoundDetectorServiceToaCandidates candidates;
     if (SoundDetectorService_GetToaCandidates(notice->sequence, &candidates))
     {
@@ -1115,6 +1117,7 @@ static void SoundNoticeDrain(uint32_t now_ms)
     }
     notice_pending_count = keep;
 }
+#endif
 /**
  * ==================== 模块：主循环协同调度 ====================
  * 作用：先处理LwIP收包/定时器/链路，再执行网络和本地时钟观测、温度与音频服务。
@@ -1130,6 +1133,7 @@ static void SoundNoticeDrain(uint32_t now_ms)
  *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
  *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
  *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
+ *          PROFILE2分段计时仅随CHIRP诊断启用；其他构建不读取或更新该诊断状态。
  */
 void App_Process(void)
 {
@@ -1145,10 +1149,14 @@ void App_Process(void)
 #endif
 #ifdef SBCG_USE_LWIP
     /* Every loop, before logs: service RX, protocol timers and link changes. */
+#ifdef SBCG_USE_CHIRP
     prof_begin_ms = BSP_Console_GetTickMs();
+#endif
     MX_LWIP_Process();
+#ifdef SBCG_USE_CHIRP
     { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
       if (d > prof_lwip_max_ms) { prof_lwip_max_ms = d; } }
+#endif
 #endif
     const uint32_t now_ms = BSP_Console_GetTickMs();
 #ifdef SBCG_USE_LWIP
@@ -1185,10 +1193,14 @@ void App_Process(void)
     UDPTimeExchange_Process(BSP_Console_GetTickMs());
     SyncObservation_Process(BSP_Console_GetTickMs());
 #endif
+#ifdef SBCG_USE_CHIRP
     prof_begin_ms = BSP_Console_GetTickMs();
+#endif
     TemperatureService_Process(BSP_Console_GetTickMs());
+#ifdef SBCG_USE_CHIRP
     { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
       if (d > prof_temp_max_ms) { prof_temp_max_ms = d; } }
+#endif
     TemperatureConsole_Process(BSP_Console_GetTickMs());
 #if defined(SBCG_USE_SOUND_TIME) && defined(SBCG_USE_BOARD_IDENTITY)
     ShareTemperature(BSP_Console_GetTickMs());
@@ -1236,7 +1248,9 @@ void App_Process(void)
     AudioTimeAnchor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif
 #ifdef SBCG_USE_SOUND_TIME
+#ifdef SBCG_USE_CHIRP
     prof_begin_ms = BSP_Console_GetTickMs();
+#endif
     /* 单次消费锚点，同一副本分发给旧自检与候选模型，DHT低态不发布。 */
     if(!TemperatureService_IsStartLowActive())
     {
@@ -1259,9 +1273,14 @@ void App_Process(void)
 #endif
         /* 按本板身份与当前有效共同域发布成功TOA；域资格不代表外部同步精度验收，
            诊断输出仍保持DIAG/LOCAL=1、SYNC=0的边界。 */
+#if defined(SBCG_USE_BOARD_IDENTITY)
         SoundEventTimeEvent notice;
         while (SoundEventTime_TakeEvent(&notice)) { SoundNoticeEnqueue(&notice); }
         SoundNoticeDrain(BSP_Console_GetTickMs());
+#else
+        SoundEventTimeEvent notice;
+        while (SoundEventTime_TakeEvent(&notice)) { (void)notice; }
+#endif
         UDPSoundEvent_Process(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_BOARD_IDENTITY
         RefreshRanging(BSP_Console_GetTickMs());
@@ -1272,8 +1291,10 @@ void App_Process(void)
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #endif
     }
+#ifdef SBCG_USE_CHIRP
     { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
       if (d > prof_sound_max_ms) { prof_sound_max_ms = d; } }
+#endif
 #elif defined(SBCG_USE_AUDIO_MAP)
     AudioTimeMapMonitor_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
 #endif

@@ -17,9 +17,11 @@
 #define SOUND_EVENT_WIRE_V1_BYTES 36U
 /** @brief v2旧长度：36字节旧字段+候选计数/保留+4个int32候选Q16偏移，仅兼容解码。 */
 #define SOUND_EVENT_WIRE_V2_BYTES 56U
-/** @brief v3固定长度：v2字段后追加uint64模型进度帧，供跨板波形对齐使用。 */
-#define SOUND_EVENT_WIRE_BYTES 64U
-#define SOUND_EVENT_WIRE_VERSION 3U
+/** @brief v3旧长度：v2字段后追加uint64模型进度帧，仅兼容解码。 */
+#define SOUND_EVENT_WIRE_V3_BYTES 64U
+/** @brief v4固定长度：v3后追加uint16模型Q16子帧分数，供两板波形窗口时间对齐。 */
+#define SOUND_EVENT_WIRE_BYTES 66U
+#define SOUND_EVENT_WIRE_VERSION 4U
 /** @brief 线协议解码状态；OK才产生事件副本。 */
 typedef enum
 {
@@ -31,11 +33,11 @@ typedef enum
     SOUND_EVENT_WIRE_BAD_FIELD
 } SoundEventWireStatus;
 
-/** @brief 将事件编码为固定64字节v3协议；out容量不足或字段非法返回false。 */
+/** @brief 将事件编码为固定66字节v4协议；out容量不足或字段非法返回false。 */
 SoundEventWireStatus SoundEventWire_Encode(const SoundEventRecord *event,
                                            uint8_t *out, size_t capacity);
 
-/** @brief 解码v1/v2/v3协议；成功填充event并返回OK，失败不产生有效事件。 */
+/** @brief 解码v1/v2/v3/v4协议；成功填充event并返回OK，失败不产生有效事件。 */
 SoundEventWireStatus SoundEventWire_Decode(const uint8_t *data, size_t length,
                                            SoundEventRecord *event);
 

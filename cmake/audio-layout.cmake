@@ -24,7 +24,7 @@ if(_sbcg_audio_mode)
     # preserve its tested integer semantics, no fast-math or hardware changes.
     set_source_files_properties(
         App/Detector/chirp_window.c App/Detector/chirp_service.c
-        App/Detector/sound_detector.c PROPERTIES
+        App/Detector/sound_detector.c App/Measure/waveform_tdoa.c PROPERTIES
         COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/BSP/bsp_audio.c App/Audio/audio_capture.c App/Audio/audio_statistics.c

@@ -73,6 +73,7 @@ typedef struct
     uint32_t sequence;             /**< 板本地事件序号。 */
     uint64_t time_ns;              /**< 本地PTP模型时间，纳秒。 */
     uint64_t frame;                /**< time_ns对应的本地模型进度帧；0表示旧协议未携带。 */
+    uint16_t fraction_q16;         /**< 模型帧内Q16子帧分数；旧协议v1..v3为0。 */
     uint8_t toa_candidate_count;   /**< 0..4，B侧TOA早/晚候选数；0表示旧单值。 */
     int32_t toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES];
                                    /**< 相对time_ns的候选偏移，1/65536帧。 */

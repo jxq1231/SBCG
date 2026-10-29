@@ -73,15 +73,17 @@ static bool LocalSide(SoundEventSide *side)
 }
 
 /* ==================== 跨板波形片段与时差精化 ==================== */
-/* 每板在捕获时从"匹配扫频起点(raw_first)"后固定偏移截取512点，B随事件发给A；A用自身
-   同位置窗口做互相关，修正事件时间差，消除单板阈值起跳±1齿（约65mm）混叠。仅前台CPU。 */
+/* 每板捕获时从匹配扫频起点(raw_first)后384帧保存896点储备；事件发布时按事件模型帧+512
+   截取512点窗口，两板窗口起点用同一Q16修正后的PTP时间，B发给A做互相关精化TDOA。 */
 #define WAVE_MAGIC "WFR1"
 #define WAVE_HEADER_BYTES 24U
-#define WAVE_WINDOW_FRAMES 384U   /* 8ms窗口，完整落在50ms chirp内部 */
-#define WAVE_WINDOW_OFFSET 512U   /* 窗口起点在匹配起点后512帧（约10.7ms） */
+#define WAVE_WINDOW_FRAMES 512U       /* 10.7ms，覆盖2-6kHz chirp多个载波周期 */
+#define WAVE_WINDOW_OFFSET 512U       /* 窗口起点在事件模型帧后512帧 */
+#define WAVE_RESERVOIR_FRAMES 896U    /* 覆盖事件帧+512相对raw_first的可见偏移 */
+#define WAVE_RESERVOIR_OFFSET 384U    /* 储备起点在raw_first后384帧 */
 #define WAVE_SLOTS 2U
-#define WAVE_CAPTURE_SLOTS 6U     /* 未发布事件前可能插入其它捕获，保留最近6份 */
-#define WAVE_CAPTURE_MATCH_FRAMES 600U /* 捕获匹配起点与事件模型帧的最大偏差 */
+#define WAVE_CAPTURE_SLOTS 4U         /* 发布前可能插入其它捕获，保留最近4份 */
+#define WAVE_CAPTURE_MATCH_FRAMES 600U
 #define WAVE_AGE_MS 5000U
 typedef struct
 {
@@ -91,23 +93,22 @@ typedef struct
     uint64_t start_ns;
     int16_t samples[WAVE_WINDOW_FRAMES];
 } WaveSlot;
-/** @brief 一次候选捕获的波形副本；按匹配起点与会话对应到事件。 */
+/** @brief 一次候选捕获的波形储备；按匹配起点与会话对应到事件。 */
 typedef struct
 {
     bool valid;
-    uint64_t first_frame;      /* 扫频匹配起点(raw_first)，两板语义一致 */
+    uint64_t first_frame;      /* 扫频匹配起点(raw_first) */
     uint32_t session;
     uint32_t stored_ms;
-    int16_t samples[WAVE_WINDOW_FRAMES];
+    int16_t samples[WAVE_RESERVOIR_FRAMES];
 } WaveCapture;
-/* 波形槽与储备仅CPU前台访问，放ITCM，避免挤占DTCM/heap/audio DMA静态预算。 */
 static WaveSlot local_waves[WAVE_SLOTS] __attribute__((section(".ItcmState"),aligned(32)));
 static WaveSlot remote_waves[WAVE_SLOTS] __attribute__((section(".ItcmState"),aligned(32)));
 static uint8_t local_wave_next,remote_wave_next;
 static WaveCapture wave_captures[WAVE_CAPTURE_SLOTS] __attribute__((section(".ItcmState"),aligned(32)));
 static uint8_t wave_capture_next;
 static uint32_t wave_tx_ok,wave_tx_err,wave_rx_ok,wave_rx_bad,wave_refine_ok,wave_refine_reject;
-static uint32_t wave_no_local,wave_no_remote,wave_stale,wave_low_corr;
+static uint32_t wave_no_local,wave_no_remote,wave_stale,wave_low_corr,wave_refine_ms_max;
 
 /** @brief 清空捕获储备与本地/对端窗口；初始化或换域时调用，无返回值。 */
 static void ClearWaveforms(void)
@@ -118,22 +119,22 @@ static void ClearWaveforms(void)
     local_wave_next=remote_wave_next=wave_capture_next=0U;
 }
 /**
- * @brief 保存一次捕获切片的波形副本；从匹配起点后固定偏移复制窗口。
+ * @brief 保存一次捕获切片的波形储备；从匹配起点后固定偏移复制。
  * @param slice 非NULL只读切片，回调期间有效；内部复制，不保存指针。
  * @return 无返回值；越界/未配置时跳过，事件发布时自然回退旧单值路径。
- * @note 仅前台捕获回调；每候选一份，环形覆盖最近6份，事件按会话与匹配起点对应。
+ * @note 仅前台捕获回调；环形覆盖最近4份，事件按会话与匹配起点对应。
  */
 void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice)
 {
     if(!configured || slice==NULL || slice->samples==NULL ||
        slice->raw_first_frame==0U)return;
-    const uint64_t start=slice->raw_first_frame+WAVE_WINDOW_OFFSET;
+    const uint64_t start=slice->raw_first_frame+WAVE_RESERVOIR_OFFSET;
     if(start<slice->first_frame)return;
     const uint64_t offset=start-slice->first_frame;
-    if(offset+(uint64_t)WAVE_WINDOW_FRAMES>(uint64_t)slice->frames)return;
+    if(offset+(uint64_t)WAVE_RESERVOIR_FRAMES>(uint64_t)slice->frames)return;
     WaveCapture *capture=&wave_captures[wave_capture_next];
     memcpy(capture->samples,slice->samples+(size_t)offset,
-           WAVE_WINDOW_FRAMES*sizeof(int16_t));
+           WAVE_RESERVOIR_FRAMES*sizeof(int16_t));
     capture->first_frame=slice->raw_first_frame;
     capture->session=slice->session;
     capture->stored_ms=read_tick!=NULL?read_tick():0U;
@@ -141,66 +142,76 @@ void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice)
     wave_capture_next=(uint8_t)((wave_capture_next+1U)%WAVE_CAPTURE_SLOTS);
 }
 /**
- * @brief 找到与本事件同会话、匹配起点最近的捕获副本。
+ * @brief 找到同会话、匹配起点最近且能覆盖事件窗口的捕获储备。
  * @param event 非NULL事件，使用session/frame。
- * @param capture 非NULL输出，成功时指向内部槽位（仅调用期间有效）。
- * @param delta_frames 非NULL输出，窗口起点相对事件模型帧的有符号帧差。
+ * @param capture 非NULL输出，指向内部槽位（仅调用期间有效）。
+ * @param local 非NULL输出，事件窗口在储备内的起始下标。
  * @return true表示找到可用捕获且仍新鲜。
- * @note 偏差超过WAVE_CAPTURE_MATCH_FRAMES视为无对应捕获，避免用邻近声事件的波形。
+ * @note 只接受(raw_first,event.frame)偏差在理论±1齿范围并能完整截出窗口的捕获。
  */
 static bool FindCapture(const SoundEventRecord *event,const WaveCapture **capture,
-                        int64_t *delta_frames)
+                        int64_t *local)
 {
-    if(event==NULL || capture==NULL || delta_frames==NULL || event->frame==0U)
+    if(event==NULL || capture==NULL || local==NULL || event->frame==0U)
     {return false;}
-    uint32_t now=read_tick!=NULL?read_tick():0U;
+    const uint32_t now=read_tick!=NULL?read_tick():0U;
     const WaveCapture *best=NULL;
     int64_t best_gap=0;
     for(uint8_t i=0U;i<WAVE_CAPTURE_SLOTS;++i)
     {
         const WaveCapture *candidate=&wave_captures[i];
         if(!candidate->valid || candidate->session!=event->session)continue;
-        const int64_t gap=(int64_t)candidate->first_frame-(int64_t)event->frame;
-        const int64_t magnitude=gap<0?-gap:gap;
-        if(magnitude>(int64_t)WAVE_CAPTURE_MATCH_FRAMES)continue;
         if((uint32_t)(now-candidate->stored_ms)>WAVE_AGE_MS)continue;
+        const int64_t delta=(int64_t)candidate->first_frame-(int64_t)event->frame;
+        const int64_t magnitude=delta<0?-delta:delta;
+        if(magnitude>(int64_t)WAVE_CAPTURE_MATCH_FRAMES)continue;
+        const int64_t offset=(int64_t)WAVE_WINDOW_OFFSET+delta-WAVE_RESERVOIR_OFFSET;
+        if(offset<0 || offset+(int64_t)WAVE_WINDOW_FRAMES>(int64_t)WAVE_RESERVOIR_FRAMES)
+        {continue;}
         if(best==NULL || magnitude<best_gap){best=candidate;best_gap=magnitude;}
     }
     if(best==NULL)return false;
     *capture=best;
-    *delta_frames=(int64_t)best->first_frame+WAVE_WINDOW_OFFSET-(int64_t)event->frame;
+    *local=(int64_t)WAVE_WINDOW_OFFSET+((int64_t)best->first_frame-(int64_t)event->frame)
+           -WAVE_RESERVOIR_OFFSET;
     return true;
 }
-/** @brief 帧差换算纳秒，按48kHz标称帧长四舍五入，无硬件访问。 */
-static int64_t FrameDeltaNs(int64_t delta_frames)
+/** @brief Q16子帧差换算纳秒，按48kHz标称帧长四舍五入，无硬件访问。 */
+static int64_t Q16DeltaNs(int64_t delta_q16)
 {
-    int64_t numerator=delta_frames*INT64_C(1000000000);
-    numerator=numerator>=0?numerator+24000:numerator-24000;
-    return numerator/48000;
+    const int64_t denominator=INT64_C(65536)*48000;
+    int64_t numerator=delta_q16*INT64_C(1000000000);
+    numerator=numerator>=0?numerator+denominator/2:numerator-denominator/2;
+    return numerator/denominator;
 }
-/** @brief 在事件时间上叠加载获窗口相对事件模型帧的偏移，得到窗口起点PTP时间。 */
-static uint64_t WindowStartNs(const SoundEventRecord *event,int64_t delta_frames)
+/**
+ * @brief 计算窗口起点的PTP时间：事件时间扣除帧内Q16分数再加固定帧偏移。
+ * @param event 非NULL事件，使用time_ns/fraction_q16。
+ * @return 窗口起点纳秒；饱和到0。
+ */
+static uint64_t WindowStartNs(const SoundEventRecord *event)
 {
-    const int64_t start=(int64_t)event->time_ns+FrameDeltaNs(delta_frames);
+    const int64_t delta_q16=(int64_t)WAVE_WINDOW_OFFSET*65536-(int64_t)event->fraction_q16;
+    const int64_t start=(int64_t)event->time_ns+Q16DeltaNs(delta_q16);
     return start<0?0U:(uint64_t)start;
 }
 /** @brief A板在发布自身事件前保存本板窗口；无返回值，窗口不可用则跳过。 */
 static void PrepareLocalWaveform(const SoundEventRecord *event)
 {
     const WaveCapture *capture=NULL;
-    int64_t delta_frames=0;
-    if(!FindCapture(event,&capture,&delta_frames))return;
+    int64_t local=0;
+    if(!FindCapture(event,&capture,&local))return;
     WaveSlot *slot=&local_waves[local_wave_next];
-    memcpy(slot->samples,capture->samples,sizeof slot->samples);
+    memcpy(slot->samples,capture->samples+local,sizeof slot->samples);
     slot->sequence=event->sequence;
     slot->stored_ms=read_tick!=NULL?read_tick():0U;
-    slot->start_ns=WindowStartNs(event,delta_frames);
+    slot->start_ns=WindowStartNs(event);
     slot->valid=true;
     local_wave_next=(uint8_t)((local_wave_next+1U)%WAVE_SLOTS);
 }
 /**
- * @brief B板把本事件窗口发送给A；须先于事件本身发送，A收到事件时窗口已就绪。
- * @param event 非NULL只读事件，使用sequence/frame/time_ns。
+ * @brief B板把本事件窗口发送给A；须先于事件本身发送。
+ * @param event 非NULL只读事件，使用sequence/frame/time_ns/fraction_q16。
  * @return true为已提交UDP；false为未配置/链路/无对应捕获并计错误。
  */
 static bool SendWaveform(const SoundEventRecord *event)
@@ -208,12 +219,13 @@ static bool SendWaveform(const SoundEventRecord *event)
     if(!configured || service_pcb==NULL || !netif_is_link_up(&gnetif))
     {Increment(&wave_tx_err);return false;}
     const WaveCapture *capture=NULL;
-    int64_t delta_frames=0;
-    if(!FindCapture(event,&capture,&delta_frames))
+    int64_t local=0;
+    if(!FindCapture(event,&capture,&local))
     {Increment(&wave_tx_err);return false;}
     uint8_t data[WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES];
-    memcpy(data+WAVE_HEADER_BYTES,capture->samples,sizeof capture->samples);
-    const uint64_t start_ns=WindowStartNs(event,delta_frames);
+    memcpy(data+WAVE_HEADER_BYTES,capture->samples+local,
+           WAVE_WINDOW_FRAMES*sizeof(int16_t));
+    const uint64_t start_ns=WindowStartNs(event);
     data[0]='W';data[1]='F';data[2]='R';data[3]='1';
     data[4]=1U;data[5]=(uint8_t)SOUND_SIDE_B;data[6]=0U;data[7]=0U;
     data[8]=(uint8_t)(event->sequence>>24U);data[9]=(uint8_t)(event->sequence>>16U);
@@ -280,9 +292,13 @@ static bool RefinePairTdoa(uint32_t a_sequence,uint32_t b_sequence,int64_t *delt
     {Increment(&wave_stale);Increment(&wave_refine_reject);return false;}
     const int64_t delta0=(int64_t)(b->start_ns-a->start_ns);
     int64_t refined=0;uint8_t confidence=0U;
-    if(!WaveformTdoa_Refine(a->samples,b->samples,WAVE_WINDOW_FRAMES,
-                            BSP_AUDIO_NOMINAL_HZ,WAVEFORM_TDOA_SEARCH_FRAMES,
-                            delta0,&refined,&confidence))
+    const uint32_t refine_begin_ms=read_tick!=NULL?read_tick():0U;
+    const bool refine_ok=WaveformTdoa_Refine(a->samples,b->samples,WAVE_WINDOW_FRAMES,
+                                             BSP_AUDIO_NOMINAL_HZ,WAVEFORM_TDOA_SEARCH_FRAMES,
+                                             delta0,&refined,&confidence);
+    const uint32_t refine_ms=(read_tick!=NULL?read_tick():0U)-refine_begin_ms;
+    if(refine_ms>wave_refine_ms_max){wave_refine_ms_max=refine_ms;}
+    if(!refine_ok)
     {Increment(&wave_low_corr);Increment(&wave_refine_reject);return false;}
     *delta_ns=refined;
     Increment(&wave_refine_ok);
@@ -442,7 +458,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     }
     const uint16_t wire_length=packet->tot_len;
     if(wire_length!=SOUND_EVENT_WIRE_V1_BYTES && wire_length!=SOUND_EVENT_WIRE_V2_BYTES &&
-       wire_length!=SOUND_EVENT_WIRE_BYTES)
+       wire_length!=SOUND_EVENT_WIRE_V3_BYTES && wire_length!=SOUND_EVENT_WIRE_BYTES)
     {Increment(&rx_bad);pbuf_free(packet);return;}
     uint8_t data[SOUND_EVENT_WIRE_BYTES];
     if(pbuf_copy_partial(packet,data,wire_length,0)!=wire_length)
@@ -529,7 +545,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     SoundPair_SetTdoaRefiner(&pair_manager,RefinePairTdoa);
     ClearWaveforms();
     wave_tx_ok=wave_tx_err=wave_rx_ok=wave_rx_bad=wave_refine_ok=wave_refine_reject=0U;
-    wave_no_local=wave_no_remote=wave_stale=wave_low_corr=0U;
+    wave_no_local=wave_no_remote=wave_stale=wave_low_corr=wave_refine_ms_max=0U;
     last_bind_ms=now_ms-1000U;last_state_ms=now_ms;
     tx_ok=tx_err=rx_ok=rx_bad=foreign=init_errors=0U;
     result_tx_ok=result_tx_err=result_rx_ok=result_rx_bad=0U;
@@ -836,9 +852,10 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             "$SOUND_WAVE_STATE,TX=%" PRIu32 ",TX_ERR=%" PRIu32 ",RX=%" PRIu32
             ",RX_BAD=%" PRIu32 ",REFINE=%" PRIu32 ",REJECT=%" PRIu32
             ",NOLOCAL=%" PRIu32 ",NOREMOTE=%" PRIu32 ",STALE=%" PRIu32
-            ",LOWCORR=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",wave_tx_ok,wave_tx_err,
-            wave_rx_ok,wave_rx_bad,wave_refine_ok,wave_refine_reject,wave_no_local,
-            wave_no_remote,wave_stale,wave_low_corr));
+            ",LOWCORR=%" PRIu32 ",REF_MS=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",
+            wave_tx_ok,wave_tx_err,wave_rx_ok,wave_rx_bad,wave_refine_ok,
+            wave_refine_reject,wave_no_local,wave_no_remote,wave_stale,
+            wave_low_corr,wave_refine_ms_max));
         emit(line,snprintf(line,sizeof line,
             "$MEASURE_RESULT_STATE,TX_OK=%" PRIu32 ",TX_ERR=%" PRIu32
             ",RX_OK=%" PRIu32 ",RX_BAD=%" PRIu32 ",ACK_TX=%" PRIu32
