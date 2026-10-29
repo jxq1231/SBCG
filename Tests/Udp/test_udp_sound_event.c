@@ -23,7 +23,10 @@ static struct pbuf fake_pbuf;
 static ip_addr_t peer_ip;
 static udp_recv_fn receive_cb;
 static void *receive_arg;
-static unsigned char sent[RANGING_STATUS_WIRE_BYTES];
+/** 发送缓冲需容纳RST2/温度等小包和WFR1波形包(24+512*2=1048字节)。 */
+static unsigned char sent[1200];
+static unsigned char wave_sent[1048];
+static unsigned int wave_sends;
 static unsigned char rx_payload[SOUND_EVENT_WIRE_BYTES];
 static unsigned int sends, allocs, frees;
 static SoundPairResult paired;
@@ -52,7 +55,12 @@ err_t pbuf_take(struct pbuf *p, const void *data, u16_t len)
 { assert(p==&fake_pbuf); memcpy(p->payload,data,len); return ERR_OK; }
 u8_t pbuf_free(struct pbuf *p) { (void)p; ++frees; return 1U; }
 err_t udp_sendto(struct udp_pcb *p, struct pbuf *buf, const ip_addr_t *dest, u16_t port)
-{ (void)p;(void)buf;(void)dest;assert(port==5009U); ++sends; return ERR_OK; }
+{
+    (void)p;(void)dest;assert(port==5009U); ++sends;
+    if (buf->tot_len == sizeof wave_sent)
+    { memcpy(wave_sent, buf->payload, sizeof wave_sent); ++wave_sends; }
+    return ERR_OK;
+}
 u16_t pbuf_copy_partial(const struct pbuf *p, void *data, u16_t len, u16_t offset)
 { assert(p!=NULL); assert(offset==0U && len<=p->tot_len); memcpy(data,(const uint8_t*)p->payload,len); return len; }
 static void Log(const char *line,int length) { (void)line;(void)length; }
@@ -378,6 +386,61 @@ static void TestPairingLimits(const BoardIdentityProfile *profile)
            snap.rejected==2U && rx_bad==1U);
 }
 
+
+/**
+ * @brief   验证B板按事件帧+512从捕获储备截取波形窗口并编码WFR1包。
+ * @return  无返回值；窗口样本与时间戳不符时断言失败。
+ * @note    合成PCM覆盖raw_first+384..+1280；事件帧比raw_first大22帧，
+ *          用于锁定local=128-(raw_first-frame)的方向，防止再次把符号写反。
+ */
+static void TestWaveWindowCut(void)
+{
+    BoardIdentityProfile profile;
+    memset(&profile, 0, sizeof profile);
+    profile.role = BOARD_ROLE_B;
+    profile.peer_ip[0] = 192U; profile.peer_ip[1] = 168U;
+    profile.peer_ip[2] = 10U; profile.peer_ip[3] = 1U;
+    assert(UDPSoundEvent_Init(1000U, &profile, Tick, Log));
+    UDPSoundEvent_SetTimeDomain(1U);
+    tick_ms = 1000U;
+    UDPSoundEvent_Process(1000U);
+    static int16_t pcm[CHIRP_CAPTURE_FRAMES];
+    for (uint16_t i = 0U; i < CHIRP_CAPTURE_FRAMES; ++i)
+    { pcm[i] = (int16_t)((int32_t)(i % 2000U) - 1000); }
+    ChirpCaptureSlice slice = {0};
+    slice.samples = pcm;
+    slice.frames = CHIRP_CAPTURE_FRAMES;
+    slice.session = 1U;
+    slice.first_frame = 1000000U;
+    slice.hint_frame = 1000192U;
+    slice.raw_first_frame = 1000050U;
+    UDPSoundEvent_OnCapture(&slice);
+    SoundEventRecord event = {0};
+    event.valid = true;
+    event.type = SOUND_EVENT_CHIRP;
+    event.quality = 80U;
+    event.side = SOUND_SIDE_B;
+    event.time_domain = 1U;
+    event.session = 1U;
+    event.sequence = 7U;
+    event.time_ns = 1000000000U;
+    event.frame = 1000072U; /* raw_first+22，与实测事件帧关系一致。 */
+    event.fraction_q16 = 0x4000U;
+    wave_sends = 0U;
+    tick_ms = 1100U;
+    assert(UDPSoundEvent_Send(tick_ms, &event));
+    assert(wave_sends == 1U);
+    assert(memcmp(wave_sent, "WFR1", 4U) == 0);
+    assert(wave_sent[4] == 1U && wave_sent[5] == (unsigned char)SOUND_SIDE_B);
+    assert(((uint16_t)wave_sent[20] << 8U | wave_sent[21]) == 512U);
+    assert(((uint32_t)wave_sent[8] << 24U | (uint32_t)wave_sent[9] << 16U |
+            (uint32_t)wave_sent[10] << 8U | wave_sent[11]) == 7U);
+    uint64_t start_ns = 0U;
+    for (uint8_t i = 0U; i < 8U; ++i) { start_ns = (start_ns << 8U) | wave_sent[12U + i]; }
+    assert(start_ns == UINT64_C(1010661458));
+    const uint16_t expected_offset = (uint16_t)(event.frame + 512U - slice.first_frame);
+    assert(memcmp(wave_sent + 24U, pcm + expected_offset, 1024U) == 0);
+}
 /** @brief 运行真实UDP集成场景；无参数，成功返回0，失败由断言终止。 */
 int main(void)
 {
@@ -450,6 +513,7 @@ int main(void)
     TestExpiryAndWrap(&profile);
     TestDomainBoundary(&profile);
     TestPairingLimits(&profile);
+    TestWaveWindowCut();
     puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;
 }

@@ -165,14 +165,15 @@ static bool FindCapture(const SoundEventRecord *event,const WaveCapture **captur
         const int64_t delta=(int64_t)candidate->first_frame-(int64_t)event->frame;
         const int64_t magnitude=delta<0?-delta:delta;
         if(magnitude>(int64_t)WAVE_CAPTURE_MATCH_FRAMES)continue;
-        const int64_t offset=(int64_t)WAVE_WINDOW_OFFSET+delta-WAVE_RESERVOIR_OFFSET;
+        /* 储备从raw_first+384开始，窗口从事件帧+512开始；local=128−(raw_first−frame)。 */
+        const int64_t offset=(int64_t)WAVE_WINDOW_OFFSET-delta-WAVE_RESERVOIR_OFFSET;
         if(offset<0 || offset+(int64_t)WAVE_WINDOW_FRAMES>(int64_t)WAVE_RESERVOIR_FRAMES)
         {continue;}
         if(best==NULL || magnitude<best_gap){best=candidate;best_gap=magnitude;}
     }
     if(best==NULL)return false;
     *capture=best;
-    *local=(int64_t)WAVE_WINDOW_OFFSET+((int64_t)best->first_frame-(int64_t)event->frame)
+    *local=(int64_t)WAVE_WINDOW_OFFSET-((int64_t)best->first_frame-(int64_t)event->frame)
            -WAVE_RESERVOIR_OFFSET;
     return true;
 }
