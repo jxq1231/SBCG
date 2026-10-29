@@ -1,0 +1,124 @@
+<?xml version='1.0' encoding='utf-8'?>
+<TextDatabase xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="texts.xsd" Version="4.26.1">
+  <Languages>
+    <Language Id="GB" />
+  </Languages>
+  <Texts>
+    <TextGroup Id="Status">
+      <Text Id="T_BRAND" Alignment="Left" TypographyId="Font20">
+        <Translation Language="GB">SBCG</Translation>
+      </Text>
+      <Text Id="T_ROLETEXT" Alignment="Left" TypographyId="Font14">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_ROLETEXT" Alignment="Left" TypographyId="Font14">
+        <Translation Language="GB">UNKNOWN BOARD</Translation>
+      </Text>
+      <Text Id="T_HEADER" Alignment="Left" TypographyId="Font12">
+        <Translation Language="GB">SYSTEM STATUS</Translation>
+      </Text>
+      <Text Id="T_DISTANCETITLE" Alignment="Left" TypographyId="Font12">
+        <Translation Language="GB">DISTANCE</Translation>
+      </Text>
+      <Text Id="T_DISTANCETEXT" Alignment="Left" TypographyId="Font32">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_DISTANCETEXT" Alignment="Left" TypographyId="Font32">
+        <Translation Language="GB">-- M</Translation>
+      </Text>
+      <Text Id="T_DIRECTIONTEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_DIRECTIONTEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">DIR --</Translation>
+      </Text>
+      <Text Id="T_QUALITYTEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_QUALITYTEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">QUALITY --</Translation>
+      </Text>
+      <Text Id="T_WAITING" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">WAITING FOR MEASUREMENT</Translation>
+      </Text>
+      <Text Id="T_SYNCTITLE" Alignment="Left" TypographyId="Font12">
+        <Translation Language="GB">CLOCK / SYNC</Translation>
+      </Text>
+      <Text Id="T_SYNCTEXT" Alignment="Left" TypographyId="Font18">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_SYNCTEXT" Alignment="Left" TypographyId="Font18">
+        <Translation Language="GB">UNKNOWN</Translation>
+      </Text>
+      <Text Id="T_OFFSETTEXT" Alignment="Left" TypographyId="Font14">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_OFFSETTEXT" Alignment="Left" TypographyId="Font14">
+        <Translation Language="GB">OFFSET -- US</Translation>
+      </Text>
+      <Text Id="T_PRECISION" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">EXT: NOT VERIFIED</Translation>
+      </Text>
+      <Text Id="T_NETWORKTITLE" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">NETWORK</Translation>
+      </Text>
+      <Text Id="T_NETWORKTEXT" Alignment="Left" TypographyId="Font14">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_NETWORKTEXT" Alignment="Left" TypographyId="Font14">
+        <Translation Language="GB">UNKNOWN</Translation>
+      </Text>
+      <Text Id="T_SOURCETEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_SOURCETEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">TEMP AUTO</Translation>
+      </Text>
+      <Text Id="T_TEMPERATURETEXT" Alignment="Left" TypographyId="Font18">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_TEMPERATURETEXT" Alignment="Left" TypographyId="Font18">
+        <Translation Language="GB">-- C</Translation>
+      </Text>
+      <Text Id="T_SPEEDTEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_SPEEDTEXT" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">-- M/S</Translation>
+      </Text>
+      <Text Id="T_AUDIOTITLE" Alignment="Left" TypographyId="Font10">
+        <Translation Language="GB">AUDIO</Translation>
+      </Text>
+      <Text Id="T_AUDIOTEXT" Alignment="Left" TypographyId="Font18">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_AUDIOTEXT" Alignment="Left" TypographyId="Font18">
+        <Translation Language="GB">UNKNOWN</Translation>
+      </Text>
+      <Text Id="T_DETAILTEXT" Alignment="Left" TypographyId="Font9">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_DETAILTEXT" Alignment="Left" TypographyId="Font9">
+        <Translation Language="GB">DROP -- ERR --</Translation>
+      </Text>
+      <Text Id="T_EVENTSTEXT" Alignment="Left" TypographyId="Font9">
+        <Translation Language="GB">&lt;&gt;</Translation>
+      </Text>
+      <Text Id="I_EVENTSTEXT" Alignment="Left" TypographyId="Font9">
+        <Translation Language="GB">EVENTS --</Translation>
+      </Text>
+      <Text Id="T_FOOTER" Alignment="Left" TypographyId="Font9">
+        <Translation Language="GB">LOCAL MODEL / EXTERNAL PRECISION UNVERIFIED</Translation>
+      </Text>
+    </TextGroup>
+  </Texts>
+  <Typographies>
+    <Typography Id="Font9" Font="verdana.ttf" Size="9" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+    <Typography Id="Font10" Font="verdana.ttf" Size="10" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+    <Typography Id="Font12" Font="verdana.ttf" Size="12" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+    <Typography Id="Font14" Font="verdana.ttf" Size="14" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+    <Typography Id="Font18" Font="verdana.ttf" Size="18" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+    <Typography Id="Font20" Font="verdana.ttf" Size="20" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+    <Typography Id="Font32" Font="verdana.ttf" Size="32" Bpp="4" IsVector="no" Direction="LTR" FallbackCharacter="?" WildcardCharacters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:+-/_?" />
+  </Typographies>
+</TextDatabase>

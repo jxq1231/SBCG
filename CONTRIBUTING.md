@@ -1,20 +1,20 @@
 # 协作开发指南
 
-本指南用于两板声波测距项目的团队沟通。工程修改还须遵循[AGENTS.md](AGENTS.md)，硬件资源以[Hardware_Resources.md](Docs/Hardware_Resources.md)为约定。
+本指南用于声波测距项目协作。先读[文档入口](Docs/README.md)和[完整路线](Docs/Project_Roadmap.md)；工程修改遵循[AGENTS.md](AGENTS.md)，硬件目标以[Hardware_Resources.md](Docs/Hardware_Resources.md)为参考。当前只推进本板开发，不要求本轮检查第二板；最终双板课程验收仍须落实。
 
 ## 分支与提交
 
 - `master`：共享文档和已验证的软件增量；查看[Project_State.md](Docs/Project_State.md)了解固件验收状态，不把分支名当作硬件验证证明。
 - `jxq/<topic>`：本仓库维护者的开发或审阅分支。一次分支聚焦一个目标；其他成员的前缀由团队约定。
-- `jxq/m0-clock-review`：200 MHz/HSE Bypass生成快照，编译通过、实物待验收，保持草稿PR；不是M0.1功能完成提交。
+- `jxq/m0-clock-review`：当前单板开发/审阅分支，已推进至M3.2.2实物验收；具体验证范围以Project_State为准，不沿用“仅编译通过”的旧描述。
 
-建议开始顺序：
+先确认团队集成基线；以下以当前开发分支为例（不要假定master已含最新实验）：
 
 ```powershell
 git status
 git fetch origin
-git switch master
-git pull --ff-only origin master
+git switch jxq/m0-clock-review
+git pull --ff-only origin jxq/m0-clock-review
 git switch -c jxq/your-topic
 ```
 
@@ -28,7 +28,7 @@ fix: correct signed timestamp calculation
 docs: record clock startup observations
 ```
 
-本仓库维护者提交身份为`jxq`，使用本人确认的邮箱；其他贡献者使用真实身份，不冒用他人身份，不添加工具生成署名。一次提交只包含本次增量，暂存前检查`git status`和`git diff`。
+本仓库提交按AGENTS.md使用仓库本地身份`jxq`及用户确认的邮箱，不修改全局身份、不编造邮箱、不添加工具生成署名。一次提交只包含本次增量，暂存前检查`git status`和`git diff`。
 
 ## 本机工具配置
 

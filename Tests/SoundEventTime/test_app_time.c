@@ -1,0 +1,157 @@
+/** @file test_app_time.c @brief 真实App入口单次消费/双路分发/DHT门控及快照后刷新时间的主机验证。 */
+#define main unused_app_main
+#include "../App/test_app_main.c"
+#include "Detector/chirp_service.h"
+#undef main
+#include "Detector/sound_event_time.h"
+#include "Detector/sound_detector_service.h"
+#include "Network/udp_sound_event.h"
+#include "Measure/measurement_result.h"
+#include "Measure/measurement_gate.h"
+#include "Calibration/calibration.h"
+#include "Measure/result_exchange_state.h"
+#include "Detector/standard_sequence.h"
+#include "Sync/time_domain.h"
+#include "BSP/bsp_board_identity.h"
+#include "Sync/time_sync.h"
+static BoardIdentityProfile identity;
+static const BoardIdentityProfile *current_identity;
+const BoardIdentityProfile *BSP_BoardIdentity_Get(void){return current_identity;}
+bool TimeSync_Deinit(void){return true;}
+bool TimeSync_Init(uint32_t now,const BoardIdentityProfile *p,uint32_t(*tick)(void),void(*log)(const char*,int)){assert(now==tick_ms && p && tick && log);return true;}
+void TimeSync_Process(uint32_t now,bool allowed){assert(now==tick_ms && allowed==!temperature_low);}
+static unsigned takes,model_receives,event_receives,event_processes,event_inits;
+static AudioTimeAnchorObservation delivered;
+/** @brief 本轮唯一取出，复制给out并累计；无DMA或PTP读取，返回true。 */
+bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){assert(!temperature_low && out);++takes;delivered=(AudioTimeAnchorObservation){.sequence=takes,.captured_ms=tick_ms,.anchor={.valid=true,.session=1}};*out=delivered;return true;}
+/** @brief 旧观察器取得同一副本，不应再消费单槽；now/out为App当前交付，无返回值。 */
+void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation *out){assert(!temperature_low && now==tick_ms && memcmp(out,&delivered,sizeof delivered)==0);++model_receives;}
+/** @brief 检查初始化顺序；log为非NULL前台出口，无返回值。 */
+void SoundEventTime_Init(void(*log)(const char*,int)){assert(map_inits && log);++event_inits;}
+/** @brief 新查询器收到与旧观察器相同副本；now/out来自App，无返回值。 */
+void SoundEventTime_Observe(uint32_t now,const AudioTimeAnchorObservation *out){assert(!temperature_low && now==tick_ms && model_receives==takes && memcmp(out,&delivered,sizeof delivered)==0);++event_receives;}
+/** @brief 模拟快照与DMA IRQ一起推进tick；out为输出，无返回值。 */
+void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out){*out=(BSP_AudioSnapshot){.session=1,.running=true,.last_callback_ms=++tick_ms};}
+/** @brief now必须在快照后读取，snapshot为最新副本；无返回值。 */
+void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot *snapshot){assert(!temperature_low && now==tick_ms && snapshot->last_callback_ms==now && takes==event_receives);++event_processes;}
+/** @brief App测试桩：无待取成功TOA事件，返回false。 */
+bool SoundEventTime_TakeEvent(SoundEventTimeEvent *event){if(event)memset(event,0,sizeof *event);return false;}
+bool SoundDetectorService_GetToaCandidates(uint32_t sequence,
+    SoundDetectorServiceToaCandidates *out)
+{
+    (void)sequence;
+    if(out!=NULL)out->count=0U;
+    return false;
+}
+/** @brief App测试桩：初始化事件UDP不访问网络。 */
+bool UDPSoundEvent_Init(uint32_t now,const BoardIdentityProfile *p,uint32_t(*tick)(void),UDPSoundEvent_Log log){(void)now;(void)p;(void)tick;(void)log;return true;}
+/** @brief App测试桩：不推进事件UDP。 */
+void UDPSoundEvent_Process(uint32_t now){(void)now;}
+/** @brief App测试桩：接收当前有效域或0撤域；id仅为标量，无返回值。 */
+void UDPSoundEvent_SetTimeDomain(uint32_t id){(void)id;}
+/** @brief App测试桩：不发送事件UDP。 */
+bool UDPSoundEvent_Send(uint32_t now,const SoundEventRecord *event){(void)now;(void)event;return true;}
+void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice){(void)slice;}
+/** @brief App测试桩：清空权威测量缓存。 */
+void MeasurementResult_Init(uint32_t now){(void)now;}
+/** @brief App测试桩：不生成权威测量。 */
+bool MeasurementResult_PublishPair(const SoundPairResult *pair,const TemperatureSnapshot *temperature,uint32_t now){(void)pair;(void)temperature;(void)now;return false;}
+/** @brief App测试桩：不安装结果消费者。 */
+void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink){(void)sink;}
+
+
+/** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
+void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+
+bool TemperatureService_SetRemote(uint32_t now,int32_t temperature_milli_c,
+                                  uint32_t sound_speed_mm_s,uint32_t version,bool manual)
+{(void)now;(void)temperature_milli_c;(void)sound_speed_mm_s;(void)version;(void)manual;return true;}
+
+/** @brief App测试桩：标准序列初始化不访问硬件。 */
+bool StandardSequence_Init(StandardSequence *s,const StandardSequenceConfig *c){(void)s;(void)c;return true;}
+/** @brief App测试桩：不检测周期序列。 */
+bool StandardSequence_Push(StandardSequence *s,uint64_t t,uint8_t q){(void)s;(void)t;(void)q;return false;}
+/** @brief App测试桩：清零序列快照。 */
+void StandardSequence_Get(const StandardSequence *s,StandardSequenceSnapshot *o){(void)s;if(o)memset(o,0,sizeof *o);}
+
+/** @brief App测试桩：无同步快照，共同域无效。 */
+void TimeSync_GetSnapshot(uint32_t now,TimeSyncSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
+/** @brief App测试桩：清空共同时间域。 */
+void TimeDomain_Init(void){}
+/** @brief App测试桩：所有同步快照均不产生共同域。 */
+void TimeDomain_Update(const TimeSyncSnapshot *sync){(void)sync;}
+/** @brief App测试桩：共同时间域无效。 */
+void TimeDomain_Get(TimeDomainSnapshot *out){if(out){out->valid=false;out->id=0U;}}
+
+/** @brief App测试桩：安装权威结果消费者。 */
+void UDPSoundEvent_SetMeasurementSink(UDPSoundEvent_MeasurementSink sink){(void)sink;}
+bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out){(void)out;return false;}
+
+/** @brief App测试桩：设置A域令牌。 */
+void TimeDomain_InitWithId(uint32_t id){(void)id;}
+/** @brief App测试桩：采用对端域令牌。 */
+void TimeDomain_AdoptPeerId(uint32_t id){(void)id;}
+/** @brief App测试桩：安装对端事件消费者。 */
+void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink){(void)sink;}
+
+/** @brief App测试桩：安装共同域消费者。 */
+void UDPSoundEvent_SetDomainSink(UDPSoundEvent_DomainSink sink){(void)sink;}
+/** @brief App测试桩：发送共同域REQ。 */
+bool UDPSoundEvent_SendDomainRequest(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
+/** @brief App测试桩：发送共同域ACK。 */
+bool UDPSoundEvent_SendDomainAck(uint32_t now,uint32_t token){(void)now;(void)token;return true;}
+/** @brief App测试桩：接收对端REQ。 */
+bool TimeDomain_OnPeerRequest(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
+/** @brief App测试桩：接收对端ACK。 */
+bool TimeDomain_OnPeerAck(uint32_t token,uint32_t now){(void)token;(void)now;return false;}
+/** @brief App测试桩：域超时检查。 */
+void TimeDomain_Tick(uint32_t now){(void)now;}
+
+/** @brief App测试桩：安装MACK消费者。 */
+void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink){(void)sink;}
+
+void UDPSoundEvent_SetTemperatureSink(UDPSoundEvent_TemperatureSink sink){(void)sink;}
+bool UDPSoundEvent_SendTemperature(uint32_t now,const TemperatureSnapshot *temperature)
+{(void)now;(void)temperature;return true;}
+void UDPSoundEvent_SetRangingStatusSink(UDPSoundEvent_RangingStatusSink sink){(void)sink;}
+void UDPSoundEvent_SetRangingAckSink(UDPSoundEvent_RangingAckSink sink){(void)sink;}
+bool UDPSoundEvent_SendRangingStatus(uint32_t now,const RangingStatusMessage *message){(void)now;(void)message;return false;}
+bool UDPSoundEvent_SendRangingAck(uint32_t now,const RangingStatusAck *ack){(void)now;(void)ack;return false;}
+/** @brief App测试桩：B发送MACK。 */
+bool UDPSoundEvent_SendMeasurementAck(uint32_t now,uint32_t id,uint32_t domain)
+{(void)now;(void)id;(void)domain;return true;}
+
+/** @brief App测试桩：初始化测量门控。 */
+void MeasurementGate_Init(uint32_t now){(void)now;}
+/** @brief App测试桩：提交CHIRP。 */
+void MeasurementGate_OnChirp(uint32_t now,uint32_t session){(void)now;(void)session;}
+/** @brief App测试桩：标准序列形成。 */
+void MeasurementGate_OnSequence(uint32_t now){(void)now;}
+/** @brief App测试桩：记录测量。 */
+bool MeasurementGate_OnMeasurement(uint32_t now){(void)now;return true;}
+/** @brief App测试桩：域失效。 */
+void MeasurementGate_OnDomainInvalid(uint32_t now){(void)now;}
+/** @brief App测试桩：域恢复。 */
+void MeasurementGate_OnDomainValid(uint32_t now){(void)now;}
+/** @brief App测试桩：流失效。 */
+void MeasurementGate_OnStreamInvalid(uint32_t now){(void)now;}
+/** @brief App测试桩：门控周期。 */
+void MeasurementGate_Tick(uint32_t now){(void)now;}
+/** @brief App测试桩：允许发布。 */
+bool MeasurementGate_CanPublish(const MeasurementGateSnapshot *s){(void)s;return true;}
+/** @brief App测试桩：无失效请求。 */
+bool MeasurementGate_TakeInvalidation(void){return false;}
+/** @brief App测试桩：复制空状态。 */
+void MeasurementGate_Get(MeasurementGateSnapshot *out){if(out)memset(out,0,sizeof *out);}
+
+/** @brief App测试桩：初始化标定。 */
+void Calibration_Init(void){}
+/** @brief App测试桩：读取零标定。 */
+void Calibration_Get(CalibrationSnapshot *out){if(out)memset(out,0,sizeof *out);}
+/** @brief App测试桩：设置结果标定。 */
+void MeasurementResult_SetCalibration(int32_t offset,uint16_t version){(void)offset;(void)version;}
+int main(void){memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));current_identity=&identity;
+ Reset(0,true);assert(event_inits==1);assert(write_count==1);tick_ms=1000;App_Process();assert(write_count==2);assert(takes==1 && model_receives==1 && event_receives==1 && event_processes==1);
+ start_low_in_process=true;tick_ms=2000;App_Process();assert(takes==1 && event_processes==1 && write_count==2);
+ start_low_in_process=false;temperature_low=false;tick_ms=3000;App_Process();assert(write_count==3);assert(takes==2 && model_receives==2 && event_receives==2 && event_processes==2);
+ assert(map_calls==0);puts("PASS real App time: sole TakeObservation, identical fanout, DHT gate, fresh snapshot tick");return 0;}
