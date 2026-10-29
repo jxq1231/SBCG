@@ -1,0 +1,93 @@
+{
+  "retrieved_date": "2026-10-25",
+  "filename": "reference_log_sweep_20hz_21khz_15s.wav",
+  "source_title": "Logarithmic Sweep (Chirp) 20 Hz to 21 kHz.wav",
+  "description_url": "https://commons.wikimedia.org/wiki/File:Logarithmic_Sweep_(Chirp)_20_Hz_to_21_kHz.wav",
+  "download_url": "https://upload.wikimedia.org/wikipedia/commons/0/04/Logarithmic_Sweep_%28Chirp%29_20_Hz_to_21_kHz.wav",
+  "author": "Auguste von Herzberg",
+  "license": "CC BY-SA 4.0",
+  "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "modifications": "none; original bytes, local filename changed",
+  "sha256": "ce4458c75670934b8861bdf62e7002e4f8487d174e36a8832a5ac614e364ce39",
+  "byte_count": 1347620,
+  "commons_imageinfo": {
+    "url": "https://upload.wikimedia.org/wikipedia/commons/0/04/Logarithmic_Sweep_%28Chirp%29_20_Hz_to_21_kHz.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Logarithmic_Sweep_(Chirp)_20_Hz_to_21_kHz.wav",
+    "descriptionshorturl": "https://commons.wikimedia.org/w/index.php?curid=75736306",
+    "extmetadata": {
+      "DateTime": {
+        "value": "2019-01-10 13:06:04",
+        "source": "mediawiki-metadata",
+        "hidden": ""
+      },
+      "ObjectName": {
+        "value": "Logarithmic Sweep (Chirp) 20 Hz to 21 kHz",
+        "source": "mediawiki-metadata"
+      },
+      "CommonsMetadataExtension": {
+        "value": 1.2,
+        "source": "extension",
+        "hidden": ""
+      },
+      "Categories": {
+        "value": "Chirp|Self-published work",
+        "source": "commons-categories",
+        "hidden": ""
+      },
+      "Assessments": {
+        "value": "",
+        "source": "commons-categories",
+        "hidden": ""
+      },
+      "ImageDescription": {
+        "value": "Logarithmic Sweep (Chirp) over the frequency band 20 Hz to 21 kHz in a 15 second time span",
+        "source": "commons-desc-page"
+      },
+      "DateTimeOriginal": {
+        "value": "2018-11-15",
+        "source": "commons-desc-page"
+      },
+      "Credit": {
+        "value": "<span class=\"int-own-work\" lang=\"en\">Own work</span>",
+        "source": "commons-desc-page"
+      },
+      "Artist": {
+        "value": "<a href=\"//commons.wikimedia.org/wiki/User:Auguste_von_Herzberg\" title=\"User:Auguste von Herzberg\">Auguste von Herzberg</a>",
+        "source": "commons-desc-page"
+      },
+      "LicenseShortName": {
+        "value": "CC BY-SA 4.0",
+        "source": "commons-desc-page",
+        "hidden": ""
+      },
+      "UsageTerms": {
+        "value": "Creative Commons Attribution-Share Alike 4.0",
+        "source": "commons-desc-page"
+      },
+      "AttributionRequired": {
+        "value": "true",
+        "source": "commons-desc-page",
+        "hidden": ""
+      },
+      "LicenseUrl": {
+        "value": "https://creativecommons.org/licenses/by-sa/4.0",
+        "source": "commons-desc-page"
+      },
+      "Copyrighted": {
+        "value": "True",
+        "source": "commons-desc-page",
+        "hidden": ""
+      },
+      "Restrictions": {
+        "value": "",
+        "source": "commons-desc-page",
+        "hidden": ""
+      },
+      "License": {
+        "value": "cc-by-sa-4.0",
+        "source": "commons-templates",
+        "hidden": ""
+      }
+    }
+  }
+}

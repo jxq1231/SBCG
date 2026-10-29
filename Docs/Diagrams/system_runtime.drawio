@@ -1,0 +1,69 @@
+<mxGraphModel page="1" pageWidth="440" pageHeight="1504" grid="1" gridSize="8" background="#FFFFFF">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="reset" parent="1" vertex="1" value="Reset_Handler&lt;br&gt;startup_stm32f746xx.s" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="64" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge0" parent="1" edge="1" source="reset" target="system" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="system" parent="1" vertex="1" value="SystemInit&lt;br&gt;Core/Src/system_stm32f7xx.c" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="192" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge1" parent="1" edge="1" source="system" target="crt" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="crt" parent="1" vertex="1" value="复制.data / 清零.bss&lt;br&gt;__libc_init_array" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="320" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge2" parent="1" edge="1" source="crt" target="main" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="main" parent="1" vertex="1" value="main: MPU_Config → HAL_Init" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="448" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge3" parent="1" edge="1" source="main" target="clock" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="clock" parent="1" vertex="1" value="SystemClock_Config&lt;br&gt;PeriphCommonClock_Config" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="576" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge4" parent="1" edge="1" source="clock" target="hardware" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="hardware" parent="1" vertex="1" value="GPIO / DMA / USART1 / I2C3&lt;br&gt;LwIP / SAI2初始化" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="704" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge5" parent="1" edge="1" source="hardware" target="init" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="init" parent="1" vertex="1" value="App_Init&lt;br&gt;App/app_main.c" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="832" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge6" parent="1" edge="1" source="init" target="loop" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="loop" parent="1" vertex="1" value="while(1): App_Process" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dcfce7;strokeColor=#15803d;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="960" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge7" parent="1" edge="1" source="loop" target="net" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="net" parent="1" vertex="1" value="MX_LWIP_Process&lt;br&gt;收包 / 超时 / 链路" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dcfce7;strokeColor=#15803d;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="1088" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge8" parent="1" edge="1" source="net" target="services" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="services" parent="1" vertex="1" value="网络/PTP → 温度/命令&lt;br&gt;codec / 音频 / 锚点 / MAP" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dcfce7;strokeColor=#15803d;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="1216" width="376" height="88" as="geometry" />
+    </mxCell>
+    <mxCell id="edge9" parent="1" edge="1" source="services" target="logs" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;entryX=0.5;entryY=0;endArrow=block;strokeColor=#334155;strokeWidth=2;">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="logs" parent="1" vertex="1" value="FlushOneLine&lt;br&gt;随后进入下一轮App_Process" style="rounded=1;html=1;whiteSpace=wrap;fillColor=#dcfce7;strokeColor=#15803d;fontSize=14;fontFamily=Consolas;align=center;verticalAlign=middle;">
+      <mxGeometry x="32" y="1344" width="376" height="88" as="geometry" />
+    </mxCell>
+  </root>
+</mxGraphModel>

@@ -1,0 +1,56 @@
+{
+  "status": "candidate_assets_only_not_hardware_validated",
+  "origin": "locally_synthesized_from_formula_not_extracted_from_download",
+  "sample_rate_hz": 48000,
+  "format": "mono signed PCM16 little-endian WAV",
+  "start_frequency_hz": 2000,
+  "end_frequency_hz_at_50ms_exclusive": 6000,
+  "event_frames": 2400,
+  "event_duration_ms": 50,
+  "fade_frames_each_edge": 48,
+  "playback_event_frames": 2400,
+  "playback_event_duration_ms": 50,
+  "playback_event_definition": "one 50ms linear 2->6kHz chirp per event",
+  "peak_full_scale_limit": 0.5,
+  "playback_event_start_frames": [
+    0,
+    96000,
+    192000,
+    288000,
+    384000,
+    480000,
+    576000,
+    672000,
+    768000,
+    864000
+  ],
+  "template_origin": "frame zero; first sample is zero due to fade, not an energy-threshold onset",
+  "ideal_autocorrelation": {
+    "metric": "max_abs_R_lag_ge_24_samples_div_R_zero; guard=0.5ms; no noise/channel model",
+    "chirp_2_6khz": 0.1260454474138095,
+    "comparison_3khz_tone_same_duration_and_envelope": 0.9945637811100215,
+    "recognition_probability": null
+  },
+  "files": {
+    "chirp_2-6khz_50ms_template.wav": {
+      "channels": 1,
+      "sample_width_bytes": 2,
+      "sample_rate_hz": 48000,
+      "frames": 2400,
+      "duration_s": 0.05,
+      "compression": "NONE",
+      "byte_count": 4844,
+      "sha256": "c37114332a698910e12ac855b47b566df229a3c7ec01414371e32969da3e084d"
+    },
+    "standard_chirp_2-6khz_10x_20s.wav": {
+      "channels": 1,
+      "sample_width_bytes": 2,
+      "sample_rate_hz": 48000,
+      "frames": 960000,
+      "duration_s": 20.0,
+      "compression": "NONE",
+      "byte_count": 1920044,
+      "sha256": "1e84db896c649af205eecf88cd4afeae3c15dba81c19e53c658e160394762235"
+    }
+  }
+}

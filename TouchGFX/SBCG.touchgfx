@@ -1,0 +1,539 @@
+{
+  "Application": {
+    "Screens": [
+      {
+        "Name": "Screen1",
+        "Components": [
+          {
+            "Type": "Box",
+            "Name": "background",
+            "X": 0,
+            "Y": 0,
+            "Width": 480,
+            "Height": 272,
+            "Color": {
+              "Red": 11,
+              "Green": 18,
+              "Blue": 32
+            }
+          },
+          {
+            "Type": "Box",
+            "Name": "measurePanel",
+            "X": 12,
+            "Y": 46,
+            "Width": 216,
+            "Height": 116,
+            "Color": {
+              "Red": 23,
+              "Green": 34,
+              "Blue": 52
+            }
+          },
+          {
+            "Type": "Box",
+            "Name": "syncPanel",
+            "X": 240,
+            "Y": 46,
+            "Width": 228,
+            "Height": 116,
+            "Color": {
+              "Red": 23,
+              "Green": 34,
+              "Blue": 52
+            }
+          },
+          {
+            "Type": "Box",
+            "Name": "networkPanel",
+            "X": 12,
+            "Y": 174,
+            "Width": 140,
+            "Height": 72,
+            "Color": {
+              "Red": 23,
+              "Green": 34,
+              "Blue": 52
+            }
+          },
+          {
+            "Type": "Box",
+            "Name": "tempPanel",
+            "X": 164,
+            "Y": 174,
+            "Width": 140,
+            "Height": 72,
+            "Color": {
+              "Red": 23,
+              "Green": 34,
+              "Blue": 52
+            }
+          },
+          {
+            "Type": "Box",
+            "Name": "audioPanel",
+            "X": 316,
+            "Y": 174,
+            "Width": 152,
+            "Height": 72,
+            "Color": {
+              "Red": 23,
+              "Green": 34,
+              "Blue": 52
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "brand",
+            "X": 14,
+            "Y": 8,
+            "Width": 90,
+            "Height": 32,
+            "TextId": "T_BRAND",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 45,
+              "Green": 212,
+              "Blue": 191
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "roleText",
+            "X": 110,
+            "Y": 14,
+            "Width": 180,
+            "Height": 24,
+            "TextId": "T_ROLETEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_ROLETEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "header",
+            "X": 319,
+            "Y": 16,
+            "Width": 150,
+            "Height": 20,
+            "TextId": "T_HEADER",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "distanceTitle",
+            "X": 24,
+            "Y": 53,
+            "Width": 190,
+            "Height": 20,
+            "TextId": "T_DISTANCETITLE",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "distanceText",
+            "X": 24,
+            "Y": 76,
+            "Width": 190,
+            "Height": 44,
+            "TextId": "T_DISTANCETEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_DISTANCETEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "directionText",
+            "X": 24,
+            "Y": 121,
+            "Width": 92,
+            "Height": 18,
+            "TextId": "T_DIRECTIONTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            },
+            "Wildcard1": {
+              "TextId": "I_DIRECTIONTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "qualityText",
+            "X": 116,
+            "Y": 121,
+            "Width": 100,
+            "Height": 18,
+            "TextId": "T_QUALITYTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            },
+            "Wildcard1": {
+              "TextId": "I_QUALITYTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "waiting",
+            "X": 24,
+            "Y": 143,
+            "Width": 200,
+            "Height": 18,
+            "TextId": "T_WAITING",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "syncTitle",
+            "X": 252,
+            "Y": 53,
+            "Width": 200,
+            "Height": 20,
+            "TextId": "T_SYNCTITLE",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "syncText",
+            "X": 252,
+            "Y": 79,
+            "Width": 208,
+            "Height": 29,
+            "TextId": "T_SYNCTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_SYNCTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "offsetText",
+            "X": 252,
+            "Y": 112,
+            "Width": 208,
+            "Height": 23,
+            "TextId": "T_OFFSETTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_OFFSETTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "precision",
+            "X": 252,
+            "Y": 143,
+            "Width": 208,
+            "Height": 18,
+            "TextId": "T_PRECISION",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 251,
+              "Green": 191,
+              "Blue": 36
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "networkTitle",
+            "X": 24,
+            "Y": 179,
+            "Width": 115,
+            "Height": 18,
+            "TextId": "T_NETWORKTITLE",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "networkText",
+            "X": 24,
+            "Y": 202,
+            "Width": 125,
+            "Height": 28,
+            "TextId": "T_NETWORKTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_NETWORKTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "sourceText",
+            "X": 176,
+            "Y": 179,
+            "Width": 124,
+            "Height": 18,
+            "TextId": "T_SOURCETEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            },
+            "Wildcard1": {
+              "TextId": "I_SOURCETEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "temperatureText",
+            "X": 176,
+            "Y": 198,
+            "Width": 124,
+            "Height": 29,
+            "TextId": "T_TEMPERATURETEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_TEMPERATURETEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "speedText",
+            "X": 176,
+            "Y": 226,
+            "Width": 124,
+            "Height": 18,
+            "TextId": "T_SPEEDTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_SPEEDTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "audioTitle",
+            "X": 328,
+            "Y": 179,
+            "Width": 126,
+            "Height": 18,
+            "TextId": "T_AUDIOTITLE",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "audioText",
+            "X": 328,
+            "Y": 197,
+            "Width": 130,
+            "Height": 28,
+            "TextId": "T_AUDIOTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 232,
+              "Green": 240,
+              "Blue": 248
+            },
+            "Wildcard1": {
+              "TextId": "I_AUDIOTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "detailText",
+            "X": 328,
+            "Y": 221,
+            "Width": 130,
+            "Height": 15,
+            "TextId": "T_DETAILTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            },
+            "Wildcard1": {
+              "TextId": "I_DETAILTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "eventsText",
+            "X": 328,
+            "Y": 235,
+            "Width": 130,
+            "Height": 14,
+            "TextId": "T_EVENTSTEXT",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            },
+            "Wildcard1": {
+              "TextId": "I_EVENTSTEXT",
+              "UseBuffer": true,
+              "BufferSize": 40
+            }
+          },
+          {
+            "Type": "TextArea",
+            "Name": "footer",
+            "X": 14,
+            "Y": 253,
+            "Width": 458,
+            "Height": 17,
+            "TextId": "T_FOOTER",
+            "TextRotation": "0",
+            "Color": {
+              "Red": 146,
+              "Green": 164,
+              "Blue": 184
+            }
+          }
+        ],
+        "Interactions": []
+      }
+    ],
+    "CustomContainerDefinitions": [],
+    "Name": "SBCG",
+    "Resolution": {
+      "Width": 480,
+      "Height": 272
+    },
+    "SelectedColorDepth": 16,
+    "StartupScreenName": "Screen1",
+    "SelectedStartupLanguage": "GB",
+    "TouchGfxPath": "../Middlewares/ST/touchgfx",
+    "UIPath": ".",
+    "ApplicationTemplateName": "SBCG",
+    "ApplicationTemplateVersion": "2.0.0",
+    "ApplicationTemplateDescription": "SBCG CubeMX status page",
+    "AvailableColorDepths": [
+      16
+    ],
+    "AvailableLCDs": {
+      "16": "LCD16bpp"
+    },
+    "AvailableSections": [
+      "ExtFlashSection",
+      "IntFlashSection"
+    ],
+    "AvailableResolutions": [
+      {
+        "Width": 480,
+        "Height": 272
+      }
+    ],
+    "PhysicalButtons": [],
+    "GenerateAssetsCommand": "make -f simulator/gcc/Makefile assets -j8",
+    "PostGenerateCommand": "",
+    "CompileSimulatorCommand": "make -f simulator/gcc/Makefile -j8",
+    "RunSimulatorCommand": "build\\bin\\simulator.exe",
+    "CompileTargetCommand": "",
+    "FlashTargetCommand": "",
+    "LandscapeSkinX": 0,
+    "LandscapeSkinY": 0,
+    "PortraitSkinX": 0,
+    "PortraitSkinY": 0,
+    "DisplayOrientation": "Landscape",
+    "AdditionalFeatures": [],
+    "PostGenerateTargetCommand": "",
+    "Family": "STM32F7",
+    "SubFamily": "STM32F7x6",
+    "Platform": "m7",
+    "Toolchain": "CMake",
+    "ProjectFile": "../SBCG.ioc",
+    "OptionalComponentsRoot": "../Middlewares/ST/touchgfx_components",
+    "OptionalComponents": [],
+    "PostGenerateSimulatorCommand": ""
+  },
+  "Version": "4.26.1",
+  "CreatedBy": "4.26.1"
+}
