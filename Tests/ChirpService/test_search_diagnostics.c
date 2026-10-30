@@ -100,8 +100,8 @@ int main(void)
  ChirpService_GetSnapshot(&s);CHECK(s.report_emitted==1U && s.report_dropped==0U);
  for(unsigned kind=1U;kind<=2U;++kind){Reset();signal_kind=kind;Block(0U,2000U,true);Finish();
   CHECK(events==0U && reports==1U && strstr(search_line,",MATCH=0,WHY=LOW_CORR,")!=NULL);IndependentPeak(kind);}
- /* 两个短强脉冲满足64点能量门控，但2400点窗口去直流RMS低于64。 */
- static int16_t mono[8192];Reset();memset(mono,0,sizeof mono);mono[2000]=mono[2064]=1200;
+ /* 两个短强脉冲满足当前64点能量门控(on=256)，但2400点窗口去直流RMS低于64。 */
+ static int16_t mono[8192];Reset();memset(mono,0,sizeof mono);mono[2000]=mono[2064]=2112;
  StageMono(mono);Finish();CHECK(events==0U && reports==1U && strstr(search_line,",WHY=LOW_RMS,")!=NULL);
  CHECK(Field(search_line,",LR=")==Field(search_line,",V=") && Field(search_line,",V=")==257U);Counts(search_line);
  /* 原始峰和有效匹配独立：低幅精确模板先到，与后续高幅窗同分时保留首峰。 */

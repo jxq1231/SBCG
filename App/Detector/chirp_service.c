@@ -19,7 +19,9 @@
 #define JOB_AGE_MS 1500U
 #define STREAM_AGE_MS 1000U
 #define STATE_PERIOD_MS 1000U
-static const SoundDetectorConfig gate_config={64U,128U,64U,2U,8U,24000U};
+/* 门限与SoundDetectorService_DefaultConfig一致：环境底噪约100-160 PCM RMS时，
+   off=64以下永远等不到静音窗，一次触发后不再布防；on=256/off=128仍远低于2-6kHz扫频。 */
+static const SoundDetectorConfig gate_config={64U,256U,128U,2U,8U,24000U};
 /* CPU独占普通BSS，链接检查强制不进入0x20010000的DMA保留区。 */
 static int16_t copied[CHIRP_SERVICE_HISTORY_FRAMES+BSP_AUDIO_HALF_FRAMES];
 /* 活动任务完整输入独立于下一块复制，防止慢调度时搜索半途丢失数据。 */
