@@ -1,13 +1,16 @@
 /**
  * @file        FrontendHeap.hpp
  * @brief       声明TouchGFX前端单例及编译期确定的页面、Presenter和过渡存储。
- * @details     类型列表选出最大对象尺寸，各Partition固定容纳一个对象；模型与应用作为成员持有。
- * @note        getInstance使用函数静态实例，返回借用引用；这里不为每帧动态申请存储。
+ * @details     类型列表选出最大对象尺寸，各Partition固定容纳一个对象；完整前端存于专用SDRAM NOLOAD区域。
+ * @note        首次getInstance必须晚于显示SDRAM READY；显式清零后原位构造，不申请运行堆，不接触DMA内存。
  */
 #ifndef FRONTENDHEAP_HPP
 #define FRONTENDHEAP_HPP
 
 #include <gui_generated/common/FrontendHeapBase.hpp>
+#include <cstdint>
+#include <cstring>
+#include <new>
 
 /** @brief 固定前端存储单例；本页之外的用户自定义类型列表当前为空。 */
 class FrontendHeap : public FrontendHeapBase
@@ -59,14 +62,22 @@ public:
     typedef touchgfx::meta::select_type_maxsize< CombinedTransitionTypes >::type MaxTransitionType;
 
     /**
-     * @brief 返回首次调用时构造的函数静态前端存储。
+     * @brief 显示SDRAM就绪后首次调用，清零并原位构造定容前端。
      * @return 静态实例的借用引用，覆盖后续前端使用期，调用方不得销毁。
-     * @note 首次构造会建立模型、应用并请求起始页面；后续调用返回同一实例。
+     * @note 仅由UI服务在BSP显示READY后通过touchgfx_init前台调用；NOLOAD数据不能依赖启动BSS清零。
+     *       独立链接区域位于两个帧缓冲之后，链接器限制8KiB；不改变SDRAM或缓存配置。
      */
     static FrontendHeap& getInstance()
     {
-        static FrontendHeap instance;
-        return instance;
+        alignas(32) static uint8_t storage[sizeof(FrontendHeap)]
+            __attribute__((section(".TouchGFXState")));
+        static FrontendHeap* instance = nullptr;
+        if (instance == nullptr)
+        {
+            std::memset(storage, 0, sizeof storage);
+            instance = new (static_cast<void*>(storage)) FrontendHeap();
+        }
+        return *instance;
     }
 
     /** @brief 编译期定容的单个Presenter、View和过渡对象存储分区。 */

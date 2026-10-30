@@ -2,6 +2,7 @@
 #define main unused_app_main
 #include "../App/test_app_main.c"
 #include "Detector/chirp_service.h"
+#include "Detector/sound_detector_service.h"
 #undef main
 #include "BSP/bsp_sdram.h"
 #include "Detector/sound_event_time.h"
@@ -60,8 +61,6 @@ void UI_StatusService_Init(uint32_t now,void(*log)(const char*,int))
 {assert(audio_inits>0U&&display_calls==1U&&now==tick_ms&&log);++ui_inits;}
 void UI_StatusService_Process(uint32_t now,bool allowed)
 {assert(audio_calls==lwip_calls&&now==tick_ms&&allowed==!temperature_low);++ui_calls;}
-#ifndef SBCG_TEST_SKIP_LEGACY_UI_MAIN
-
 /** @brief App测试桩：无有效温度快照，测量结果不能显示。 */
 void TemperatureService_GetSnapshot(uint32_t now,TemperatureSnapshot *out){(void)now;if(out)memset(out,0,sizeof *out);}
 
@@ -155,6 +154,10 @@ void MeasurementResult_SetCalibration(int32_t offset,uint16_t version){(void)off
 
 /** @brief App测试桩：设置/撤销当前声音事件域。 */
 void UDPSoundEvent_SetTimeDomain(uint32_t id){(void)id;}
+/** @brief UI调度用例没有声音候选，不提供TOA齿序；不伪造配对证据。 */
+bool SoundDetectorService_GetToaCandidates(uint32_t sequence,SoundDetectorServiceToaCandidates *out)
+{ (void)sequence;if(out)memset(out,0,sizeof *out);return false; }
+#ifndef SBCG_TEST_SKIP_LEGACY_UI_MAIN
 int main(void)
 {
  memcpy(info_uid,BoardIdentity_DefaultMap.a_uid,sizeof info_uid);

@@ -11,5 +11,6 @@ exe=out/'app.exe'
 subprocess.run([shutil.which('gcc'),'-std=c11','-Wall','-Wextra','-Werror','-pedantic',*flags,
                '-I',str(root/'Tests/App/stubs'),'-I',str(root/'App'),
                str(root/'Tests/TouchGFXService/test_app.c'),str(root/'App/app_main.c'),
-               str(root/'App/BSP/board_identity.c'),'-o',str(exe)],check=True,timeout=30)
+               str(root/'App/BSP/board_identity.c'),
+               str(root/'Tests/App/stubs/ranging_app_stubs.c'),'-o',str(exe)],check=True,timeout=30)
 subprocess.run([str(exe)],check=True,timeout=30)

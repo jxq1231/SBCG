@@ -20,31 +20,38 @@
   */
 /**
  * @file        STM32TouchController.cpp
- * @brief       实现当前未启用触控的TouchGFX控制器占位接口。
- * @details     init为空操作，sampleTouch固定返回false且不修改坐标。
- * @note        未启动I2C或触控芯片；当前状态页只提供只读显示。
+ * @brief       将限频FT5336单点状态交给TouchGFX。
+ * @details     BSP复用已生成I2C3，只在前台采样；坐标已经由BSP转换成480×272横屏像素。
+ * @note        init只清软件状态，不配置硬件。错误释放由View读取sample_valid后取消手势。
  */
 /* USER CODE END Header */
 
 /* USER CODE BEGIN STM32TouchController */
 
 #include <STM32TouchController.hpp>
+#include "BSP/bsp_touch.h"
+#include "main.h"
 
-/** @brief 保留框架初始化入口，当前无触控初始化。@return 无返回值，不操作外设。 */
+/** @brief 初始化触控软件缓存，沿用已经生成的共享I2C3。@return 无返回值，不操作外设配置。 */
 void STM32TouchController::init()
 {
+    BSP_Touch_Init();
 }
 
 /**
- * @brief 向框架报告当前没有触摸输入。
- * @param x 调用方横坐标引用，本实现不读取或修改。
- * @param y 调用方纵坐标引用，本实现不读取或修改。
- * @return 固定false，坐标输出无有效触摸语义。
- * @note 由框架按采样调度调用，不访问I2C、GPIO或触控芯片。
+ * @brief 向框架返回BSP的有效单点按下；失败不写调用者坐标。
+ * @param x 框架拥有的横坐标输出，仅成功时写入0..479像素。
+ * @param y 框架拥有的纵坐标输出，仅成功时写入0..271像素。
+ * @return 有效按下为true，正常释放或无效输入为false。
+ * @note 仅在DHT门控允许的TouchGFX前台调用；BSP限制I2C读取频率和单次事务。
  */
 bool STM32TouchController::sampleTouch(int32_t& x, int32_t& y)
 {
-    return false;
+    int32_t sample_x, sample_y;
+    if (!BSP_Touch_Sample(HAL_GetTick(), &sample_x, &sample_y)) { return false; }
+    x = sample_x;
+    y = sample_y;
+    return true;
 }
 
 /* USER CODE END STM32TouchController */

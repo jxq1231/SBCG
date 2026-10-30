@@ -53,6 +53,7 @@ endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_touchgfx_version_header}")
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/BSP/bsp_touchgfx_display.c
+    App/BSP/bsp_touch.c
     App/UI/touchgfx_service.c App/UI/status_snapshot.c App/UI/status_view.c)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     SBCG_USE_LCD=1 SBCG_USE_TOUCHGFX=1)
@@ -66,6 +67,12 @@ target_include_directories(stm32cubemx INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/Ap
 # A CubeMX auto-process call may remain in generated main(). Route it to a
 # no-op; only the user-owned scheduled service invokes the real entry point.
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:--wrap=MX_TouchGFX_Process")
+# The frontend grows with the user View. Keep it outside the tightly packed
+# DTCM data/audio boundary; construction remains after display SDRAM READY.
+set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_touchgfx.ld")
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    "LINKER:-T,${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_touchgfx.ld")
 
 # Never allow the U2 poller/drawing stack to share LTDC or framebuffer ownership.
 get_target_property(_touchgfx_registered_sources ${CMAKE_PROJECT_NAME} SOURCES)

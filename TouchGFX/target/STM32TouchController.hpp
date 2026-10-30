@@ -20,9 +20,9 @@
   */
 /**
  * @file        STM32TouchController.hpp
- * @brief       声明当前无触控输入的框架控制器接口。
- * @details     提供空初始化与固定false的采样方法，不声明已启用的触摸功能。
- * @note        当前只读状态页不依赖触控芯片或I2C驱动。
+ * @brief       声明TouchGFX与FT5336前台采样适配接口。
+ * @details     调用用户BSP读取共享I2C3，输出横屏480×272单点坐标。
+ * @note        复用生成外设，不增加IRQ/DMA；实屏方向与触控响应另行验收。
  */
 /* USER CODE END Header */
 
@@ -34,8 +34,8 @@
 #include <platform/driver/touch/TouchController.hpp>
 
 /**
- * @brief 当前未启用触控的TouchController适配类。
- * @note 保留框架接口，采样始终报告无触摸。
+ * @brief 通过用户BSP向框架提供单点触摸。
+ * @note 失败不改坐标；View用BSP有效性标志区分释放和取消。
  */
 
 class STM32TouchController : public touchgfx::TouchController
@@ -46,16 +46,16 @@ public:
     STM32TouchController() {}
 
     /**
-     * @brief 框架初始化入口，当前为空操作。
-     * @return 无返回值，不启动触控驱动或外设。
+     * @brief 框架初始化入口，只初始化BSP软件状态。
+     * @return 无返回值，不重配I2C或其他外设。
      */
     virtual void init();
 
     /**
-     * @brief 报告无触摸，不产生有效坐标。
-     * @param x 调用方横坐标引用，本实现保持原值。
-     * @param y 调用方纵坐标引用，本实现保持原值。
-     * @return 固定false；不访问触控硬件。
+     * @brief 返回限频单点触控状态。
+     * @param x 框架横坐标输出，仅成功按下时写入像素。
+     * @param y 框架纵坐标输出，仅成功按下时写入像素。
+     * @return 有效按下为true，释放或故障为false；故障不改坐标。
      */
     virtual bool sampleTouch(int32_t& x, int32_t& y);
 };
