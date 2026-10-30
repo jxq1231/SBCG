@@ -3,8 +3,8 @@
  * @brief       两板同一声事件的纯C配对、声程差与基线距离计算。
  * @details     在同一共同时间域内，按类型/质量/时间窗口找出唯一A-B对；声源在基线延长线时
  *              d=c(T)|tB-tA|，符号给出A侧/B侧。重复、歧义、越窗、超量程均显式拒绝。
- *              B侧带候选齿时，以已接受（无历史时用标称）距离为唯一参考选择候选，一格以上
- *              跳变需连续确认；确认期间显示已接受距离，异常候选不能把参考拖离接受齿。
+ *              安装波形精化器后只接受其成功结果，不将失败降级为标称/旧接受距离的新测量。
+ *              未安装精化器的旧标量模式保留B候选齿选择与连续确认，供独立旧接口使用。
  * @note        仅前台纯计算；无网络/PCM/HAL/动态内存；输入时间必须先由同步层证明同一时间域。
  */
 #include "sound_pair.h"
@@ -235,7 +235,7 @@ bool SoundPair_Init(SoundPairManager *manager, const SoundPairConfig *config)
 /**
  * @brief 安装或清除波形时差精化回调；不改变队列或已接受距离。
  * @param manager 非NULL管理器。
- * @param refiner 可为NULL；安装后配对优先使用其输出。
+ * @param refiner 可为NULL；安装后必须成功精化才允许本次配对出数；NULL保留旧标量模式。
  * @return 无返回值，仅前台。
  */
 void SoundPair_SetTdoaRefiner(SoundPairManager *manager, SoundPairTdoaRefiner refiner)
@@ -269,7 +269,11 @@ bool SoundPair_Submit(SoundPairManager *manager, const SoundEventRecord *event,
 }
 /**
  * @brief 过期未配对事件并生成所有可确定结果；不阻塞、无硬件访问。
+ * @param manager 已初始化且前台独占的可写管理器，NULL时不操作。
+ * @param now_ms 本地单调毫秒，按无符号差计算队列年龄并支持正常回绕。
+ * @return 无返回值；结果经Take消费，拒绝与成功分别计数。
  * @note 多个候选对同时落在窗口内时输出一条AMBIGUOUS并消费涉及事件，避免反复猜测。
+ *       精化失败消费本次事件并输出无效结果，保留源身份；不推进旧齿确认或刷新有效测量年龄。
  */
 void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
 {
@@ -330,7 +334,7 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
             break;
         }
         SoundPairResult result = {0};
-        SoundEventRecord selected_b;
+        SoundEventRecord selected_b = manager->events[1][pair_b];
         uint8_t selected_index = 0U;
         bool held = false;
         bool refined = false;
@@ -350,7 +354,7 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
                 }
             }
         }
-        if (!refined)
+        if (manager->tdoa_refiner == NULL)
         {
             SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
                            &manager->events[1][pair_b], &selected_b, &selected_index,
@@ -358,6 +362,14 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
         }
         (void)SoundPair_Compute(&manager->config, &manager->events[0][pair_a],
                                 &selected_b, &result);
+        if (manager->tdoa_refiner != NULL && !refined && result.valid)
+        {
+            result.valid = false;
+            result.status = SOUND_PAIR_WAVEFORM_UNAVAILABLE;
+            result.delta_ns = 0;
+            result.distance_mm = 0U;
+            result.direction = SOUND_DIRECTION_UNKNOWN;
+        }
         result.b_toa_selected = selected_index;
         result.b_toa_held = held;
         result.waveform_refined = refined;

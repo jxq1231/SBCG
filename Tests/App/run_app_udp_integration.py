@@ -255,6 +255,27 @@ def main():
         b.cmd('RX '+saved_wire);step(47050)
         sa,sb=snap(a,b,'replayed-after-requalification')
         check(sa['has']==sb['has']==0,'old authority packet rejected after domain recovery')
+        b.cmd('CAPTURE 0')
+        for t in range(47100,53551,50):step(t,{48000:18,50000:19,52000:20}.get(t,0))
+        sa,sb=snap(a,b,'events-without-B-waveforms')
+        check(sa['has']==sb['has']==0,
+              'high-quality scalar events without B waveforms never create A/B distances')
+        b.cmd('CAPTURE 1')
+        for t in range(53600,58801,50):step(t,{54000:21,56000:22,58000:23}.get(t,0))
+        sa,sb=snap(a,b,'waveforms-recovered')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['mm']==sb['mm'],
+              'new waveform evidence restores matching A/B results without reset')
+        source=sa['source_ns']
+        a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
+        for t in range(58850,64601,50):
+            step(t,{60000:24,62000:25,64000:26}.get(t,0))
+            if t==60800:
+                sa,sb=snap(a,b,'rejection-keeps-old-source-age')
+                check(sa['source_ns']==sb['source_ns']==source,
+                      'rejected pairs cannot renew old source timestamps')
+        sa,sb=snap(a,b,'rejected-events-expired')
+        check(sa['has']==sb['has']==0,
+              'continued rejected sounds cannot keep an old distance alive')
     finally:
         a.stop();b.stop()
     print('RESULT PASS')

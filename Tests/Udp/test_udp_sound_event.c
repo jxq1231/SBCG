@@ -1,7 +1,8 @@
 /**
  * @file        test_udp_sound_event.c
  * @brief       在主机桩网络边界验证真实声音事件UDP服务与配对核心。
- * @details     覆盖右锚发布延迟、域撤销、等待边界、回绕、容量和歧义拒绝。
+ * @details     覆盖右锚发布延迟、域撤销、等待边界、回绕、容量和歧义拒绝；
+ *              成功配对提供确定PCM走真实相关，另测缺窗/低相关拒绝与1m/2m恢复。
  * @note        仅替换LwIP收发，不替换UDP服务或配对算法，不代表实物网络验收。
  */
 #include "Network/udp_sound_event.h"
@@ -41,6 +42,7 @@ static unsigned ranging_count, ranging_ack_count;
 static RangingSessionMessage received_session;
 static unsigned session_count;
 static uint32_t tick_ms;
+static bool saw_wave_rejection;
 
 struct udp_pcb *udp_new(void) { return &fake_pcb; }
 void udp_remove(struct udp_pcb *p) { (void)p; }
@@ -63,7 +65,9 @@ err_t udp_sendto(struct udp_pcb *p, struct pbuf *buf, const ip_addr_t *dest, u16
 }
 u16_t pbuf_copy_partial(const struct pbuf *p, void *data, u16_t len, u16_t offset)
 { assert(p!=NULL); assert(offset==0U && len<=p->tot_len); memcpy(data,(const uint8_t*)p->payload,len); return len; }
-static void Log(const char *line,int length) { (void)line;(void)length; }
+/** @brief 记录波形证据拒绝日志是否出现，不修改服务状态。 */
+static void Log(const char *line,int length)
+{ (void)length;if(strstr(line,"STATUS=WAVE_UNAVAILABLE,")!=NULL)saw_wave_rejection=true; }
 static void Result(const SoundPairResult *result)
 { paired=*result; ++pair_count; }
 static void EventSink(const SoundEventRecord *event)
@@ -94,8 +98,51 @@ static void ReceiveBytes(const uint8_t *wire,uint16_t length)
     packet.tot_len=length;
     receive_cb(receive_arg,&fake_pcb,&packet,&peer_ip,5009U);
 }
-static void ReceiveWire(const uint8_t *wire)
-{ ReceiveBytes(wire,SOUND_EVENT_WIRE_BYTES); }
+/**
+ * @brief 生成确定的宽带PCM；两端相同输入通过真实互相关，非替换配对结果。
+ * @param pcm 非NULL可写1408点缓冲，调用方持有。
+ * @return 无返回值。
+ */
+static void TestPcm(int16_t pcm[1408])
+{
+    uint32_t seed=0x6a09e667U;
+    for(unsigned i=0U;i<1408U;++i)
+    {seed=seed*1664525U+1013904223U;pcm[i]=(int16_t)((int32_t)(seed>>17U)-16384);}
+}
+/**
+ * @brief 为旧标量夹具补上本板PCM和帧坐标，再调用真实事件发送；已有PCM夹具原样发送。
+ * @param now_ms 模拟本地毫秒，更新测试时钟。
+ * @param event 非NULL只读事件，仅无帧号夹具复制补帧，不修改输入。
+ * @return 真实UDPSoundEvent_Send返回值；失败仍保留生产拒绝行为。
+ */
+static bool SendCapturedEvent(uint32_t now_ms,const SoundEventRecord *event)
+{
+    if(event->frame!=0U)return UDPSoundEvent_Send(now_ms,event);
+    SoundEventRecord copy=*event;copy.frame=48000U;
+    int16_t pcm[1408];TestPcm(pcm);
+    const ChirpCaptureSlice slice={.session=copy.session,.first_frame=copy.frame,
+        .raw_first_frame=copy.frame,.frames=1408U,.samples=pcm};
+    tick_ms=now_ms;UDPSoundEvent_OnCapture(&slice);
+    return UDPSoundEvent_Send(now_ms,&copy);
+}
+/**
+ * @brief 给标量事件夹具提供对应的真实WFR1包，再交给真实事件接收器；不伪造相关输出。
+ * @param wire 非NULL且为完整当前版本声音事件字节，调用方持有。
+ * @return 无返回值；模拟网络按先波形后事件顺序交付。
+ */
+static void ReceiveCapturedWire(const uint8_t *wire)
+{
+    SoundEventRecord event;
+    assert(SoundEventWire_Decode(wire,SOUND_EVENT_WIRE_BYTES,&event)==SOUND_EVENT_WIRE_OK);
+    int16_t pcm[1408];TestPcm(pcm);
+    uint8_t wave[1048]={0};memcpy(wave,"WFR1",4U);wave[4]=1U;wave[5]=SOUND_SIDE_B;
+    for(unsigned i=0U;i<4U;++i)wave[8U+i]=(uint8_t)(event.sequence>>(8U*(3U-i)));
+    const uint64_t start=event.time_ns+UINT64_C(10666667);
+    for(unsigned i=0U;i<8U;++i)wave[12U+i]=(uint8_t)(start>>(8U*(7U-i)));
+    wave[20]=2U;memcpy(wave+24U,pcm+512U,1024U);
+    ReceiveBytes(wave,sizeof wave);
+    ReceiveBytes(wire,SOUND_EVENT_WIRE_BYTES);
+}
 
 /**
  * @brief 检查真实UDP服务在两种提交顺序下保留等待右锚的事件。
@@ -118,12 +165,12 @@ static void TestDelayedPeer(const BoardIdentityProfile *profile)
         unsigned before=pair_count;
         assert(SoundEventWire_Encode(&remote,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
         tick_ms=100U;
-        if(local_first)assert(UDPSoundEvent_Send(tick_ms,&local));
-        else ReceiveWire(rx_payload);
+        if(local_first)assert(SendCapturedEvent(tick_ms,&local));
+        else ReceiveCapturedWire(rx_payload);
         UDPSoundEvent_Process(100U+delays_ms[i]-1U);
         tick_ms=100U+delays_ms[i];
-        if(local_first)ReceiveWire(rx_payload);
-        else assert(UDPSoundEvent_Send(tick_ms,&local));
+        if(local_first)ReceiveCapturedWire(rx_payload);
+        else assert(SendCapturedEvent(tick_ms,&local));
         UDPSoundEvent_Process(tick_ms);
         assert(pair_count==before+1U && paired.valid && paired.delta_ns==1000000U);
     }
@@ -236,7 +283,7 @@ static void ReceiveEvent(const SoundEventRecord *event,uint32_t now_ms)
 {
     assert(SoundEventWire_Encode(event,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
     tick_ms=now_ms;
-    ReceiveWire(rx_payload);
+    ReceiveCapturedWire(rx_payload);
 }
 
 /**
@@ -252,10 +299,10 @@ static void TestExpiryAndWrap(const BoardIdentityProfile *profile)
     {
         InitService(profile,100U);
         const unsigned before=pair_count;
-        if(local_first)assert(UDPSoundEvent_Send(100U,&local));
+        if(local_first)assert(SendCapturedEvent(100U,&local));
         else ReceiveEvent(&remote,100U);
         if(local_first)ReceiveEvent(&remote,3100U);
-        else assert(UDPSoundEvent_Send(3100U,&local));
+        else assert(SendCapturedEvent(3100U,&local));
         UDPSoundEvent_Process(3100U);
         SoundPairSnapshot snap;UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,NULL,NULL);
         assert(pair_count==before && snap.expired==1U);
@@ -265,15 +312,15 @@ static void TestExpiryAndWrap(const BoardIdentityProfile *profile)
         const uint32_t start_ms=UINT32_MAX-1000U;
         InitService(profile,start_ms);
         const unsigned before=pair_count;
-        if(local_first)assert(UDPSoundEvent_Send(start_ms,&local));
+        if(local_first)assert(SendCapturedEvent(start_ms,&local));
         else ReceiveEvent(&remote,start_ms);
         UDPSoundEvent_Process(start_ms+2998U);
         if(local_first)ReceiveEvent(&remote,start_ms+2999U);
-        else assert(UDPSoundEvent_Send(start_ms+2999U,&local));
+        else assert(SendCapturedEvent(start_ms+2999U,&local));
         UDPSoundEvent_Process(start_ms+2999U);
         assert(pair_count==before+1U && paired.valid && paired.delta_ns==1000000U);
         InitService(profile,start_ms);
-        assert(UDPSoundEvent_Send(start_ms,&local));
+        assert(SendCapturedEvent(start_ms,&local));
         ReceiveEvent(&remote,start_ms+3000U);
         UDPSoundEvent_Process(start_ms+3000U);
         SoundPairSnapshot snap;UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,NULL,NULL);
@@ -292,7 +339,7 @@ static void TestDomainBoundary(const BoardIdentityProfile *profile)
     SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1001000000U,0U,0U,0U,{0,0,0,0}};
     assert(UDPSoundEvent_Init(0U,profile,Tick,Log));
     UDPSoundEvent_Process(100U);
-    assert(!UDPSoundEvent_Send(100U,&local));
+    assert(!SendCapturedEvent(100U,&local));
     ReceiveEvent(&remote,100U);
     SoundPairSnapshot snap;uint32_t rx_bad;
     UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,&rx_bad,NULL);
@@ -304,8 +351,8 @@ static void TestDomainBoundary(const BoardIdentityProfile *profile)
     ReceiveBytes(domain_wire,DOMAIN_WIRE_BYTES);
     assert(received_domain.sequence==17U);
     UDPSoundEvent_SetTimeDomain(1U);
-    assert(UDPSoundEvent_Send(101U,&local));
-    assert(!UDPSoundEvent_Send(101U,&local)); /* 同侧队内重复仍拒绝。 */
+    assert(SendCapturedEvent(101U,&local));
+    assert(!SendCapturedEvent(101U,&local)); /* 同侧队内重复仍拒绝。 */
     UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,NULL,NULL);
     assert(snap.accepted==1U && snap.duplicate==1U);
     UDPSoundEvent_SetTimeDomain(0U);
@@ -318,14 +365,14 @@ static void TestDomainBoundary(const BoardIdentityProfile *profile)
            snap.pending_a==0U && snap.pending_b==1U);
     UDPSoundEvent_SetTimeDomain(2U);
     local.time_domain=2U;local.sequence=3U;
-    assert(UDPSoundEvent_Send(103U,&local));
+    assert(SendCapturedEvent(103U,&local));
     ReceiveEvent(&remote,103U); /* 旧域报文不得重新占队。 */
     UDPSoundEvent_Process(103U);
     UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,&rx_bad,NULL);
     assert(pair_count==before && snap.accepted==3U && snap.pending_a==1U &&
            snap.pending_b==0U && rx_bad==2U);
     SoundEventRecord wrong=local;wrong.time_domain=1U;wrong.sequence=4U;
-    assert(!UDPSoundEvent_Send(103U,&wrong));
+    assert(!SendCapturedEvent(103U,&wrong));
     remote.time_domain=2U;remote.sequence=5U;
     ReceiveEvent(&remote,104U);
     UDPSoundEvent_SetTimeDomain(2U); /* 稳态同步同域不得清掉合法候选。 */
@@ -349,20 +396,20 @@ static void TestPairingLimits(const BoardIdentityProfile *profile)
     SoundEventRecord remote={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,2U,2U,1040000001U,0U,0U,0U,{0,0,0,0}};
     InitService(profile,100U);
     unsigned before=pair_count;
-    assert(UDPSoundEvent_Send(100U,&local));
+    assert(SendCapturedEvent(100U,&local));
     ReceiveEvent(&remote,2000U);
     UDPSoundEvent_Process(2000U);
     SoundPairSnapshot snap;UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,NULL,NULL);
     assert(pair_count==before && snap.pending_a==1U && snap.pending_b==1U);
     InitService(profile,100U);
     remote.time_ns=1040000000U;
-    assert(UDPSoundEvent_Send(100U,&local));
+    assert(SendCapturedEvent(100U,&local));
     ReceiveEvent(&remote,2000U);
     UDPSoundEvent_Process(2000U);
     assert(pair_count==before+1U && paired.status==SOUND_PAIR_DISTANCE_RANGE);
     InitService(profile,100U);
     before=pair_count;
-    assert(UDPSoundEvent_Send(100U,&local));
+    assert(SendCapturedEvent(100U,&local));
     remote.time_ns=1001000000U;
     ReceiveEvent(&remote,2000U);
     remote.sequence=3U;remote.time_ns=1002000000U;
@@ -375,11 +422,11 @@ static void TestPairingLimits(const BoardIdentityProfile *profile)
     for(unsigned i=0U;i<4U;++i)
     {
         local.sequence=i+1U;local.time_ns=1000000000U+(uint64_t)i*1000000000U;
-        assert(UDPSoundEvent_Send(100U,&local));
+        assert(SendCapturedEvent(100U,&local));
         remote.sequence=i+1U;remote.time_ns=10000000000ULL+(uint64_t)i*1000000000U;
         ReceiveEvent(&remote,100U);
     }
-    local.sequence=5U;assert(!UDPSoundEvent_Send(100U,&local));
+    local.sequence=5U;assert(!SendCapturedEvent(100U,&local));
     remote.sequence=5U;ReceiveEvent(&remote,100U);
     UDPSoundEvent_GetSnapshot(&snap,NULL,NULL,NULL,&rx_bad,NULL);
     assert(snap.pending_a==4U && snap.pending_b==4U && snap.accepted==8U &&
@@ -428,7 +475,7 @@ static void TestWaveWindowCut(void)
     event.fraction_q16 = 0x4000U;
     wave_sends = 0U;
     tick_ms = 1100U;
-    assert(UDPSoundEvent_Send(tick_ms, &event));
+    assert(SendCapturedEvent(tick_ms, &event));
     assert(wave_sends == 1U);
     assert(memcmp(wave_sent, "WFR1", 4U) == 0);
     assert(wave_sent[4] == 1U && wave_sent[5] == (unsigned char)SOUND_SIDE_B);
@@ -440,6 +487,50 @@ static void TestWaveWindowCut(void)
     assert(start_ns == UINT64_C(1010661458));
     const uint16_t expected_offset = (uint16_t)(event.frame + 512U - slice.first_frame);
     assert(memcmp(wave_sent + 24U, pcm + expected_offset, 1024U) == 0);
+}
+/**
+ * @brief 缺失/低相关波形必须拒绝，成功的1m/2m波形不受320mm初始参考影响。
+ * @param profile 非NULL A身份，只读，调用期间有效。
+ * @return 无返回值；只替换网络收发和PCM输入，运行真实服务/相关/配对。
+ */
+static void TestWaveformEvidence(const BoardIdentityProfile *profile)
+{
+    SoundEventRecord local={true,SOUND_EVENT_CHIRP,98U,SOUND_SIDE_A,1U,1U,71U,
+        UINT64_C(1000000000),0U,0U,0U,{0,0,0,0}};
+    SoundEventRecord remote=local;remote.side=SOUND_SIDE_B;
+    remote.time_ns=UINT64_C(1002915452);remote.toa_candidate_count=2U;
+    remote.toa_candidate_q16[0]=-6236500;remote.toa_candidate_q16[1]=0;
+    for(unsigned failure=0U;failure<3U;++failure)
+    {
+        InitService(profile,100U);saw_wave_rejection=false;
+        const unsigned before=pair_count;
+        if(failure==0U)assert(UDPSoundEvent_Send(100U,&local)); /* 无本板捕获。 */
+        else assert(SendCapturedEvent(100U,&local));
+        if(failure==2U)
+        {
+            /* 合法WFR1头，但全零PCM不能通过相关，禁止退回候选齿。 */
+            uint8_t wave[1048]={0};memcpy(wave,"WFR1",4U);wave[4]=1U;wave[5]=SOUND_SIDE_B;
+            wave[11]=71U;wave[12+7]=1U;wave[20]=2U;
+            ReceiveBytes(wave,sizeof wave);
+        }
+        assert(SoundEventWire_Encode(&remote,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
+        ReceiveBytes(rx_payload,sizeof rx_payload);UDPSoundEvent_Process(101U);
+        assert(pair_count==before+1U && !paired.valid && saw_wave_rejection);
+        assert(paired.status==SOUND_PAIR_WAVEFORM_UNAVAILABLE);
+        assert(paired.b_toa_selected==0U && !paired.b_toa_held && paired.distance_mm==0U);
+        SoundPairSnapshot snapshot;UDPSoundEvent_GetSnapshot(&snapshot,NULL,NULL,NULL,NULL,NULL);
+        assert(snapshot.paired==0U && snapshot.rejected==1U);
+    }
+    for(uint32_t metres=1U;metres<=2U;++metres)
+    {
+        InitService(profile,100U);
+        remote.time_ns=local.time_ns+(uint64_t)metres*UINT64_C(1000000000)/343U;
+        assert(SendCapturedEvent(100U,&local));ReceiveEvent(&remote,101U);
+        UDPSoundEvent_Process(101U);
+        assert(paired.valid && paired.waveform_refined && paired.distance_mm==metres*1000U);
+        assert(paired.b_toa_selected==0U && !paired.b_toa_held);
+    }
+    puts("PASS waveform evidence: missing local/remote and low correlation reject; real NCC 1m/2m recover");
 }
 /** @brief 运行真实UDP集成场景；无参数，成功返回0，失败由断言终止。 */
 int main(void)
@@ -462,7 +553,7 @@ int main(void)
     local.valid=true;local.type=SOUND_EVENT_CHIRP;local.quality=80U;
     local.side=SOUND_SIDE_A;local.time_domain=1U;local.session=1U;local.sequence=1U;
     local.time_ns=1000000000U;
-    assert(UDPSoundEvent_Send(100U,&local));
+    assert(SendCapturedEvent(100U,&local));
     assert(sends==1U);
     /* Local event alone cannot pair. */
     UDPSoundEvent_Process(101U);
@@ -473,7 +564,7 @@ int main(void)
     peer.time_ns=1001000000U;
     assert(SoundEventWire_Encode(&peer,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
     tick_ms=102U;
-    ReceiveWire(rx_payload);
+    ReceiveCapturedWire(rx_payload);
     UDPSoundEvent_Process(102U);
     assert(adopted_domain==1U);
     assert(pair_count==1U && paired.valid && paired.distance_mm==343U &&
@@ -514,6 +605,7 @@ int main(void)
     TestDomainBoundary(&profile);
     TestPairingLimits(&profile);
     TestWaveWindowCut();
+    TestWaveformEvidence(&profile);
     puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;
 }

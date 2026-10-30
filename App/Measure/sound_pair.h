@@ -54,7 +54,8 @@ typedef enum
     SOUND_PAIR_AMBIGUOUS,
     SOUND_PAIR_TDOA_RANGE,
     SOUND_PAIR_DISTANCE_RANGE,
-    SOUND_PAIR_CAPACITY
+    SOUND_PAIR_CAPACITY,
+    SOUND_PAIR_WAVEFORM_UNAVAILABLE /**< 已安装波形精化器，但本次没有可接受的波形证据。 */
 } SoundPairStatus;
 
 /**
@@ -128,7 +129,7 @@ typedef struct
  * @param a_sequence A板事件序号。
  * @param b_sequence B板事件序号。
  * @param delta_ns 非NULL输出；成功写入精化后的b-a时差，纳秒。
- * @return true表示已用两板实际波形对齐得到时差，false表示不可用并回退候选齿选择。
+ * @return true表示已用两板实际波形对齐得到时差；false表示证据不可用，本次配对拒绝。
  * @note 回调由上层安装，纯前台执行；实现不得重入配对或修改管理器。
  */
 typedef bool (*SoundPairTdoaRefiner)(uint32_t a_sequence, uint32_t b_sequence,
@@ -156,7 +157,7 @@ bool SoundPair_Init(SoundPairManager *manager, const SoundPairConfig *config);
 /**
  * @brief 安装或清除波形时差精化回调。
  * @param manager 非NULL管理器。
- * @param refiner 可为NULL；安装后配对优先使用其输出，不可用时回退候选齿选择。
+ * @param refiner 可为NULL；安装后仅其成功输出可出数，不可用时拒绝；NULL保留旧标量路径。
  * @return 无返回值；不改变已接受距离或队列。
  * @note 管理器重新初始化会清除回调，调用方须在初始化后再次安装。
  */

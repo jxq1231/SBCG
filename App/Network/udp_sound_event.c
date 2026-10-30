@@ -1,8 +1,9 @@
 /**
  * @file        udp_sound_event.c
  * @brief       两板声音事件UDP发布/接收与配对结果输出的前台实现。
- * @details     固定36字节线协议，校验来源、事件侧与有效域；为右锚发布保留3000ms配对预算。
- *              撤域或换域清除旧候选，配对纯核心输出距离/方向。
+ * @details     按版本解码声音事件，校验来源、事件侧与有效域；为右锚发布保留3000ms配对预算。
+ *              A侧使用两板窗口精化时差；证据失败明确拒绝，不以标称/旧齿距离出新数。
+ *              撤域或换域清除旧配对候选，成功结果经纯核心计算距离/方向。
  * @note        只证明软件链路；不建立PTP同步、不把接收时刻当声音到达、不宣称物理精度。
  */
 #include "udp_sound_event.h"
@@ -121,7 +122,7 @@ static void ClearWaveforms(void)
 /**
  * @brief 保存一次捕获切片的波形储备；从匹配起点后固定偏移复制。
  * @param slice 非NULL只读切片，回调期间有效；内部复制，不保存指针。
- * @return 无返回值；越界/未配置时跳过，事件发布时自然回退旧单值路径。
+ * @return 无返回值；越界/未配置时跳过，事件发布时缺少波形则明确拒绝本次测距。
  * @note 仅前台捕获回调；环形覆盖最近4份，事件按会话与匹配起点对应。
  */
 void UDPSoundEvent_OnCapture(const ChirpCaptureSlice *slice)
@@ -521,7 +522,7 @@ static void TryBind(uint32_t now_ms)
     udp_recv(service_pcb,Receive,NULL);
 }
 /**
- * @brief 初始化身份、3000ms配对等待预算与统计，初始声音事件域无效。
+ * @brief 初始化身份、3000ms配对等待预算与统计；不预置距离，波形证据失败不回退猜距。
  * @param now_ms 本地单调毫秒起点，支持无符号回绕。
  * @param profile 非NULL只读A/B身份，返回前复制，非法角色拒绝。
  * @param tick 非NULL毫秒读取函数，须在服务期间持续有效。
@@ -541,7 +542,7 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     IP_ADDR4(&peer,profile->peer_ip[0],profile->peer_ip[1],
              profile->peer_ip[2],profile->peer_ip[3]);
     pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,SOUND_EVENT_PAIR_TIMEOUT_MS,
-                                  320U,32U,3U};
+                                  0U,0U,0U};
     if(!SoundPair_Init(&pair_manager,&pair_config))return false;
     SoundPair_SetTdoaRefiner(&pair_manager,RefinePairTdoa);
     ClearWaveforms();
@@ -800,7 +801,12 @@ bool UDPSoundEvent_SendTemperature(uint32_t now_ms,const TemperatureSnapshot *te
     if(err!=ERR_OK){Increment(&temperature_tx_err);return false;}
     Increment(&temperature_tx_ok);return true;
 }
-/** @brief 推进绑定、配对和1Hz状态/结果输出；无返回值。 */
+/**
+ * @brief 推进绑定、配对和1Hz状态输出；逐项报告结果及波形拒绝原因。
+ * @param now_ms 本地前台毫秒计数，按无符号差处理节流回绕。
+ * @return 无返回值；未初始化不操作，结果副本交给已注册消费者。
+ * @note 仅NO_SYS前台；不从IRQ调用，不改变硬件或DMA所有权。
+ */
 void UDPSoundEvent_Process(uint32_t now_ms)
 {
     if(!configured)return;
@@ -834,7 +840,8 @@ void UDPSoundEvent_Process(uint32_t now_ms)
                 "$SOUND_PAIR,STATUS=%s,CORE=%u,A_SEQ=%" PRIu32 ",B_SEQ=%" PRIu32
                 ",DIAG=1,LOCAL=1,SYNC=0\r\n",result.status==SOUND_PAIR_AMBIGUOUS?"AMBIGUOUS":
                 (result.status==SOUND_PAIR_DISTANCE_RANGE?"DIST_RANGE":
-                 (result.status==SOUND_PAIR_TDOA_RANGE?"TDOA_RANGE":"REJECT")),
+                 (result.status==SOUND_PAIR_TDOA_RANGE?"TDOA_RANGE":
+                  (result.status==SOUND_PAIR_WAVEFORM_UNAVAILABLE?"WAVE_UNAVAILABLE":"REJECT"))),
                 (unsigned)result.status,result.a_sequence,result.b_sequence));
         }
         if(result_sink!=NULL){result_sink(&result);}

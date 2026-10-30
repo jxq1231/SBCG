@@ -1,7 +1,7 @@
 /**
  * @file        test_app_udp_integration.c
  * @brief       双进程真实App/UDP/结果缓存/UI主机驱动。
- * @details     stdin提供受控时钟、检测器标量TOA及网络输入；stdout记录生产报文和只读状态。
+ * @details     stdin提供受控时钟、检测器TOA及合成PCM与网络输入；stdout记录生产报文和只读状态。
  * @note        只替换硬件/检测器/LwIP收发边界，不注入pair或结果，不访问实物。
  */
 #define main unused_app_main
@@ -25,7 +25,7 @@
 #include <inttypes.h>
 
 #define HOST_QUEUE 64U
-#define HOST_BYTES 128U
+#define HOST_BYTES 1200U
 typedef struct { uint16_t length; uint8_t data[HOST_BYTES]; } HostPacket;
 struct netif gnetif;
 static struct udp_pcb fake_pcb;
@@ -41,6 +41,7 @@ static uint64_t common_ns;
 static uint32_t audio_session=1U,clock_epoch=3U;
 static uint32_t audio_dropped, audio_processed;
 static bool clock_ok=true,sync_faulted,send_ok=true,event_pending,process_blocks=true;
+static bool capture_enabled=true;
 static SoundEventTimeEvent next_event;
 static uint32_t event_takes,event_delivered,packet_attempts;
 static TemperatureSnapshot host_temperature={false,true,1U,0U,20000,343420U};
@@ -163,6 +164,20 @@ static void Queue(const char *hex)
 {const size_t length=strcspn(hex,"\r\n ");assert(length%2U==0U && length/2U<=HOST_BYTES && queue_count<HOST_QUEUE);
  HostPacket *entry=&packets[(queue_head+queue_count)%HOST_QUEUE];entry->length=(uint16_t)(length/2U);
  for(size_t i=0U;i<length/2U;++i){unsigned value=0U;assert(sscanf(hex+2U*i,"%2x",&value)==1);entry->data[i]=(uint8_t)value;}++queue_count;}
+/**
+ * @brief 为受控检测事件提供对应PCM输入，由真实UDP服务截窗、发送和互相关。
+ * @param frame 本地事件进度帧；测试不注入配对或相关结果。
+ * @return 无返回值；片段复制后不保留本栈缓冲指针。
+ */
+static void CaptureEvent(uint64_t frame)
+{
+ int16_t pcm[1408];uint32_t seed=0x6a09e667U;
+ for(unsigned i=0U;i<1408U;++i){seed=seed*1664525U+1013904223U;
+  pcm[i]=(int16_t)((int32_t)(seed>>17U)-16384);}
+ const ChirpCaptureSlice slice={.session=audio_session,.first_frame=frame,
+  .raw_first_frame=frame,.frames=1408U,.samples=pcm};
+ UDPSoundEvent_OnCapture(&slice);
+}
 /** @brief 一个板角色的独立进程入口。 @param argc 参数数。 @param argv 角色、启动毫秒、共同时间。 @return 正常0，错误非零。 */
 int main(int argc,char **argv)
 {
@@ -172,7 +187,7 @@ int main(int argc,char **argv)
  IP_ADDR4(&peer_ip,identity.peer_ip[0],identity.peer_ip[1],identity.peer_ip[2],identity.peer_ip[3]);
  IP_ADDR4(&gnetif.ip_addr,identity.local_ip[0],identity.local_ip[1],identity.local_ip[2],identity.local_ip[3]);gnetif.flags=NETIF_FLAG_UP|NETIF_FLAG_LINK_UP;
  common_ns=(uint64_t)strtoull(argv[3],NULL,10);Reset((uint32_t)strtoul(argv[2],NULL,10),true);
- puts("{\"type\":\"done\"}");fflush(stdout);char command[1024];
+ puts("{\"type\":\"done\"}");fflush(stdout);char command[4096];
  while(fgets(command,sizeof command,stdin)!=NULL){
   unsigned value=0U;uint32_t at=0U,seq=0U;uint64_t clock=0U,event_time=0U;
   if(strncmp(command,"STEP ",5U)==0){
@@ -183,7 +198,7 @@ int main(int argc,char **argv)
    event_time=(uint64_t)strtoull(cursor,&end,10);
    if(end!=cursor){
    tick_ms=at;common_ns=clock;if(process_blocks)++audio_processed;if(seq!=0U){assert(!event_pending);next_event=(SoundEventTimeEvent){.sequence=seq,.session=audio_session,
-    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=EVENT_CLASS_CHIRP,.quality=98U};event_pending=true;}App_Process();
+    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=EVENT_CLASS_CHIRP,.quality=98U};if(capture_enabled)CaptureEvent(next_event.frame);event_pending=true;}App_Process();
    }
   }else if(strncmp(command,"RX ",3U)==0)Queue(command+3);
   else if(strncmp(command,"SNAP",4U)==0)Snapshot();
@@ -195,6 +210,7 @@ int main(int argc,char **argv)
   else if(sscanf(command,"SEND %u",&value)==1)send_ok=value!=0U;
   else if(sscanf(command,"DROP %u",&value)==1)audio_dropped=value;
   else if(sscanf(command,"PROCESS %u",&value)==1)process_blocks=value!=0U;
+  else if(sscanf(command,"CAPTURE %u",&value)==1)capture_enabled=value!=0U;
   else if(strncmp(command,"REINIT",6U)==0)App_Init();
   else if(sscanf(command,"TEMP %u",&value)==1){host_temperature.temperature_milli_c=(int32_t)value;host_temperature.sound_speed_mm_s=331300U+(606U*value+500U)/1000U;++host_temperature.version;}
   else if(strncmp(command,"QUIT",4U)==0)break;

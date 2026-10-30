@@ -1,3 +1,8 @@
+/**
+ * @file test_sound_pair.c
+ * @brief 验证纯C配对、旧标量模式及波形证据失败时拒绝新测量的边界。
+ * @note 仅主机计算；成功回调的1m/2m结果不代表声学精度验收。
+ */
 #include "Measure/sound_pair.h"
 #include <assert.h>
 #include <stdio.h>
@@ -170,7 +175,7 @@ int main(void)
         }
         puts("tooth selection: B candidate set selected 320 mm and abnormal teeth cannot drag the reference");
     }
-    /* 波形精化：回调用互相关时差覆盖原始单值和候选齿，失败时完全回退旧路径。 */
+    /* 波形精化：安装回调后，失败不能把旧齿或标称距离变成一次新测量。 */
     {
         SoundPairManager wm;
         assert(SoundPair_Init(&wm,&config));
@@ -188,8 +193,39 @@ int main(void)
         assert(SoundPair_Submit(&wm,&wa,0U));assert(SoundPair_Submit(&wm,&wb,0U));
         SoundPair_Process(&wm,0U);
         assert(SoundPair_Take(&wm,&result));
-        assert(result.valid && !result.waveform_refined && result.distance_mm==515U);
-        puts("waveform refine: external TDOA overrides raw and falls back when unavailable");
+        assert(!result.valid && !result.waveform_refined);
+        assert(result.status==SOUND_PAIR_WAVEFORM_UNAVAILABLE && result.distance_mm==0U);
+        assert(result.a_sequence==40U && result.b_sequence==40U);
+        SoundPair_GetSnapshot(&wm,&snap);
+        assert(snap.paired==0U && snap.rejected==1U);
+        /* 实测距离未知时仍配置320的旧调用者，也不能在精化失败后输出320。 */
+        SoundPairConfig seeded=config;
+        seeded.nominal_distance_mm=320U;seeded.tooth_jump_mm=32U;seeded.tooth_confirm=3U;
+        assert(SoundPair_Init(&wm,&seeded));
+        SoundPair_SetTdoaRefiner(&wm,RefinerFail);
+        wb.toa_candidate_count=2U;
+        wb.toa_candidate_q16[0]=OffsetQ16(-195);wb.toa_candidate_q16[1]=0;
+        for(uint32_t i=0U;i<4U;++i)
+        {
+            wa.sequence=wb.sequence=50U+i;
+            assert(SoundPair_Submit(&wm,&wa,0U));assert(SoundPair_Submit(&wm,&wb,0U));
+            SoundPair_Process(&wm,0U);
+            assert(SoundPair_Take(&wm,&result) && !result.valid);
+            assert(result.b_toa_selected==0U && !result.b_toa_held);
+        }
+        assert(wm.accepted_distance_mm==320U && wm.pending_count==0U);
+        /* 后续成功可立即恢复1m/2m测量，不能被先前320参考或失败次数锁住。 */
+        SoundPair_SetTdoaRefiner(&wm,Refiner);
+        for(uint32_t metres=1U;metres<=2U;++metres)
+        {
+            refiner_delta=(int64_t)metres*1000000000LL/343;
+            wa.sequence=wb.sequence=60U+metres;
+            assert(SoundPair_Submit(&wm,&wa,0U));assert(SoundPair_Submit(&wm,&wb,0U));
+            SoundPair_Process(&wm,0U);
+            assert(SoundPair_Take(&wm,&result) && result.valid && result.waveform_refined);
+            assert(result.distance_mm==metres*1000U && !result.b_toa_held);
+        }
+        puts("waveform refine: failed evidence rejects without nominal/old-tooth fallback; 1m/2m recover");
     }
     puts("PASS sound pair: distance/direction, identity gates, out-of-order, duplicate, ambiguity, timeout, tooth selection");
     return 0;
