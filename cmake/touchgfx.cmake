@@ -61,6 +61,10 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     SBCG_USE_ADVANCED_UI=1)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/Measure/clap_ranging.c App/Network/clap_wire.c App/UI/waveform_service.c)
+# A 侧静音时 MakePlan 仍会执行周期搜索；Debug -O0 的耗时超过音频半块时限。
+# 该文件只做定/浮点相关运算，-O2 不改变舍入语义，与 waveform_tdoa 的处理一致。
+set_source_files_properties(App/UI/waveform_service.c PROPERTIES
+    COMPILE_OPTIONS "$<$<CONFIG:Debug>:-O2>")
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
     "LINKER:-T,${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_waveform.ld")
 set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS

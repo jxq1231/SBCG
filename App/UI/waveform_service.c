@@ -18,11 +18,17 @@
 #define MODEL_HOLD_NS UINT64_C(1500000000)
 #define FIXED_SPAN_NS 10000000U
 #define NS_PER_SEC UINT64_C(1000000000)
+#define PERIOD_WINDOW_FRAMES 512U
+#define PERIOD_MIN_LAG 24U
+#define PERIOD_MAX_LAG 960U
+#define PERIOD_SCRATCH_FRAMES (PERIOD_WINDOW_FRAMES + PERIOD_MAX_LAG)
 
 /** @brief 仅CPU访问的大数组；DMA从不写此区，因而无需增加缓存维护。 */
 typedef struct {
     int16_t ring[WAVEFORM_RING_FRAMES];
     int16_t stage[BSP_AUDIO_HALF_FRAMES];
+    /** 周期搜索窗口的线性副本，覆盖512点窗口加最大960帧滞后。 */
+    int16_t period[PERIOD_SCRATCH_FRAMES];
 } WaveformStorage;
 #if defined(__GNUC__)
 static WaveformStorage storage __attribute__((section(".WaveformState"), aligned(32)));
@@ -181,12 +187,40 @@ static int16_t Sample(uint64_t frame)
     return storage.ring[frame % WAVEFORM_RING_FRAMES];
 }
 
-/** @brief 计算周期候选的归一化差分能量。 @param start 已确认在环内的起点。 @param lag 周期帧数。 @return 0为高度重复，1附近为不相关。 */
-static float PeriodError(uint64_t start, uint32_t lag)
+/**
+ * @brief 将周期窗口及最大滞后邻域线性复制到CPU副本。
+ * @param start 已确认在环内的窗口起点零基帧。
+ * @return 窗口和邻域均完整落在环内时true；否则不改动副本。
+ * @note 只在MakePlan前台路径执行；拷贝后内层相关计算不再逐点取环下标。
+ */
+static bool LoadPeriodWindow(uint64_t start)
+{
+    if (start + PERIOD_SCRATCH_FRAMES >= state.end_frame) return false;
+    uint32_t index = (uint32_t)(start % WAVEFORM_RING_FRAMES);
+    for (uint32_t i = 0U; i < PERIOD_SCRATCH_FRAMES; ++i) {
+        storage.period[i] = storage.ring[index];
+        if (++index == WAVEFORM_RING_FRAMES) index = 0U;
+    }
+    return true;
+}
+
+/** @brief 判断线性窗口内是否存在足以做周期搜索的PCM能量。 @return 128个抽样点的均方超过200 PCM单位时true。 */
+static bool PeriodWindowHasSignal(void)
+{
+    float energy = 0.0f;
+    for (uint32_t i = 0U; i < PERIOD_WINDOW_FRAMES; i += 4U) {
+        float value = storage.period[i];
+        energy += value * value;
+    }
+    return energy > 128.0f * 200.0f * 200.0f;
+}
+
+/** @brief 计算线性副本中周期候选的归一化差分能量。 @param lag 周期帧数，1..960。 @return 0为高度重复，1附近为不相关。 */
+static float PeriodError(uint32_t lag)
 {
     float error = 0.0f, energy = 0.0f, sum_a = 0.0f, sum_b = 0.0f;
-    for (uint32_t i = 0U; i < 512U; i += 4U) {
-        float a = Sample(start + i), b = Sample(start + i + lag);
+    for (uint32_t i = 0U; i < PERIOD_WINDOW_FRAMES; i += 4U) {
+        float a = storage.period[i], b = storage.period[i + lag];
         float difference = a - b;
         error += difference * difference;
         energy += a * a + b * b;
@@ -197,16 +231,21 @@ static float PeriodError(uint64_t start, uint32_t lag)
     return energy > 128.0f * 200.0f * 200.0f ? error / energy : 2.0f;
 }
 
-/** @brief A从历史PCM寻找首个强自相关周期，不使用B相位。 @param start 窗口附近帧。 @return 24..960帧周期，0为无可靠周期。 */
+/**
+ * @brief A从历史PCM寻找首个强自相关周期，不使用B相位。
+ * @param start 窗口附近帧。
+ * @return 24..960帧周期；静音、无稳定周期或窗口越界时为0。
+ * @note 静音先按能量快速返回，避免每次200ms计划都扫满960帧滞后。
+ */
 static uint32_t FindPeriod(uint64_t start)
 {
-    if (start + 1473U >= state.end_frame) return 0U;
+    if (!LoadPeriodWindow(start) || !PeriodWindowHasSignal()) return 0U;
     /* 先看到真实短周期再判断范围，避免把4kHz的二倍周期误报为2kHz。 */
-    float previous = PeriodError(start, 1U), current = PeriodError(start, 2U);
-    for (uint32_t lag = 2U; lag <= 960U; ++lag) {
-        float next = PeriodError(start, lag + 1U);
+    float previous = PeriodError(1U), current = PeriodError(2U);
+    for (uint32_t lag = 2U; lag <= PERIOD_MAX_LAG; ++lag) {
+        float next = PeriodError(lag + 1U);
         if (current < 0.04f && current < previous && current <= next)
-            return lag >= 24U ? lag : 0U;
+            return lag >= PERIOD_MIN_LAG ? lag : 0U;
         previous = current;
         current = next;
     }
