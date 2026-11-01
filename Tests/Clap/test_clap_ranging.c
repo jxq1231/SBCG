@@ -26,6 +26,46 @@ int main(void)
 {
     ClapRanging a,b;ClapResultMessage tx,duplicate;ClapAckMessage ack;
     ClapRangingSnapshot snapshot;
+    /* 每次CLAP冻结测量时温补，新温度版本及真实温变均不能撤值或改写旧结果。 */
+    {
+        ClapRanging frozen;ClapRanging_Init(&frozen);
+        TemperatureSnapshot next_temperature=temperature;
+        ClapRanging_Update(&frozen,BOARD_ROLE_A,true,&session,1100000000U,0U,
+            &next_temperature,&calibration);
+        SoundPairResult first=Pair(1U,1090000000U);
+        assert(ClapRanging_PublishPair(&frozen,&first));
+        assert(ClapRanging_TakeTx(&frozen,0U,&tx));
+        const uint32_t first_id=tx.id;
+        ++next_temperature.version;
+        ClapRanging_Update(&frozen,BOARD_ROLE_A,true,&session,1100000001U,499U,
+            &next_temperature,&calibration);
+        ClapRanging_GetSnapshot(&frozen,&snapshot);
+        assert(snapshot.has_value && snapshot.result.id==first_id && snapshot.result.distance_mm==355);
+        assert(snapshot.result.temperature_version==3U && snapshot.result.sound_speed_mm_s==343000U);
+        assert(!ClapRanging_TakeTx(&frozen,499U,&tx));
+        assert(ClapRanging_TakeTx(&frozen,500U,&tx) && tx.id==first_id && tx.temperature_version==3U);
+        ++next_temperature.version;next_temperature.sound_speed_mm_s=350000U;
+        next_temperature.temperature_milli_c=30000;
+        ClapRanging_Update(&frozen,BOARD_ROLE_A,true,&session,1100000002U,501U,
+            &next_temperature,&calibration);
+        ClapRanging_GetSnapshot(&frozen,&snapshot);
+        assert(snapshot.has_value && snapshot.fresh && snapshot.result.distance_mm==355);
+        assert(snapshot.result.source_common_ns==1091000000U && snapshot.result.temperature_version==3U);
+        SoundPairResult second=Pair(2U,1091000000U);
+        assert(ClapRanging_PublishPair(&frozen,&second));
+        ClapRanging_GetSnapshot(&frozen,&snapshot);
+        assert(snapshot.has_value && snapshot.result.id>first_id && snapshot.result.distance_mm==362);
+        assert(snapshot.result.sound_speed_mm_s==350000U && snapshot.result.temperature_version==5U);
+        assert(snapshot.result.temperature_milli_c==30000);
+        ClapRanging_Invalidate(&frozen);
+        ClapRanging_GetSnapshot(&frozen,&snapshot);
+        assert(!snapshot.has_value && !ClapRanging_TakeTx(&frozen,1000U,&tx));
+        assert(!ClapRanging_PublishPair(&frozen,&second));
+        SoundPairResult third=Pair(3U,1092000000U);
+        assert(ClapRanging_PublishPair(&frozen,&third));
+        ClapRanging_GetSnapshot(&frozen,&snapshot);
+        assert(snapshot.has_value && snapshot.result.id>first_id);
+    }
     ClapRanging_Init(&a); ClapRanging_Init(&b);
     Update(&a,BOARD_ROLE_A,true,1100000000U,0U);
     Update(&b,BOARD_ROLE_B,true,1100000000U,200U);
@@ -106,7 +146,7 @@ int main(void)
     assert(ClapRanging_OnMessage(&b,&tx)); /* 可ACK精确重复，但保持无值。 */
     ClapRanging_GetSnapshot(&b,&snapshot);assert(!snapshot.has_value);
 
-    /* 补偿变化撤旧值，新CLAP使用新参数，B不使用自己的温度重算。 */
+    /* 标定变化撤旧值，新CLAP使用新温补参数，B不使用自己的温度重算。 */
     temperature.sound_speed_mm_s=350000U;++temperature.version;
     calibration.enabled=false;++calibration.version;
     Update(&a,BOARD_ROLE_A,true,8200000000ULL,3000U);

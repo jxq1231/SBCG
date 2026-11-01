@@ -1,7 +1,8 @@
 /**
  * @file        clap_ranging.h
  * @brief       独立单次击掌测距、源期限及A到B可靠结果交换接口。
- * @details     A使用同域CLAP配对、当前温度与启用标定生成结果；B仅接收A的结果。
+ * @details     A使用同域CLAP配对、当前温度与启用标定生成结果；每次结果冻结测量时温补，
+ *              新温度仅用于下一真实击掌；B仅接收A的结果。
  *              共用调用方已建立的RSC2资格，不进入标准音tracker或序列门控。
  * @note        全部接口由前台串行调用；不访问硬件、Flash、网络或DMA，不保存传入指针。
  */
@@ -62,6 +63,14 @@ typedef struct {
 void ClapRanging_Init(ClapRanging *self);
 
 /**
+ * @brief 显式撤销当前展示和待发送结果/ACK，保留消费水位防止旧包恢复数值。
+ * @param self 非NULL前台实例；不改变角色、当前RSC2资格或下一结果ID。
+ * @return 无返回值；仅前台串行调用，下一真实新源可在健康上下文中发布。
+ * @note B收到标定合同变化时可调用；重复已接受结果仍可ACK，但不会重新授予展示资格。
+ */
+void ClapRanging_Invalidate(ClapRanging *self);
+
+/**
  * @brief 更新角色、当前RSC2资格、真实读时以及A当前补偿参数，推进源期限。
  * @param self 非NULL可写实例。
  * @param role 当前板身份，A计算、B接收，未知身份撤值。
@@ -71,7 +80,8 @@ void ClapRanging_Init(ClapRanging *self);
  * @param now_ms 本机毫秒，供调用节奏保持一致，不决定源有效期。
  * @param temperature A当前温度副本；A无有效温度撤值，B可NULL且不本地重算。
  * @param calibration A当前标定副本；NULL表示未标定，B忽略。
- * @return 无返回值；A补偿参数改变撤旧值，等待下次真实击掌，不延长旧源寿命。
+ * @return 无返回值；A标定改变或温度无效撤旧值；有效温度更新只用于下一次真实击掌，
+ *         已发布结果的温补字段、距离、源期限和重试保持不变。
  */
 void ClapRanging_Update(ClapRanging *self, BoardRole role, bool healthy,
                         const RangingSessionSnapshot *session,

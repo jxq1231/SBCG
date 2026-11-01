@@ -2,15 +2,20 @@
  * @file        clap_ranging.c
  * @brief       独立单次击掌的A权威距离与B结果缓存实现。
  * @details     使用真实共同源时刻限制2.5秒新鲜和6.5秒展示；RSC2域、代际和源下界
- *              隔离旧包。结果重传只取当前结果，重复包只触发ACK，不刷新寿命。
+ *              隔离旧包。结果冻结本次温补，下一次有效温变不改旧值与重传；
+ *              结果重传只取当前结果，重复包只触发ACK，不刷新寿命。
  * @note        前台串行调用；不使用标准音跟踪器，不进行硬件初始化或Flash持久化。
  */
 #include "clap_ranging.h"
 #include <stddef.h>
 #include <string.h>
 
-/** @brief 撤展示与待发送，保留当前域的消费水位，防止恢复时重复包复活。 */
-static void Invalidate(ClapRanging *self)
+/**
+ * @brief 撤展示与待发送，保留当前域消费水位，防止恢复时重复包复活。
+ * @param self 非NULL前台实例；不改变健康资格、角色、会话或结果ID水位。
+ * @return 无返回值；调用方保证串行访问，撤值后须有新源才能恢复展示。
+ */
+void ClapRanging_Invalidate(ClapRanging *self)
 {
     self->snapshot.has_value=false;
     self->snapshot.fresh=false;
@@ -54,7 +59,7 @@ static void RefreshAge(ClapRanging *self)
     const uint64_t age_ms=age_ns/UINT64_C(1000000);
     self->snapshot.source_age_ms=age_ms>UINT32_MAX?UINT32_MAX:(uint32_t)age_ms;
     self->snapshot.fresh=age_ns<CLAP_RANGING_FRESH_NS;
-    if(age_ns>=CLAP_RANGING_DISPLAY_NS)Invalidate(self);
+    if(age_ns>=CLAP_RANGING_DISPLAY_NS)ClapRanging_Invalidate(self);
 }
 
 /** @brief 接受一条新结果，更新消费水位与源年龄；调用方已完成入口校验。 */
@@ -99,7 +104,7 @@ void ClapRanging_Update(ClapRanging *self,BoardRole role,bool healthy,
          self->session.source_floor_ns!=session->source_floor_ns));
     if(changed)
     {
-        Invalidate(self);
+        ClapRanging_Invalidate(self);
         self->have_source=false;
         self->last_source_ns=0U;
         self->last_id=0U;
@@ -129,19 +134,16 @@ void ClapRanging_Update(ClapRanging *self,BoardRole role,bool healthy,
         { self->healthy=false; }
         if(temperature_ok)
         {
-            if(self->temperature.version!=temperature->version ||
-               self->temperature.sound_speed_mm_s!=temperature->sound_speed_mm_s ||
-               self->temperature.temperature_milli_c!=temperature->temperature_milli_c ||
-               self->calibration.version!=cal->version ||
+            if(self->calibration.version!=cal->version ||
                self->calibration.enabled!=cal->enabled ||
                self->calibration.calibrated!=cal->calibrated ||
                self->calibration.offset_mm!=cal->offset_mm)
-            { Invalidate(self); }
+            { ClapRanging_Invalidate(self); }
             self->temperature=*temperature;
         }
         self->calibration=*cal;
     }
-    if(!self->healthy)Invalidate(self);
+    if(!self->healthy)ClapRanging_Invalidate(self);
     else RefreshAge(self);
 }
 
