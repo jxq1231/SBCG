@@ -1,6 +1,6 @@
 # B板瞬态同步故障恢复：软件验证记录
 
-基线：057dcb1，分支jxq/ui-navigation。本轮仅实现B板同步协调器的已知硬件状态恢复。**软件验证及独立审查通过；2026-11-01已烧录B板并验证一次断网后无需复位重新同步，随后90秒稳定。FAULT分支未在实物触发，未创建功能完成提交。** 原有标定增量仍未提交，内容保持原样。
+基线：057dcb1，分支jxq/ui-navigation。本轮仅实现B板同步协调器的已知硬件状态恢复。**软件验证及独立审查通过；2026-11-01已烧录B板并验证一次断网后无需复位重新同步，随后90秒稳定；2026-11-02通过临时注入Fault锁存点完成FAULT恢复分支实物验收。恢复增量已在7048baa提交，标定增量已在4c65a85提交，作者和committer均为jxq；未push。** 500mm物理标定和CLAP/WAVE播放验收仍待实机完成。
 
 ## 已复现的问题与修复
 
@@ -88,6 +88,25 @@ ITCM仍14688B，前端SDRAM仍5792B/8192B；音频和ETH固定保留区通过布
 
 **结论：本次单次断网后自动恢复通过。** 没有`$SYNC_RECOVERY`记录、没有FAULT，因此不能据此宣称新加FAULT恢复分支已经实机验证；它目前仍由主机故障注入测试证明。主机同步协调器21组输出和PPS集成23组输出在本次操作前重新通过。现有长期偶发“一次错误后不恢复”是否还包含其他原因，仍须保留首次异常现场继续验证。
 
+## 实物注入FAULT验收（2026-11-02）
+
+自然断网只产生UNSYNCED，不能触发FAULT；B板ST-LINK在`reset_config srst_only srst_nogate connect_assert_srst`下无法运行时halt，调试器改寄存器不可行。经用户批准，使用临时worktree `/d/electronic_design/SBCG-fault-inject`（基线dfd4b4d）在`CheckClockGeneration`的B分支注入一次性`Fault()`锁存点，仅烧B板；测试代码未提交、未进入主工作树。
+
+证据：`Logs/Acceptance/fault-inject-20261102T012022/B-serial.jsonl`（COM5，80s）。
+
+| 相对秒数 | 观测 |
+|---:|---|
+| 23.47 | `$FAULT_INJECT` |
+| 23.87 | `$SYNC_CTRL,ROLE=B,STATE=FAULT,...,ERRORS=1`；PPS UNQUALIFIED，MISSED=1 |
+| 24.47 | `$SYNC_RECOVERY,ROLE=B,STATUS=0,ATTEMPTS=1,RECOVERIES=1,FREQ_PPB=-709,EPOCH=2,RATE_REV=7,SYNC=0` |
+| 24.87 | STATE=ACQUIRING |
+| 25.87 | STATE=TRACKING |
+| 27.88 | STATE=LOCKED_INTERNAL；PPS重新QUALIFIED |
+
+全程`$AUDIO DROP=0`。恢复链路“故障锁存→撤销旧消费者/PPS→每秒重试→重新获取已知频率→重新ACQUIRING/TRACKING”实物PASS，恢复约1s，PPS约3s重新合格。边界：本轮注入的是`Fault()`锁存点，不是真实PTP硬件读失败触发；检测路径仍由主机测试覆盖，真实硬件故障触发未制造。
+
+随后使用主工作树`build/Debug/SBCG.elf`（sha256 `5c15ed3c87c0dbc120b7a132c05ab7e4b80df579f68d035ddee3f90071e0c21d`，HEAD dfd4b4d）恢复B官方镜像；`Logs/Acceptance/restore-b-20261102T012205`确认0条`$FAULT_INJECT`，正常HOLDOVER→UNSYNCED→ACQUIRING→TRACKING→LOCKED_INTERNAL。A板未烧测试镜像。
+
 ## 后续无需发声实机步骤
 
 1. 两板连接同一交换机，确认两板ETH LINK=UP；B的ST-LINK USB接入电脑，确认UID及COM5，A为COM3。先捕获故障，避免复位丢证据。
@@ -96,4 +115,4 @@ ITCM仍14688B，前端SDRAM仍5792B/8192B；音频和ETH固定保留区通过布
 4. 若自然复现FAULT，等待硬件恢复后观察`$SYNC_RECOVERY,ROLE=B,STATUS=0,...RECOVERIES=`增长，然后ACQUIRING→新样本TRACKING。恢复期间旧距离必须撤销，不直接复活旧结果。
 5. 若仍是NOT SYNCED而非FAULT，检查两端`$ETH`、`$PTP_SYNC_STATS`、`$PTP_SYNC_DIAG`、`$SYNC_CTRL`、`$SYNC_ADJUST`、`$PPS`和`$PROFILE`，继续定位报文/硬件戳缺在哪一步。
 
-Git：本轮未stage、未commit、未push；硬件通过后定向提交本轮8个代码/测试文件及2个文档，作者和committer均jxq，不混入标定或用户原有改动。建议提交消息：`fix: reacquire B sync after recoverable clock faults`。
+Git：恢复代码、测试及本记录基线已在7048baa提交，作者和committer均jxq；2026-11-02的FAULT验收补记另行提交；均未push。标定及高级UI增量已在4c65a85提交；用户原有LICENSE删除、Analysis/、旧Docs和nul保持未动。
