@@ -2,7 +2,8 @@
  * @file        measurement_result.c
  * @brief       两板测距唯一权威结果的缓存与有效性处理。
  * @details     Update确认域/时钟/会话/流上下文；A共享临时与确认结果的ID/revision，
- *              B分离原始权威载荷和本地过期展示，声音年龄只由实际共同时间推进。
+ *              B分离原始权威载荷和本地过期展示，声音年龄只由实际共同时间推进；
+ *              标定取样只读A板当前新鲜跟踪值，复用当前温补距离的舍入规则。
  * @note        纯前台标量；无PCM/HAL/PTP/网络访问，无动态内存。
  */
 #include "measurement_result.h"
@@ -527,6 +528,32 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
  */
 void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out)
 { if(out!=NULL)*out=presentation; }
+
+/**
+ * @brief 从A板新鲜跟踪展示只读取得未标定距离及来源身份。
+ * @param out 调用方拥有的可写输出；NULL返回false，非NULL先清零，失败保持零值。
+ * @return 当前受信前台状态允许标定且温补换算成功时true，否则false。
+ * @note 调用方先Update实际共同时间；本函数不推进时钟、不修改展示或跟踪器。
+ */
+bool MeasurementResult_GetCalibrationSample(MeasurementCalibrationSample *out)
+{
+    if(out==NULL)return false;
+    memset(out,0,sizeof *out);
+    if(!authority_cache.mode || !authority_cache.healthy || !authority_cache.context.authority ||
+       presentation.state!=MEASUREMENT_PRESENTATION_TRACKING || !presentation.has_value ||
+       !presentation.fresh || authority_cache.now_common_ns>=presentation.fresh_deadline_ns)
+        return false;
+    int32_t raw_mm,corrected_mm;
+    if(!CorrectedDistance(presentation.filtered_delta_ns,authority_cache.temperature.sound_speed_mm_s,
+        &raw_mm,&corrected_mm))return false;
+    out->raw_mm=raw_mm;
+    out->measurement_id=presentation.measurement_id;
+    out->state_revision=presentation.state_revision;
+    out->time_domain=presentation.time_domain;
+    out->authority_clock_epoch=presentation.authority_clock_epoch;
+    out->source_common_ns=presentation.source_common_ns;
+    return true;
+}
 
 /**
  * @brief 检查远程展示载荷的状态、标志、期限和数值边界。

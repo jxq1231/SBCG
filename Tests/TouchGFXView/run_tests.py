@@ -18,7 +18,12 @@ widgets = (root/'TouchGFX/generated/gui_generated/include/gui_generated/screen1_
 base = '''#pragma once
 #include <cstdint>
 #include <cstddef>
+#include <algorithm>
 namespace touchgfx {
+struct Rect {int16_t x=0,y=0,width=0,height=0; Rect()=default;Rect(int16_t a,int16_t b,int16_t c,int16_t d):x(a),y(b),width(c),height(d){}
+bool isEmpty()const{return width<=0||height<=0;}
+Rect operator&(const Rect&r)const{int16_t a=std::max(x,r.x),b=std::max(y,r.y);return Rect(a,b,std::max(0,std::min(x+width,r.x+r.width)-a),std::max(0,std::min(y+height,r.y+r.height)-b));}
+void operator&=(const Rect&r){*this=*this&r;} };
 struct ClickEvent { enum ClickEventType{PRESSED,RELEASED,CANCEL}; ClickEventType type; int16_t x,y;
 ClickEvent(ClickEventType t,int16_t a,int16_t b):type(t),x(a),y(b){} ClickEventType getType()const{return type;} int16_t getX()const{return x;} int16_t getY()const{return y;} };
 struct DragEvent { enum DragEventType{DRAGGED}; int16_t x,y; DragEvent(DragEventType,int16_t,int16_t,int16_t a,int16_t b):x(a),y(b){} int16_t getNewX()const{return x;} int16_t getNewY()const{return y;} };
@@ -26,9 +31,14 @@ struct TypedText { int id; explicit TypedText(int n):id(n){} };
 struct Unicode { using UnicodeChar=uint16_t;
 static uint16_t fromUTF8(const uint8_t*s,uint16_t*d,uint16_t n){uint16_t i=0;for(;i+1<n&&s[i];++i)d[i]=s[i];d[i]=0;return i;}};
 struct Drawable { unsigned invalidations=0; bool visible=true; int16_t x=0,y=0,w=0,h=0; uint32_t color=0;
+virtual ~Drawable()=default;
+int16_t getWidth()const{return w;}int16_t getHeight()const{return h;} Rect getAbsoluteRect()const{return Rect(x,y,w,h);}void translateRectToAbsolute(Rect&r)const{r.x+=x;r.y+=y;}
 void invalidate(){++invalidations;} void setVisible(bool v){visible=v;} bool isVisible()const{return visible;}
-void setPosition(int16_t a,int16_t b,int16_t c,int16_t d){x=a;y=b;w=c;h=d;} void setColor(uint32_t c){color=c;} };
+void setPosition(int16_t a,int16_t b,int16_t c,int16_t d){x=a;y=b;w=c;h=d;} void setColor(uint32_t c){color=c;} uint32_t getColor()const{return color;} };
 struct Box:Drawable {};
+struct Widget:Drawable {virtual void draw(const Rect&)const=0;virtual Rect getSolidRect()const=0;};
+struct LCD {static unsigned fills;static Rect allowed;static bool check_clip;static int trace_min,trace_max;void fillRect(const Rect&r,unsigned color,uint8_t=255){if(r.width<=0||r.height<=0)return;++fills;if(color==0x2dd4bfU){trace_min=std::min(trace_min,static_cast<int>(r.y));trace_max=std::max(trace_max,r.y+r.height-1);}if(check_clip){if(r.x<allowed.x||r.y<allowed.y||r.x+r.width>allowed.x+allowed.width||r.y+r.height>allowed.y+allowed.height)__builtin_abort();}}};
+struct HAL {static LCD&lcd(){static LCD lcd;return lcd;}};
 struct TextArea:Drawable {int font=-1; const uint16_t* text=nullptr; void setTypedText(TypedText t){font=t.id;} void setLinespacing(int){} };
 struct TextAreaWithOneWildcard:TextArea {void setWildcard(const uint16_t*t){text=t;} };
 }
@@ -58,6 +68,9 @@ base += '};\n'
 for path,source in {
     'touchgfx/Color.hpp':'#pragma once\nnamespace touchgfx {struct Color {static unsigned getColorFromRGB(unsigned r,unsigned g,unsigned b){return r*65536+g*256+b;}};}\n',
     'touchgfx/widgets/Box.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
+    'touchgfx/widgets/Widget.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
+    'touchgfx/hal/HAL.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
+    'touchgfx/lcd/LCD.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
     'touchgfx/widgets/TextAreaWithWildcard.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
     'touchgfx/events/ClickEvent.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
     'touchgfx/events/DragEvent.hpp':'#pragma once\n#include <gui_generated/screen1_screen/Screen1ViewBase.hpp>\n',
@@ -73,8 +86,26 @@ test_source='''#include <cassert>
 #include <gui/screen1_screen/Screen1View.hpp>
 #include "UI/touchgfx_service.h"
 #include "BSP/bsp_touch.h"
+#include "Calibration/calibration_control.h"
+extern "C" {
+#include "app_main.h"
+}
+unsigned touchgfx::LCD::fills=0; touchgfx::Rect touchgfx::LCD::allowed;bool touchgfx::LCD::check_clip=false;
+int touchgfx::LCD::trace_min=32767,touchgfx::LCD::trace_max=-32768;
+static WaveformSnapshot wave{};static ClapRangingSnapshot clap{};
+static unsigned wave_reads=0;
+extern "C" void App_GetClapSnapshot(ClapRangingSnapshot*out){*out=clap;}
+extern "C" void WaveformService_GetSnapshot(WaveformSnapshot*out){*out=wave;++wave_reads;}
 static UI_StatusText page{}; static uint32_t generation=1; static bool available=false;
 static bool touch_valid=true;
+static CalibrationControlSnapshot calibration{};
+static unsigned calibration_requests=0;
+static CalibrationAction requested_action=CALIBRATION_ACTION_NONE;
+static MeasurementCalibrationSample requested_sample{};
+extern "C" void CalibrationControl_GetSnapshot(CalibrationControlSnapshot*out){*out=calibration;}
+extern "C" bool CalibrationControl_Request(CalibrationAction a,const MeasurementCalibrationSample*s){
+ ++calibration_requests;requested_action=a;requested_sample=s?*s:MeasurementCalibrationSample{};return true;
+}
 extern "C" void BSP_Touch_GetSnapshot(BSP_TouchSnapshot*out){out->sample_valid=touch_valid;}
 extern "C" bool UI_TouchGFX_GetText(UI_StatusText*out,uint32_t*g){if(!available)return false;*out=page;*g=generation;return true;}
 static bool equals(const uint16_t*b,const char*s){while(*s&&*b==static_cast<unsigned char>(*s)){++b;++s;}return !*b&&!*s;}
@@ -88,13 +119,19 @@ class InspectView:public Screen1View {public:
 void dump(int page){
 // DUMP_WIDGETS
  dumpWidget(page,"pagePanel",pagePanel);dumpWidget(page,"pageTitle",pageTitle,pageTitle.font,pageTitle.text);
+ dumpWidget(page,"waveform",waveform);
  for(int i=0;i<5;++i)dumpWidget(page,"pageLine",pageLines[i],pageLines[i].font,pageLines[i].text);
  for(int i=0;i<3;++i){dumpWidget(page,"settingTile",settingTiles[i]);dumpWidget(page,"settingLabel",settingLabels[i],settingLabels[i].font,settingLabels[i].text);}
  dumpWidget(page,"navBackground",navigationBackground);
  for(int i=0;i<4;++i){dumpWidget(page,"navTile",navigationTiles[i]);dumpWidget(page,"navLabel",navigationLabels[i],navigationLabels[i].font,navigationLabels[i].text);}
 }
 bool titleIs(const char*t){return equals(pageTitleBuffer,t);}
+bool lineIs(int i,const char*t){return equals(pageLineBuffers[i],t);}
+unsigned wavePaints()const{return waveform.invalidations;}
+void drawWave(touchgfx::Rect area){waveform.draw(area);}
+unsigned settingInvalidations()const{unsigned n=0;for(int i=0;i<3;++i)n+=settingTiles[i].invalidations+settingLabels[i].invalidations;return n;}
 };
+static void tap(Screen1View&v,int x,int y){v.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,x,y));v.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,x,y));}
 int main(){
  InspectView view; view.setupScreen(); assert(view.roleText.invalidations==0);
  available=true; std::strcpy(page.role,"BOARD A");std::strcpy(page.distance,"-- M");
@@ -123,6 +160,13 @@ int main(){
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,180,250));
  assert(!view.measurePanel.isVisible());
  assert(view.titleIs("CLAP RANGING"));
+ assert(view.lineIs(0,"WAIT / NO CLAP"));
+ clap.has_value=clap.fresh=true;clap.result.distance_mm=1234;clap.result.direction=2;clap.result.quality=87;clap.source_age_ms=250;
+ view.handleTickEvent();assert(view.lineIs(0,"FRESH / SINGLE CLAP"));
+ assert(view.lineIs(1,"DISTANCE 1234 MM"));assert(view.lineIs(2,"SIDE B / QUALITY 87"));
+ assert(equals(view.distanceTextBuffer,page.distance));
+ clap.fresh=false;view.handleTickEvent();assert(view.lineIs(0,"HELD / LAST CLAP"));
+ clap.has_value=false;view.handleTickEvent();assert(view.lineIs(1,"DISTANCE -- MM"));
  // A held finger never reselects; invalid release and dragging out cancel.
  for(int i=0;i<20;++i)view.handleTickEvent();
  assert(!view.measurePanel.isVisible());
@@ -155,18 +199,97 @@ int main(){
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,60,250));
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,60,250));
  assert(view.measurePanel.isVisible());assert(equals(view.distanceTextBuffer,"0.325 M"));
+ // Hidden WAVE never polls or invalidates; re-entering fetches the latest CPU frame.
+ const unsigned hidden_reads=wave_reads;
+ for(int i=0;i<20;++i)view.handleTickEvent();assert(wave_reads==hidden_reads);
+ wave.valid=true;wave.frame_seq=1;wave.point_count=256;wave.window_span_ns=16000000;
+ for(int i=0;i<256;++i)wave.points[i]=(i%2)?32767:-32768;
+ tap(view,300,250);assert(view.lineIs(0,"LOCAL / UNSYNCED"));
+ const unsigned paints_wave=view.wavePaints();view.handleTickEvent();assert(view.wavePaints()==paints_wave);
+ touchgfx::LCD::allowed=touchgfx::Rect(31,142,10,12);touchgfx::LCD::check_clip=true;
+ view.drawWave(touchgfx::Rect(7,9,10,12));assert(touchgfx::LCD::fills>2);
+ touchgfx::LCD::check_clip=false;
+ ++wave.frame_seq;wave.synced=true;wave.period_valid=true;wave.period_milli_hz=1000000;
+ view.handleTickEvent();assert(view.lineIs(0,"SYNC / COMMON WINDOW"));assert(view.wavePaints()==paints_wave+1);
+ // A weak real PCM signal must remain visible; one-PCM noise must not gain full height.
+ for(int i=0;i<256;++i)wave.points[i]=(i%2)?100:-200;
+ ++wave.frame_seq;view.handleTickEvent();
+ touchgfx::LCD::trace_min=32767;touchgfx::LCD::trace_max=-32768;
+ view.drawWave(touchgfx::Rect(0,0,432,78));
+ assert(touchgfx::LCD::trace_max-touchgfx::LCD::trace_min>30);
+ assert(wave.points[0]==-200 && wave.points[1]==100); // display gain never edits source PCM
+ for(int i=0;i<256;++i)wave.points[i]=(i%2)?1:-1;
+ ++wave.frame_seq;view.handleTickEvent();
+ touchgfx::LCD::trace_min=32767;touchgfx::LCD::trace_max=-32768;
+ view.drawWave(touchgfx::Rect(0,0,432,78));
+ assert(touchgfx::LCD::trace_max-touchgfx::LCD::trace_min<=1);
+ ++wave.frame_seq;wave.valid=false;view.handleTickEvent();assert(view.lineIs(0,"WAIT / NO AUDIO"));
+ touchgfx::LCD::fills=0;view.drawWave(touchgfx::Rect(0,0,432,78));assert(touchgfx::LCD::fills==2);
+ tap(view,60,250);++wave.frame_seq;wave.valid=true;wave.synced=false;wave.period_valid=false;
+ const unsigned hidden_paints=view.wavePaints();view.handleTickEvent();assert(view.wavePaints()==hidden_paints);
+ tap(view,300,250);assert(view.lineIs(0,"LOCAL / UNSYNCED"));assert(view.wavePaints()==hidden_paints+1);
+ tap(view,60,250);
  // Gaps/outside navigation do not activate a page.
  for(int x:{-1,0,119,120,239,359,479,480}){
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,x,250));
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,x,250));
   assert(view.measurePanel.isVisible());
  }
- ++generation;std::strcpy(page.role,"BOARD A");view.handleTickEvent();
+ ++generation;std::strcpy(page.role,"BOARD A");calibration.authority=true;view.handleTickEvent();
+ clap.has_value=true;clap.fresh=false;clap.result.distance_mm=10000;clap.source_age_ms=6499;
+ wave.synced=true;wave.period_valid=true;wave.period_milli_hz=1000000;++wave.frame_seq;
  for(int i=0;i<4;++i){
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,60+120*i,250));
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,60+120*i,250));
   view.dump(i);
  }
+ // A capture requires confirmation, preserves the displayed sample key, and cancels on navigation.
+ calibration.authority=true;calibration.sample_available=true;
+ calibration.sample={490,20,30,7,2,1000000000U};
+ view.handleTickEvent();
+ tap(view,220,202);tap(view,370,202);assert(calibration_requests==0); // no saved coefficients
+ tap(view,70,202);assert(calibration_requests==0);
+ view.dump(4);
+ const uint32_t confirmed_id=calibration.sample.measurement_id;
+ ++calibration.sample.measurement_id;view.handleTickEvent();
+ tap(view,70,202);assert(calibration_requests==1);
+ assert(requested_action==CALIBRATION_ACTION_CAPTURE && requested_sample.measurement_id==confirmed_id);
+ calibration.calibration.calibrated=true;calibration.calibration.enabled=true;
+ calibration.calibration.offset_mm=10;calibration.calibration.version=1;
+ calibration.applied_offset_mm=10;calibration.applied_version=1;
+ view.handleTickEvent();
+ view.dump(5);
+ tap(view,220,202);tap(view,220,202);assert(calibration_requests==1); // CANCEL
+ tap(view,220,202);tap(view,70,202);assert(calibration_requests==2 && requested_action==CALIBRATION_ACTION_DISABLE);
+ calibration.calibration.enabled=false;calibration.applied_offset_mm=0;++calibration.applied_version;
+ view.handleTickEvent();tap(view,220,202);tap(view,70,202);
+ assert(calibration_requests==3 && requested_action==CALIBRATION_ACTION_ENABLE);
+ tap(view,370,202);tap(view,60,250);tap(view,420,250); // leaving cancels confirmation
+ assert(calibration_requests==3);
+ tap(view,370,202);tap(view,70,202);
+ assert(calibration_requests==4 && requested_action==CALIBRATION_ACTION_CLEAR);
+ calibration.sample_available=false;view.handleTickEvent();tap(view,70,202);tap(view,70,202);
+ assert(calibration_requests==4); // no fresh TRACKING source
+ calibration.sample_available=true;view.handleTickEvent();
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,202));
+ view.handleDragEvent(touchgfx::DragEvent(touchgfx::DragEvent::DRAGGED,70,202,70,170));
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,202));
+ assert(calibration_requests==4);
+ tap(view,70,202); // open CAPTURE confirmation
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,202));
+ for(int i=0;i<20;++i)view.handleTickEvent();
+ assert(calibration_requests==4);
+ touch_valid=false;
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,202));
+ assert(calibration_requests==4);touch_valid=true;tap(view,220,202);
+ calibration.authority=false;view.handleTickEvent();
+ ++generation;std::strcpy(page.role,"BOARD B");view.handleTickEvent();
+ view.dump(6);
+ for(int x:{70,220,370}){tap(view,x,202);tap(view,70,202);}
+ assert(calibration_requests==4); // B cannot submit even while holding saved-state fixtures
+ const unsigned paints=view.settingInvalidations();
+ for(int i=0;i<20;++i)view.handleTickEvent();
+ assert(view.settingInvalidations()==paints); // unchanged settings must not force VSYNC redraws
 }
 '''
 dump_calls=[]
@@ -183,4 +306,4 @@ subprocess.run([shutil.which('g++'), '-std=c++17', '-Wall', '-Wextra', '-Werror'
 result=subprocess.run([str(exe)], check=True, timeout=30,capture_output=True,text=True)
 layout=[json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
 (out/'navigation-layout.json').write_text(json.dumps(layout,indent=2),encoding='utf-8')
-print('PASS View: 13 bindings, four pages, release/hold/drag/cancel/fault, hidden updates, disabled actions')
+print('PASS View: 13 bindings, CLAP fresh/hold/withdraw, WAVE local/sync/wait/clip/version/hidden, navigation and calibration')

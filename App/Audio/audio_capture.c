@@ -5,6 +5,9 @@
  * @note        依赖已生成的SAI/DMA及音频BSP；处理门控只暂停前台消费，不停止DMA。扫频只在原认领中复制，End通过后分批处理副本。
  */
 #include "audio_capture.h"
+#ifdef SBCG_USE_ADVANCED_UI
+#include "UI/waveform_service.h"
+#endif
 #ifdef SBCG_USE_SOUND_DETECTOR
 #include "Detector/sound_detector_service.h"
 #include "BSP/bsp_console.h"
@@ -124,6 +127,10 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
         mark = BSP_Console_GetTickMs();
         const bool computed = AudioStatistics_Compute(block.samples, BSP_AUDIO_HALF_FRAMES, &next);
         profile.stats_ms = BSP_Console_GetTickMs() - mark;
+#ifdef SBCG_USE_ADVANCED_UI
+        /* 仅在既有借用内复制；真实End提交后波形才对UI可见。 */
+        WaveformService_StageBlock(&block);
+#endif
 #ifdef SBCG_USE_CHIRP
         /* 只复制选定声道，相关处理必须等真实End验证通过。 */
         mark = BSP_Console_GetTickMs();
@@ -139,6 +146,9 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
 #endif
         mark = BSP_Console_GetTickMs();
         const bool accepted=BSP_Audio_EndBlock(&block, computed);
+#ifdef SBCG_USE_ADVANCED_UI
+        WaveformService_CompleteBlock(accepted,BSP_Console_GetTickMs());
+#endif
         profile.io_ms += BSP_Console_GetTickMs() - mark;
 #ifdef SBCG_USE_CHIRP
         mark = BSP_Console_GetTickMs();

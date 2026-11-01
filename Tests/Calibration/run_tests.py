@@ -12,4 +12,10 @@ for opt in ('-O0','-O2'):
  b=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
  if b.returncode: print(b.stdout+b.stderr);res=res or b.returncode;continue
  r=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30);print(r.stdout+r.stderr,end='');res=res or r.returncode
+ control=ROOT/'App/Calibration/calibration_control.c'
+ exe=out/('test_control_'+opt[1:]+'.exe')
+ cmd=[gcc,'-std=c11',opt,'-Wall','-Wextra','-Werror','-pedantic','-I',str(ROOT/'App'),str(ROOT/'Tests/Calibration/test_control.c'),str(ROOT/'App/Calibration/calibration.c'),str(control),'-o',str(exe)]
+ b=subprocess.run(cmd,capture_output=True,text=True,timeout=30)
+ if b.returncode: print(b.stdout+b.stderr);res=res or b.returncode;continue
+ r=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30);print(r.stdout+r.stderr,end='');res=res or r.returncode
 sys.exit(res)

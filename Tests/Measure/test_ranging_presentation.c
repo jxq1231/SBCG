@@ -1,6 +1,7 @@
 /**
  * @file test_ranging_presentation.c
- * @brief 验证真实权威缓存的源期限、版本、温补标定和B接收保护。
+ * @brief 验证真实权威缓存的源期限、版本、温补标定、标定取样和B接收保护。
+ * @details 使用纯前台输入验证标定只读取A板新鲜跟踪值，且不改变现有展示。
  * @note 纯主机时间/温度输入，不提供硬件验收结论。
  */
 #include "Measure/measurement_result.h"
@@ -169,10 +170,109 @@ static void TestCalibrationContract(void)
     p=Push(315,6000U);
     CHECK(p.measurement_id>id && p.distance_mm==345 && p.calibration_version==6U);
 }
-/** @brief 执行生命周期、同源温补与接收重放反例；成功返回0。 */
+/**
+ * @brief 确认拒绝标定取样时清零输出，且读取不改变当前展示。
+ * @return 无返回值；断言失败时结束主机测试。
+ * @note 仅依赖测试已建立的前台状态，不推进共同时间或修改测量缓存。
+ */
+static void CheckNoCalibrationSample(void)
+{
+    MeasurementCalibrationSample sample;
+    memset(&sample,0xa5,sizeof sample);
+    MeasurementPresentationSnapshot before={0},after={0};
+    MeasurementResult_GetPresentation(&before);
+    CHECK(!MeasurementResult_GetCalibrationSample(&sample));
+    CHECK(sample.raw_mm==0 && sample.measurement_id==0U && sample.state_revision==0U &&
+        sample.time_domain==0U && sample.authority_clock_epoch==0U && sample.source_common_ns==0U);
+    MeasurementResult_GetPresentation(&after);
+    CHECK(memcmp(&before,&after,sizeof before)==0);
+}
+
+/**
+ * @brief 验证A板新鲜跟踪值按当前温度取未标定距离，且保留来源身份。
+ * @return 无返回值；断言失败时结束主机测试。
+ * @note 当前PROXY结果仍可取样；不要求FORMAL，不把旧偏移再次计入原始距离。
+ */
+static void TestCalibrationSample(void)
+{
+    Setup();MeasurementResult_SetCalibration(20,5U);
+    (void)Push(315,0U);(void)Push(314,2000U);(void)Push(316,4000U);
+    MeasurementPresentationSnapshot before={0},after={0};
+    MeasurementResult_GetPresentation(&before);
+    CHECK(before.state==MEASUREMENT_PRESENTATION_TRACKING && before.fresh &&
+        before.provisional && !before.formal && before.distance_mm==335);
+    MeasurementCalibrationSample sample;
+    CHECK(MeasurementResult_GetCalibrationSample(&sample));
+    CHECK(sample.raw_mm==315 && sample.raw_mm==before.distance_mm-before.calibration_offset_mm);
+    CHECK(sample.measurement_id==before.measurement_id && sample.state_revision==before.state_revision &&
+        sample.time_domain==before.time_domain && sample.authority_clock_epoch==before.authority_clock_epoch &&
+        sample.source_common_ns==before.source_common_ns);
+    MeasurementResult_GetPresentation(&after);
+    CHECK(memcmp(&before,&after,sizeof before)==0);
+    CHECK(!MeasurementResult_GetCalibrationSample(NULL));
+
+    temperature.sound_speed_mm_s=350000U;temperature.version++;
+    MeasurementResult_Update(&context,&temperature,5050U,current_ns+1000000ULL);
+    CHECK(MeasurementResult_GetCalibrationSample(&sample));
+    MeasurementResult_GetPresentation(&after);
+    CHECK(sample.raw_mm==321 && after.distance_mm==341);
+    CHECK(sample.raw_mm==after.distance_mm-after.calibration_offset_mm);
+    CHECK(sample.measurement_id==before.measurement_id && sample.source_common_ns==before.source_common_ns &&
+        sample.state_revision>before.state_revision);
+
+    Setup();(void)Push(-315,0U);(void)Push(-315,2000U);(void)Push(-315,4000U);
+    CHECK(MeasurementResult_GetCalibrationSample(&sample) && sample.raw_mm==315);
+}
+
+/**
+ * @brief 验证未建上下文、候选、过期、失效和B板远程值均不能用于标定。
+ * @return 无返回值；断言失败时结束主机测试。
+ * @note 新鲜期限由显式Update推进；重复读取不刷新年龄、期限或展示状态。
+ */
+static void TestCalibrationSampleEligibility(void)
+{
+    MeasurementResult_Init(0U);CheckNoCalibrationSample();
+    Setup();CheckNoCalibrationSample();
+    (void)Push(315,0U);CheckNoCalibrationSample();
+    (void)Push(315,2000U);
+    MeasurementPresentationSnapshot p=Push(315,4000U);
+    MeasurementCalibrationSample sample;
+    MeasurementResult_Update(&context,&temperature,7500U,p.fresh_deadline_ns-1U);
+    CHECK(MeasurementResult_GetCalibrationSample(&sample));
+    MeasurementResult_Update(&context,&temperature,7501U,p.fresh_deadline_ns);
+    MeasurementResult_GetPresentation(&p);
+    CHECK(p.state==MEASUREMENT_PRESENTATION_HOLD && p.has_value && !p.fresh);
+    CheckNoCalibrationSample();CheckNoCalibrationSample();
+    MeasurementResult_Update(&context,&temperature,11501U,p.display_deadline_ns);
+    CheckNoCalibrationSample();
+
+    Setup();(void)Push(315,0U);(void)Push(315,2000U);p=Push(315,4000U);
+    context.domain_valid=false;
+    MeasurementResult_Update(&context,&temperature,5050U,current_ns+1000U);
+    CheckNoCalibrationSample();
+    Setup();(void)Push(315,0U);(void)Push(315,2000U);p=Push(315,4000U);
+    temperature.valid=false;
+    MeasurementResult_Update(&context,&temperature,5050U,current_ns+1000U);
+    CheckNoCalibrationSample();
+
+    Setup();(void)Push(315,0U);(void)Push(315,2000U);p=Push(315,4000U);
+    MeasurementResult_Init(0U);context.authority=false;context.local_clock_epoch=9U;
+    MeasurementResult_Update(&context,NULL,5050U,current_ns);
+    CHECK(MeasurementResult_PublishRemotePresentation(&p,7U,5050U));
+    MeasurementResult_GetPresentation(&p);
+    CHECK(p.has_value && p.fresh && p.state==MEASUREMENT_PRESENTATION_TRACKING);
+    CheckNoCalibrationSample();
+}
+
+/**
+ * @brief 执行生命周期、同源温补、标定取样与接收重放反例。
+ * @return 所有断言通过时返回0，失败由CHECK结束进程。
+ * @note 仅验证主机标量逻辑，不表示硬件测距精度通过验收。
+ */
 int main(void)
 {
     TestProvisionalRecovery();TestNewSoundAfterExpiry();TestTrustedInput();TestRemoteRevocation();TestCalibrationContract();
+    TestCalibrationSample();TestCalibrationSampleEligibility();
     Setup();MeasurementResult_SetCalibration(20,5U);
     MeasurementPresentationSnapshot p=Push(315,0U);CHECK(p.measurement_id==1U);
     uint32_t rev=p.state_revision;
@@ -217,6 +317,6 @@ int main(void)
     context.domain_valid=false;
     MeasurementResult_Update(&context,&temperature,12003U,original.display_deadline_ns+1000U);
     MeasurementResult_GetPresentation(&p);CHECK(!p.has_value && p.state==MEASUREMENT_PRESENTATION_FAULT);
-    puts("PASS presentation: trusted context, monotonic IDs/revisions, source expiry, calibration/temp, conflict and replay guards");
+    puts("PASS presentation: trusted context, monotonic IDs/revisions, source expiry, calibration/temp/sample, conflict and replay guards");
     return 0;
 }

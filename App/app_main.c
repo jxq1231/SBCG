@@ -7,6 +7,19 @@
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
 #include "app_main.h"
+#ifdef SBCG_USE_ADVANCED_UI
+#include "Network/clap_wire.h"
+#include "UI/waveform_service.h"
+/** @brief 前台独占击掌权威状态，与标准音缓存分离；不与DMA共享。 */
+static ClapRanging clap_ranging __attribute__((section(".ItcmState"),aligned(8)));
+/** @brief 只读复制击掌展示，不推进时间。@param out 非NULL调用方存储。@return 无返回值。 */
+void App_GetClapSnapshot(ClapRangingSnapshot *out){ClapRanging_GetSnapshot(&clap_ranging,out);}
+#endif
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+#include "Calibration/calibration_control.h"
+/** @brief 已记录的前台标定请求完成序号，只按用户动作输出一次诊断。 */
+static uint32_t calibration_reported;
+#endif
 #ifdef SBCG_ITCM_PROBE
 #include "BSP/bsp_itcm_probe.h"
 #endif
@@ -386,6 +399,7 @@ static bool ReadRangingClock(uint64_t *ns,uint32_t *epoch)
  * @brief 在收发和UI之前持续驱动状态会话与真实源期限。
  * @param now_ms 当前HAL毫秒；音频快照之后另取时校验回调年龄。
  * @return 无返回值；不发送报文、不读取PCM，不改变PTP/PPS配置。
+ * @note 启用标定UI时，先核对真实测量新鲜度，再执行用户确认动作；系数变化按既有合同撤值等待新声音。
  */
 static void RefreshRanging(uint32_t now_ms)
 {
@@ -435,9 +449,70 @@ static void RefreshRanging(uint32_t now_ms)
         .source_floor_ns=session.source_floor_ns};
     TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now_ms,&temperature);
     CalibrationSnapshot calibration;Calibration_Get(&calibration);
-    if(context.authority)MeasurementResult_SetCalibration(calibration.offset_mm,calibration.version);
+    if(context.authority)MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
     MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+    MeasurementCalibrationSample calibration_sample;
+    const bool sample_available=MeasurementResult_GetCalibrationSample(&calibration_sample);
+    MeasurementPresentationSnapshot calibration_presentation;
+    MeasurementResult_GetPresentation(&calibration_presentation);
+    if(CalibrationControl_Process(context.authority,sample_available?&calibration_sample:NULL,
+        calibration_presentation.calibration_offset_mm,calibration_presentation.calibration_version))
+    {
+        Calibration_Get(&calibration);
+        MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
+        MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
+    }
+    CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
+    if(control.completed!=calibration_reported)
+    {
+        calibration_reported=control.completed;
+        char line[240];
+        const int length=snprintf(line,sizeof line,
+            "$CALIBRATION,ACTION=%u,RESULT=%u,SAVED=%u,ENABLED=%u,OFFSET_MM=%" PRId32
+            ",APPLIED_MM=%" PRId32 ",VERSION=%u,SAMPLE_ID=%" PRIu32 "\r\n",
+            (unsigned)control.action,(unsigned)control.result,control.calibration.calibrated?1U:0U,
+            control.calibration.enabled?1U:0U,control.calibration.offset_mm,control.applied_offset_mm,
+            (unsigned)control.applied_version,sample_available?calibration_sample.measurement_id:0U);
+        if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
+    }
+#endif
+#ifdef SBCG_USE_ADVANCED_UI
+    ClapRanging_Update(&clap_ranging,profile->role,context.domain_valid && stream_ok && clock_ok,
+        &session,clock_ok?common_ns:0U,now_ms,&temperature,&calibration);
+    WaveformService_Update(profile->role,context.domain_valid && stream_ok && clock_ok,
+        &session,clock_ok?common_ns:0U,now_ms);
+#endif
 }
+
+#ifdef SBCG_USE_ADVANCED_UI
+/** @brief 固定对端短包一次解码后分发；仅匹配角色消费。@param data 借用载荷。@param length 已分派长度。@return 无返回值。 */
+static void HandleAuxiliary(const uint8_t *data,uint16_t length)
+{
+    const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
+    const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
+    if(memcmp(data,"CLP1",4)==0 && profile->role==BOARD_ROLE_B)
+    { ClapResultMessage result;if(ClapWire_DecodeResult(data,length,&result))
+        (void)ClapRanging_OnMessage(&clap_ranging,&result); }
+    else if(memcmp(data,"CLA1",4)==0 && profile->role==BOARD_ROLE_A)
+    { ClapAckMessage ack;if(ClapWire_DecodeAck(data,length,&ack))
+        (void)ClapRanging_OnAck(&clap_ranging,&ack); }
+    else if(memcmp(data,"WVP1",4)==0 && profile->role==BOARD_ROLE_B)
+    { WaveformPlan plan;if(WaveformPlanWire_Decode(data,length,&plan))
+        (void)WaveformService_OnPlan(&plan,now); }
+}
+/** @brief 前台发送击掌结果/确认和共同波形计划，失败不补发突发流。@param now_ms 当前毫秒。@return 无返回值。 */
+static void ServiceAuxiliary(uint32_t now_ms)
+{
+    uint8_t data[CLAP_RESULT_WIRE_BYTES];ClapResultMessage result;ClapAckMessage ack;WaveformPlan plan;
+    if(ClapRanging_TakeTx(&clap_ranging,now_ms,&result) && ClapWire_EncodeResult(&result,data,CLAP_RESULT_WIRE_BYTES))
+        (void)UDPSoundEvent_SendAuxiliary(data,CLAP_RESULT_WIRE_BYTES);
+    if(ClapRanging_TakeAck(&clap_ranging,&ack) && ClapWire_EncodeAck(&ack,data,CLAP_ACK_WIRE_BYTES))
+        (void)UDPSoundEvent_SendAuxiliary(data,CLAP_ACK_WIRE_BYTES);
+    if(WaveformService_TakePlan(&plan) && WaveformPlanWire_Encode(&plan,data,WAVEFORM_PLAN_WIRE_BYTES))
+        (void)UDPSoundEvent_SendAuxiliary(data,WAVEFORM_PLAN_WIRE_BYTES);
+}
+#endif
 
 /**
  * @brief 接收固定对端的状态握手；message仅本次借用，健康读时先于处理。
@@ -650,6 +725,19 @@ static void PublishMeasurement(const SoundPairResult *pair)
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now,&temperature);
+#ifdef SBCG_USE_ADVANCED_UI
+    if(pair->type==SOUND_EVENT_CLAP)
+    {
+        const bool published=ClapRanging_PublishPair(&clap_ranging,pair);
+        ClapRangingSnapshot clap;ClapRanging_GetSnapshot(&clap_ranging,&clap);
+        char line[180];const int n=snprintf(line,sizeof line,
+            "$CLAP_RESULT,VALID=%u,ID=%" PRIu32 ",MM=%" PRId32 ",DIR=%u,QUALITY=%u\r\n",
+            published?1U:0U,clap.result.id,clap.has_value?clap.result.distance_mm:0,
+            (unsigned)clap.result.direction,(unsigned)clap.result.quality);
+        if(n>0 && (size_t)n<sizeof line)SendLine(line,n);
+        return;
+    }
+#endif
     StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
     MeasurementGateSnapshot gate;MeasurementGate_Get(&gate);
     uint64_t common_ns;uint32_t epoch;
@@ -718,6 +806,14 @@ static void PublishRemoteRangingStatus(const RangingStatusMessage *message)
     presentation.display_deadline_ns=message->display_deadline_ns;
     const bool accepted=MeasurementResult_PublishRemotePresentation(
         &presentation,domain.id,now);
+#ifdef SBCG_USE_ADVANCED_UI
+    /* 沿已有标定合同传播撤值；不让B继续显示旧系数下的击掌结果。 */
+    ClapRangingSnapshot clap;ClapRanging_GetSnapshot(&clap_ranging,&clap);
+    if(accepted && clap.has_value &&
+       (clap.result.calibration_version!=message->calibration_version ||
+        clap.result.calibration_offset_mm!=message->calibration_offset_mm))
+        ClapRanging_Invalidate(&clap_ranging);
+#endif
     RangingStatusAck ack={accepted?RANGING_STATUS_ACK_OK:RANGING_STATUS_ACK_REJECT,
         message->domain,message->authority_clock_epoch,message->state_revision,
         message->measurement_id};
@@ -912,6 +1008,14 @@ void App_Init(void)
     (void)BSP_TouchGFXDisplay_Init();
 #endif
     EthernetMonitor_Init(last_heartbeat_ms, SendLine);
+#ifdef SBCG_USE_ADVANCED_UI
+    ClapRanging_Init(&clap_ranging);
+#ifdef SBCG_USE_SDRAM
+    if(sdram_initialized)WaveformService_Init();
+#else
+    WaveformService_Init();
+#endif
+#endif
 #ifdef SBCG_USE_LWIP
     UDPHeartbeat_Init(last_heartbeat_ms, info.uid_words, SendLine);
     UDPProbe_Init(last_heartbeat_ms, info.uid_words, SendLine);
@@ -964,6 +1068,10 @@ void App_Init(void)
     MeasurementResult_Init(BSP_Console_GetTickMs());
     MeasurementGate_Init(BSP_Console_GetTickMs());
     Calibration_Init();
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+    CalibrationControl_Init();
+    calibration_reported=0U;
+#endif
     {
         const StandardSequenceConfig sequence_config={
             STANDARD_SEQUENCE_PERIOD_NS, 20000000U, 5000000000U, 3U, 50U};
@@ -989,6 +1097,9 @@ void App_Init(void)
         UDPSoundEvent_SetRangingStatusSink(PublishRemoteRangingStatus);
         UDPSoundEvent_SetRangingAckSink(HandleRangingAck);
         UDPSoundEvent_SetRangingSessionSink(HandleRangingSession);
+#ifdef SBCG_USE_ADVANCED_UI
+        UDPSoundEvent_SetAuxiliarySink(HandleAuxiliary);
+#endif
     }
 #endif
 #endif
@@ -1027,36 +1138,44 @@ void App_Init(void)
 /**
  * @brief   发布一条已解析声音事件：更新序列/门控并送出事件。
  * @param   notice 非NULL只读事件副本，包含序号、会话、模型帧与PTP时间。
- * @return  无返回值；非CHIRP、无身份或域无效时丢弃。
- * @note    仅A/B身份构建前台；事件发送同时携带波形窗口所需模型帧。
+ * @return  无返回值；未分类、无身份或域无效时丢弃。
+ * @note    仅CHIRP推进标准序列；CLAP独立发布，不改变标准音门控。事件携带原模型帧。
  */
 static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 {
     const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
     if (event_profile == NULL) { return; }
-    if (notice->event_class != EVENT_CLASS_CHIRP) { return; }
-    if(event_profile->role==BOARD_ROLE_A)
-        MeasurementGate_OnChirp(BSP_Console_GetTickMs(),notice->session);
-    const bool sequence_detected=StandardSequence_Push(
-        &standard_sequence,notice->time_ns,notice->quality);
-    if(sequence_detected && event_profile->role==BOARD_ROLE_A)
-        MeasurementGate_OnSequence(BSP_Console_GetTickMs());
-    if(sequence_detected!=standard_sequence_detected){
-        StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
-        char sequence_line[256];
-        (void)snprintf(sequence_line,sizeof sequence_line,
-            "$STANDARD_SEQUENCE,STATUS=%s,EVENTS=%u,ERR_NS=%" PRIu32 ",QUALITY=%u,DIAG=1,LOCAL=1,SYNC=0\r\n",
-            sequence.detected?"DETECTED":"RESET",(unsigned)sequence.events,
-            (uint32_t)sequence.max_period_error_ns,(unsigned)sequence.quality);
-        SendLine(sequence_line,(int)strlen(sequence_line));
-        standard_sequence_detected=sequence_detected;
+    const bool is_chirp=notice->event_class==EVENT_CLASS_CHIRP;
+#ifdef SBCG_USE_ADVANCED_UI
+    if(!is_chirp && notice->event_class!=EVENT_CLASS_CLAP)return;
+#else
+    if(!is_chirp)return;
+#endif
+    if(is_chirp)
+    {
+        if(event_profile->role==BOARD_ROLE_A)
+            MeasurementGate_OnChirp(BSP_Console_GetTickMs(),notice->session);
+        const bool sequence_detected=StandardSequence_Push(
+            &standard_sequence,notice->time_ns,notice->quality);
+        if(sequence_detected && event_profile->role==BOARD_ROLE_A)
+            MeasurementGate_OnSequence(BSP_Console_GetTickMs());
+        if(sequence_detected!=standard_sequence_detected){
+            StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
+            char sequence_line[256];
+            (void)snprintf(sequence_line,sizeof sequence_line,
+                "$STANDARD_SEQUENCE,STATUS=%s,EVENTS=%u,ERR_NS=%" PRIu32 ",QUALITY=%u,DIAG=1,LOCAL=1,SYNC=0\r\n",
+                sequence.detected?"DETECTED":"RESET",(unsigned)sequence.events,
+                (uint32_t)sequence.max_period_error_ns,(unsigned)sequence.quality);
+            SendLine(sequence_line,(int)strlen(sequence_line));
+            standard_sequence_detected=sequence_detected;
+        }
     }
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
     if (!domain.valid || domain.id==0U) { return; }
     SoundEventRecord event = {0};
     event.valid = true;
-    event.type = SOUND_EVENT_CHIRP;
+    event.type = is_chirp?SOUND_EVENT_CHIRP:SOUND_EVENT_CLAP;
     event.quality = notice->quality;
     event.side = event_profile->role == BOARD_ROLE_A ? SOUND_SIDE_A : SOUND_SIDE_B;
     event.time_domain = domain.id;
@@ -1260,6 +1379,9 @@ void App_Process(void)
             const uint32_t observation_ms=BSP_Console_GetTickMs();
             AudioTimeMapMonitor_Observe(observation_ms,&observation);
             SoundEventTime_Observe(BSP_Console_GetTickMs(),&observation);
+#ifdef SBCG_USE_ADVANCED_UI
+            WaveformService_ObserveAnchor(&observation);
+#endif
         }
         BSP_AudioSnapshot snapshot;
         BSP_Audio_GetSnapshot(&snapshot);
@@ -1289,6 +1411,9 @@ void App_Process(void)
             (void)UDPSoundEvent_SendRangingSession(BSP_Console_GetTickMs(),&outgoing);
         ServiceAuthoritativeResult(BSP_Console_GetTickMs());
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
+#ifdef SBCG_USE_ADVANCED_UI
+        ServiceAuxiliary(BSP_Console_GetTickMs());
+#endif
 #endif
     }
 #ifdef SBCG_USE_CHIRP

@@ -6,6 +6,13 @@
  */
 #ifndef SBCG_APP_MAIN_H
 #define SBCG_APP_MAIN_H
+#include "Measure/clap_ranging.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/** @brief 复制独立击掌展示状态，不消费队列。@param out 非NULL调用方输出，仅前台使用。@return 无返回值。 */
+void App_GetClapSnapshot(ClapRangingSnapshot *out);
 
 /* Call once after CubeMX peripheral initialization, then from the main loop. */
 /**
@@ -20,5 +27,9 @@ void App_Init(void);
  * @note    依赖App_Init建立的状态；由main循环反复调用，不代表固定周期任务。
  */
 void App_Process(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

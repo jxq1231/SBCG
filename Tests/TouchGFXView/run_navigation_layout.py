@@ -33,17 +33,25 @@ for widget in layout:
     assert size <= widget['h'], widget
     if widget['name'] != 'navLabel':
         assert widget['y'] + widget['h'] <= 228, widget
-for page in range(4):
+pages=sorted({w['page'] for w in layout})
+for page in pages:
     page_widgets = [w for w in layout if w['page'] == page]
     assert [w['label'] for w in page_widgets if w['name'] == 'navLabel'] == ['RANGE', 'CLAP', 'WAVE', 'SETUP']
     assert sum(w['name'] == 'measurePanel' for w in page_widgets) == (page == 0)
-    assert sum(w['name'] == 'settingTile' for w in page_widgets) == (3 if page == 3 else 0)
-print('PASS navigation layout: four pages, 480x272 bounds, real glyph widths, no navigation/text overlap')
+    assert sum(w['name'] == 'settingTile' for w in page_widgets) == (3 if page >= 3 else 0)
+    plots = [w for w in page_widgets if w['name'] == 'waveform']
+    assert len(plots) == (1 if page == 2 else 0), page
+    if plots:
+        plot = plots[0]
+        assert plot['y'] + plot['h'] <= 228, plot
+        assert all(w['y'] + w['h'] <= plot['y'] for w in page_widgets
+                   if w['name'] in ('pageTitle', 'pageLine')), page
+print('PASS navigation/calibration layout: pages and confirmation states, bounds, actual glyph widths, no text/nav overlap')
 
 if args.preview:
     from PIL import Image, ImageDraw, ImageFont
-    image = Image.new('RGB', (980, 564), '#030812')
-    for page in range(4):
+    image = Image.new('RGB', (980, ((len(pages)+1)//2)*282), '#030812')
+    for page in pages:
         origin = (10 + (page % 2) * 490, 5 + (page // 2) * 282)
         draw = ImageDraw.Draw(image)
         for widget in (w for w in layout if w['page'] == page):

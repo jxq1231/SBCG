@@ -6,7 +6,7 @@
 #include <string.h>
 static int16_t pcm[BSP_AUDIO_HALF_ELEMENTS];
 static uint32_t noise_seed=1;
-static unsigned tone_period_frames=96;
+static double tone_period_frames=96;
 static RangingSessionSnapshot domain = {true, 7, 9, 1};
 /** @brief 提交连续真实PCM，phase为弧度；End失败由调用方指定。 */
 static void Feed(uint64_t frame, double phase, bool accepted, uint32_t ms)
@@ -40,6 +40,96 @@ static void Anchors(void)
 static void History(double phase)
 {
     for (uint64_t i=65536;i<114688;i+=8192) Feed(i,phase,true,(uint32_t)(i/48));
+}
+/**
+ * @brief 验证2kHz及997Hz在不同块首帧/相位和连续共同计划下的参考相位稳定性。
+ * @note 1400 PCM差小于满幅12000单音的2%周期最大斜率误差(约1508 PCM)；
+ *       同时比较解析正弦与跨计划快照，避免只检查过零一点。
+ */
+static void CheckFractionalPhase(void)
+{
+    const double frequencies[]={2000.0,997.0};
+    const unsigned block_shifts[]={0,1,17,35};
+    const double phases[]={0.11,0.94,1.77,0.26};
+    WaveformSnapshot baseline={0}, snapshot;
+    double maximum_error=0.0, maximum_jitter=0.0;
+    for (unsigned frequency=0;frequency<2;frequency++) {
+        tone_period_frames=48000.0/frequencies[frequency];
+        for (unsigned variant=0;variant<4;variant++) {
+            double phase=phases[variant];
+            uint64_t next=65536+block_shifts[variant];
+            WaveformService_Init();
+            for (unsigned block=0;block<6;block++,next+=8192)
+                Feed(next,phase,true,2300);
+            Anchors();
+            WaveformPlan plan={0};
+            for (unsigned tick=0;tick<5;tick++) {
+                uint64_t common_ns=UINT64_C(12300000000)+(uint64_t)tick*UINT64_C(200000000);
+                uint32_t now_ms=2400+tick*200;
+                uint64_t wanted_end=115400+tick*9600;
+                while (next<wanted_end) {
+                    Feed(next,phase,true,now_ms);
+                    next+=8192;
+                }
+                WaveformService_Update(BOARD_ROLE_A,true,&domain,common_ns,now_ms);
+                assert(WaveformService_TakePlan(&plan));
+                WaveformService_Update(BOARD_ROLE_A,true,&domain,plan.display_deadline_ns,now_ms+100);
+                WaveformService_GetSnapshot(&snapshot);
+                assert(snapshot.valid && snapshot.synced && snapshot.period_valid);
+                if (variant==0 && tick==0) baseline=snapshot;
+                for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
+                    double angle=6.283185307179586*frequencies[frequency]*
+                        snapshot.window_span_ns*1e-9*i/(WAVEFORM_POINT_COUNT-1U);
+                    double expected=12000*sin(angle);
+                    double error=fabs(snapshot.points[i]-expected);
+                    double jitter=fabs((double)snapshot.points[i]-baseline.points[i]);
+                    if (error>maximum_error) maximum_error=error;
+                    if (jitter>maximum_jitter) maximum_jitter=jitter;
+                    assert(error<1400.0);
+                    assert(jitter<1400.0);
+                }
+            }
+            /* B移动后的两种相移仍相对A共同起点绘制，禁止插值改动暗中重置B相位。 */
+            for (unsigned move=0;move<2;move++) {
+                double phase_shift=1.5707963267948966+move*0.5;
+                WaveformService_Init();
+                for (uint64_t frame=65536+block_shifts[variant];frame<next;frame+=8192)
+                    Feed(frame,phase+phase_shift,true,3200);
+                Anchors();
+                WaveformService_Update(BOARD_ROLE_B,true,&domain,
+                    plan.display_deadline_ns-UINT64_C(100000000),3200);
+                assert(WaveformService_OnPlan(&plan,3200));
+                WaveformService_Update(BOARD_ROLE_B,true,&domain,plan.display_deadline_ns,3300);
+                WaveformSnapshot shifted;
+                WaveformService_GetSnapshot(&shifted);
+                assert(shifted.valid && shifted.synced && shifted.window_start_ns==snapshot.window_start_ns);
+                for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
+                    double angle=6.283185307179586*frequencies[frequency]*
+                        shifted.window_span_ns*1e-9*i/(WAVEFORM_POINT_COUNT-1U);
+                    assert(fabs(shifted.points[i]-12000*sin(angle+phase_shift))<1400.0);
+                }
+            }
+        }
+    }
+    printf("fractional phase: max analytic error %.1f PCM, frame jitter %.1f PCM\n",
+           maximum_error,maximum_jitter);
+    tone_period_frames=96;
+}
+/** @brief 验证线性插值右邻帧必须已提交；末样本前0.5帧可绘，后0.5帧拒绝。 */
+static void CheckInterpolationBoundary(void)
+{
+    const uint64_t starts_ns[]={UINT64_C(12379312500),UINT64_C(12379333333)};
+    for (unsigned boundary=0;boundary<2;boundary++) {
+        WaveformService_Init(); History(0); Anchors();
+        WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12750000000),2400);
+        WaveformPlan plan={7,9,1,UINT64_C(12850000000),starts_ns[boundary],10000000,0};
+        assert(WaveformService_OnPlan(&plan,2400));
+        WaveformService_Update(BOARD_ROLE_B,true,&domain,plan.display_deadline_ns,2500);
+        WaveformSnapshot snapshot;
+        WaveformService_GetSnapshot(&snapshot);
+        assert(snapshot.valid==(boundary==0));
+        assert(snapshot.synced==(boundary==0));
+    }
 }
 int main(void)
 {
@@ -168,5 +258,7 @@ int main(void)
     WaveformService_ObserveAnchor(&fresh);
     WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(13200000000),3300);
     assert(WaveformService_TakePlan(&p));
+    CheckFractionalPhase();
+    CheckInterpolationBoundary();
     puts("waveform: PASS"); return 0;
 }

@@ -20,6 +20,14 @@
 #include <stdint.h>
 
 typedef void (*UDPSoundEvent_Log)(const char *line, int length);
+#ifdef SBCG_USE_ADVANCED_UI
+/** @brief 固定对端辅助短包回调；仅CLP1/CLA1/WVP1，data只在本次回调有效。 */
+typedef void (*UDPSoundEvent_AuxiliarySink)(const uint8_t *data,uint16_t length);
+/** @brief 安装辅助短包消费者。@param sink 可NULL停用消费。@return 无返回值。 */
+void UDPSoundEvent_SetAuxiliarySink(UDPSoundEvent_AuxiliarySink sink);
+/** @brief 发送已编码辅助短包。@param data 本次借用字节。@param length 编码器给定长度。@return 已发送true，否则false。 */
+bool UDPSoundEvent_SendAuxiliary(const uint8_t *data,uint16_t length);
+#endif
 /**
  * @brief   保存一次捕获切片中用于跨板互相关的波形储备。
  * @param   slice 非NULL只读捕获切片，仅本调用借用；模块内部复制固定长度PCM。

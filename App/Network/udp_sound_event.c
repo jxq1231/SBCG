@@ -48,6 +48,22 @@ static uint32_t temperature_rx_ok, temperature_rx_bad;
 static bool configured;
 static SoundPairConfig pair_config;
 static uint32_t current_time_domain;
+#ifdef SBCG_USE_ADVANCED_UI
+static UDPSoundEvent_AuxiliarySink auxiliary_sink;
+/** @brief 注册固定端点辅助消息出口，不改变原协议消费者。@param sink 可空回调。@return 无返回值。 */
+void UDPSoundEvent_SetAuxiliarySink(UDPSoundEvent_AuxiliarySink sink){auxiliary_sink=sink;}
+/** @brief 复用声音PCB发送编码短包，不重做载荷字段校验。@param data 编码后的借用数据。@param length 载荷字节数。@return 发送成功true。 */
+bool UDPSoundEvent_SendAuxiliary(const uint8_t *data,uint16_t length)
+{
+    if(!configured || service_pcb==NULL || !netif_is_link_up(&gnetif))return false;
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,length,PBUF_RAM);
+    if(packet==NULL)return false;
+    err_t err=pbuf_take(packet,data,length);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    return err==ERR_OK;
+}
+#endif
 
 /** @brief 饱和计数；无返回值。 */
 static void Increment(uint32_t *value){if(*value!=UINT32_MAX)++*value;}
@@ -336,6 +352,19 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet==NULL)return;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_SOUND_EVENT_BOARD_PORT)
     {Increment(&foreign);pbuf_free(packet);return;}
+#ifdef SBCG_USE_ADVANCED_UI
+    if((packet->tot_len==80U && HasMagic(packet,"CLP1")) ||
+       (packet->tot_len==24U && HasMagic(packet,"CLA1")) ||
+       (packet->tot_len==44U && HasMagic(packet,"WVP1")))
+    {
+        uint8_t data[80];const uint16_t length=packet->tot_len;
+        const bool copied=pbuf_copy_partial(packet,data,length,0)==length;
+        pbuf_free(packet);
+        if(copied && auxiliary_sink!=NULL)auxiliary_sink(data,length);
+        else Increment(&rx_bad);
+        return;
+    }
+#endif
     if(packet!=NULL && packet->tot_len==(uint16_t)(WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES) &&
        HasMagic(packet,WAVE_MAGIC))
     {

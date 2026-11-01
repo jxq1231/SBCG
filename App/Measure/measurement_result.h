@@ -2,7 +2,8 @@
  * @file        measurement_result.h
  * @brief       两板测距的唯一权威结果缓存：测量ID、距离、方向、质量、温度版本。
  * @details     只接受前台已确认同域/会话的SoundPairResult；距离始终由当前声速和标定重算，
- *              源期限只由真实共同时间推进。任何独立入口都不能建立健康上下文。
+ *              源期限只由真实共同时间推进；标定取样只读取A板新鲜跟踪值的未标定距离。
+ *              任何独立入口都不能建立健康上下文。
  * @note        前台单写单读；不访问PCM/HAL/PTP，不生成网络报文，不把无效结果补零。
  */
 #ifndef SBCG_MEASUREMENT_RESULT_H
@@ -138,6 +139,21 @@ typedef struct
 } MeasurementPresentationSnapshot;
 
 /**
+ * @brief 用于单点标定的未标定温补距离及其权威来源身份。
+ * @details raw_mm由当前滤波时间差和有效温度声速按测距规则舍入，不含已有标定偏移。
+ *          其余字段标识本次取样的测量、状态版本、同步域、权威代际和共同源时刻。
+ */
+typedef struct
+{
+    int32_t raw_mm;
+    uint32_t measurement_id;
+    uint32_t state_revision;
+    uint32_t time_domain;
+    uint32_t authority_clock_epoch;
+    uint64_t source_common_ns;
+} MeasurementCalibrationSample;
+
+/**
  * @brief 前台协调者确认的展示上下文；不能由单条pair或RST2自行建立。
  * @details authority=true为A；authority_epoch来自状态握手，local_clock_epoch来自本板PTP。
  *          source_floor_ns是本次握手的源时间下界，旧声音不得穿越上下文恢复。
@@ -194,6 +210,15 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
 
 /** @brief 复制当前展示快照；无结果时state=NONE且has_value=false。 */
 void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out);
+
+/**
+ * @brief 复制A板当前新鲜跟踪值对应的未标定温补距离与来源身份。
+ * @param out 调用方拥有的输出存储；允许NULL，非NULL时失败清零，成功完整覆盖。
+ * @return 健康A板存在未过新鲜期限的TRACKING值且换算成功时true，否则false。
+ * @note 仅前台读取；调用方须先用实际共同时间Update。函数不刷新年龄或更改展示，
+ *       不要求FORMAL，也不从B板远程值或ACQUIRING候选取样。
+ */
+bool MeasurementResult_GetCalibrationSample(MeasurementCalibrationSample *out);
 
 /**
  * @brief B接收A的RST2展示副本；只缓存同一共同域的显式状态，不刷新源年龄。

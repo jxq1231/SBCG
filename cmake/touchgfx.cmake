@@ -54,9 +54,17 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_touchgfx_vers
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/BSP/bsp_touchgfx_display.c
     App/BSP/bsp_touch.c
+    App/Calibration/calibration_control.c
     App/UI/touchgfx_service.c App/UI/status_snapshot.c App/UI/status_view.c)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    SBCG_USE_LCD=1 SBCG_USE_TOUCHGFX=1)
+    SBCG_USE_LCD=1 SBCG_USE_TOUCHGFX=1 SBCG_USE_CALIBRATION_CONTROL=1
+    SBCG_USE_ADVANCED_UI=1)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    App/Measure/clap_ranging.c App/Network/clap_wire.c App/UI/waveform_service.c)
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    "LINKER:-T,${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_waveform.ld")
+set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/stm32f746_waveform.ld")
 foreach(_target IN ITEMS ${CMAKE_PROJECT_NAME} TouchGFX)
     set_property(TARGET ${_target} PROPERTY CXX_STANDARD 17)
     set_property(TARGET ${_target} PROPERTY CXX_STANDARD_REQUIRED ON)

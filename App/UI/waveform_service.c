@@ -213,16 +213,19 @@ static uint32_t FindPeriod(uint64_t start)
     return 0U;
 }
 
-/** @brief 复制有界CPU窗口；仅调用方确认环及模型资格后执行。 @param first 起始帧，可带小数。 @param span 帧跨度。 @param plan 共同计划，NULL表示本地自由运行。 @return 整窗在环内才true。 */
+/** @brief 从CPU环线性插值有界窗口，消除整帧取整造成的相位跳动。 @param first 起始帧，可带小数。 @param span 帧跨度。 @param plan 共同计划，NULL表示本地自由运行。 @return 整窗及右邻样本在环内才true。 */
 static bool Render(double first, double span, const WaveformPlan *plan)
 {
     if (first < (double)state.first_frame || span < 1.0 ||
-        first + span >= (double)state.end_frame) return false;
+        first + span >= (double)state.end_frame - 1.0) return false;
     WaveformSnapshot *out = &state.snapshot;
     for (uint32_t i = 0U; i < WAVEFORM_POINT_COUNT; ++i) {
         double position = first + span * i / (WAVEFORM_POINT_COUNT - 1U);
         uint64_t frame = (uint64_t)position;
-        out->points[i] = Sample(frame);
+        double fraction = position - (double)frame;
+        double left = Sample(frame), right = Sample(frame + 1U);
+        /* fraction在[0,1)，凸组合仍在PCM16范围内，转整仅丢弃不足1 PCM的尾数。 */
+        out->points[i] = (int16_t)(left + (right - left) * fraction);
     }
     out->valid = true;
     out->synced = plan != NULL;
@@ -254,10 +257,14 @@ static void MakePlan(void)
     plan.window_span_ns = FIXED_SPAN_NS;
     if (period != 0U) {
         uint64_t start_frame = (uint64_t)first;
-        for (uint32_t i = 0U; i < period; ++i) {
-            if (Sample(start_frame + i) <= 0 && Sample(start_frame + i + 1U) > 0) {
+        /* 起点可能已越过首段分数过零；包含末段才能看到下一次完整上升沿。 */
+        for (uint32_t i = 0U; i <= period; ++i) {
+            double left = Sample(start_frame + i), right = Sample(start_frame + i + 1U);
+            if (left <= 0.0 && right > 0.0) {
                 /* 仅A寻找参考上升过零；B直接逆算相同共同起点，保留声学相移。 */
-                double delta_ns = ((double)(start_frame + i + 1U) - first) / state.frames_per_ns;
+                double crossing = (double)(start_frame + i) - left / (right - left);
+                if (crossing < first) continue;
+                double delta_ns = (crossing - first) / state.frames_per_ns;
                 plan.window_start_ns += (uint64_t)(delta_ns + 0.5);
                 break;
             }
@@ -325,8 +332,8 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
             (state.pending || (state.snapshot.synced && (uint32_t)(now_ms - state.plan_ms) <= PLAN_TIMEOUT_MS));
         if (!common_display) {
             double span = 480.0;
-            if (state.end_frame - state.first_frame > 481U)
-                (void)Render((double)state.end_frame - span - 1.0, span, NULL);
+            if (state.end_frame - state.first_frame > 482U)
+                (void)Render((double)state.end_frame - span - 2.0, span, NULL);
             else Invalidate();
         }
     }

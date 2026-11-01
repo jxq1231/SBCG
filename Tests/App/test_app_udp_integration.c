@@ -1,7 +1,8 @@
 /**
  * @file        test_app_udp_integration.c
  * @brief       双进程真实App/UDP/结果缓存/UI主机驱动。
- * @details     stdin提供受控时钟、检测器TOA及合成PCM与网络输入；stdout记录生产报文和只读状态。
+ * @details     stdin提供受控时钟、检测器TOA、合成PCM、网络输入及标定控制请求；
+ *              stdout记录生产报文、只读状态和标定保存/应用元数据。
  * @note        只替换硬件/检测器/LwIP收发边界，不注入pair或结果，不访问实物。
  */
 #define main unused_app_main
@@ -13,12 +14,14 @@
 #undef main
 #include "BSP/bsp_board_identity.h"
 #include "BSP/bsp_ptp.h"
+#include "Calibration/calibration_control.h"
 #include "Detector/event_classifier.h"
 #include "Detector/sound_event_time.h"
 #include "Detector/sound_detector_service.h"
 #include "Network/udp_sound_event.h"
 #include "Sync/time_domain.h"
 #include "UI/status_snapshot.h"
+#include "UI/waveform_service.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
@@ -42,8 +45,12 @@ static uint32_t audio_session=1U,clock_epoch=3U;
 static uint32_t audio_dropped, audio_processed;
 static bool clock_ok=true,sync_faulted,send_ok=true,event_pending,process_blocks=true;
 static bool capture_enabled=true;
+static EventClass host_event_class=EVENT_CLASS_CHIRP;
 static SoundEventTimeEvent next_event;
 static uint32_t event_takes,event_delivered,packet_attempts;
+static bool anchor_pending;
+static uint32_t anchor_sequence,anchor_delivered,wave_anchors;
+static AudioTimeAnchorObservation next_anchor;
 static TemperatureSnapshot host_temperature={false,true,1U,0U,20000,343420U};
 
 /** @brief 输出字节十六进制。 @param data 非NULL输入。 @param length 字节数。 @return 无返回值。 */
@@ -87,8 +94,30 @@ void SoundEventTime_Process(uint32_t now,const BSP_AudioSnapshot *snapshot){(voi
 /** @brief 消费一次TOA标量。 @param out 非NULL输出。 @return 有事件时true。 */
 bool SoundEventTime_TakeEvent(SoundEventTimeEvent *out)
 {assert(out!=NULL && !temperature_low);++event_takes;if(!event_pending){memset(out,0,sizeof *out);return false;}*out=next_event;event_pending=false;++event_delivered;return true;}
-/** @brief 不生成音频锚点。 @param out 可空输出。 @return false。 */
-bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out){if(out)memset(out,0,sizeof *out);return false;}
+/** @brief 消费受控音频锚点单槽；无数据清输出。 @param out 可空输出，NULL不消费。 @return 本轮有观测true。 */
+bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation *out)
+{
+ if(out==NULL)return false;
+ if(!anchor_pending){memset(out,0,sizeof *out);return false;}
+ *out=next_anchor;anchor_pending=false;++anchor_delivered;return true;
+}
+/** @brief 链接器提供的生产波形锚点入口，供wrapper继续执行真实实现。 @param observation 只读副本。 @return 无返回值。 */
+void __real_WaveformService_ObserveAnchor(const AudioTimeAnchorObservation *observation);
+/**
+ * @brief 记录真实App的锚点扇出，并继续调用生产波形服务，禁止重复或改写观测。
+ * @param observation 非NULL前台副本，须与本次Take交付的所有来源字段一致。
+ * @return 无返回值；仅计数，不制造PCM、模型或波形输出。
+ */
+void __wrap_WaveformService_ObserveAnchor(const AudioTimeAnchorObservation *observation)
+{
+ assert(observation!=NULL && !anchor_pending && anchor_delivered==wave_anchors+1U);
+ assert(observation->sequence==next_anchor.sequence && observation->captured_ms==next_anchor.captured_ms);
+ assert(observation->anchor.valid==next_anchor.anchor.valid &&
+  observation->anchor.session==next_anchor.anchor.session &&
+  observation->anchor.sec==next_anchor.anchor.sec && observation->anchor.nsec==next_anchor.anchor.nsec &&
+  observation->anchor.frame_lo==next_anchor.anchor.frame_lo && observation->anchor.frame_hi==next_anchor.anchor.frame_hi);
+ ++wave_anchors;__real_WaveformService_ObserveAnchor(observation);
+}
 /** @brief 不访问PCM。 @param now 毫秒。 @param observation 只读观测。 @return 无返回值。 */
 void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation *observation){(void)now;(void)observation;}
 /** @brief 提供受控SAI快照；DROP注入累计缺口，PROCESS决定后续STEP是否完成新块。 @param out 可空输出。 @return 无返回值。 */
@@ -138,10 +167,20 @@ void MX_LWIP_Process(void)
  HostPacket *entry=&packets[queue_head];struct pbuf packet={0};packet.payload=entry->data;packet.len=packet.tot_len=entry->length;
  receive_callback(receive_context,&fake_pcb,&packet,&peer_ip,5009U);queue_head=(queue_head+1U)%HOST_QUEUE;--queue_count;}}
 
-/** @brief 输出生产缓存、域和UI文本；不改变年龄或缓存。 @return 无返回值。 */
+/**
+ * @brief 输出生产缓存、域、UI文本及本地标定与控制状态。
+ * @return 无返回值；只读复制，不改变年龄、缓存或标定合同。
+ * @note B板本地保存状态与接收A板的应用元数据分别记录，不互相推断。
+ */
 static void Snapshot(void)
 {
  MeasurementPresentationSnapshot p;MeasurementResult_GetPresentation(&p);TimeDomainSnapshot d;TimeDomain_Get(&d);
+ CalibrationSnapshot calibration;Calibration_Get(&calibration);
+ CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
+ ClapRangingSnapshot clap={0};unsigned advanced=0U;
+#ifdef SBCG_USE_ADVANCED_UI
+ App_GetClapSnapshot(&clap);advanced=1U;
+#endif
  UI_StatusSnapshot s;UI_StatusSnapshot_Read(tick_ms,&s);UI_StatusText text;assert(UI_StatusFormat(&s,tick_ms,&text));
  uint32_t rx_ok=0U,rx_bad=0U;UDPSoundEvent_GetSnapshot(NULL,NULL,NULL,&rx_ok,&rx_bad,NULL);
  (void)printf("{\"type\":\"snapshot\",\"role\":\"%c\",\"tick_ms\":%" PRIu32
@@ -152,12 +191,42 @@ static void Snapshot(void)
  ",\"display_deadline_ns\":%" PRIu64 ",\"temp_version\":%" PRIu32
  ",\"distance_text\":\"%s\",\"quality_text\":\"%s\",\"rx_ok\":%" PRIu32
  ",\"rx_bad\":%" PRIu32 ",\"packet_attempts\":%" PRIu32 ",\"event_takes\":%" PRIu32
- ",\"audio_allowed\":%u,\"anchor_allowed\":%u,\"audio_valid\":%u,\"audio_dropped\":%" PRIu32 "}\n",
+ ",\"audio_allowed\":%u,\"anchor_allowed\":%u,\"audio_valid\":%u,\"audio_dropped\":%" PRIu32
+ ",\"cal_saved\":%u,\"cal_enabled\":%u,\"cal_offset_mm\":%" PRId32 ",\"cal_version\":%u"
+ ",\"applied_offset_mm\":%d,\"applied_version\":%u,\"control_result\":%u"
+ ",\"control_completed\":%" PRIu32 ",\"control_applied_offset_mm\":%" PRId32
+ ",\"control_applied_version\":%u,\"advanced\":%u,\"clap_has\":%u,\"clap_fresh\":%u"
+ ",\"clap_mm\":%" PRId32 ",\"clap_dir\":%u,\"clap_id\":%" PRIu32
+ ",\"clap_source_ns\":%" PRIu64 ",\"clap_quality\":%u,\"wave_anchors\":%" PRIu32 "}\n",
  identity.role==BOARD_ROLE_A?'A':'B',tick_ms,common_ns,d.valid?1U:0U,d.id,(unsigned)p.state,
  p.measurement_id,p.state_revision,p.authority_clock_epoch,p.has_value?1U:0U,p.fresh?1U:0U,
  p.formal?1U:0U,p.provisional?1U:0U,p.distance_mm,(unsigned)p.direction,p.source_common_ns,
  p.fresh_deadline_ns,p.display_deadline_ns,p.temperature_version,text.distance,text.quality,
- rx_ok,rx_bad,packet_attempts,event_takes,audio_allowed,anchor_allowed,s.audio_valid?1U:0U,s.audio_dropped);
+ rx_ok,rx_bad,packet_attempts,event_takes,audio_allowed,anchor_allowed,s.audio_valid?1U:0U,s.audio_dropped,
+ calibration.calibrated?1U:0U,calibration.enabled?1U:0U,calibration.offset_mm,(unsigned)calibration.version,
+ (int)p.calibration_offset_mm,(unsigned)p.calibration_version,(unsigned)control.result,control.completed,
+ control.applied_offset_mm,(unsigned)control.applied_version,advanced,
+ clap.has_value?1U:0U,clap.fresh?1U:0U,clap.result.distance_mm,(unsigned)clap.result.direction,
+ clap.result.id,clap.result.source_common_ns,(unsigned)clap.result.quality,wave_anchors);
+}
+
+/**
+ * @brief 将主机确认动作提交给实际标定控制器，不直接修改标定模块。
+ * @param command CAL之后的CAPTURE、ENABLE、DISABLE或CLEAR文本，只在调用期间读取。
+ * @return 无返回值；非法动作或尚有待处理动作时使测试失败。
+ * @note CAPTURE复制当前测量取样身份；无资格时提交零身份，由下一轮实际App处理拒绝。
+ */
+static void RequestCalibration(const char *command)
+{
+ CalibrationAction action=CALIBRATION_ACTION_NONE;
+ if(strncmp(command,"CAPTURE",7U)==0)action=CALIBRATION_ACTION_CAPTURE;
+ else if(strncmp(command,"ENABLE",6U)==0)action=CALIBRATION_ACTION_ENABLE;
+ else if(strncmp(command,"DISABLE",7U)==0)action=CALIBRATION_ACTION_DISABLE;
+ else if(strncmp(command,"CLEAR",5U)==0)action=CALIBRATION_ACTION_CLEAR;
+ assert(action!=CALIBRATION_ACTION_NONE);
+ MeasurementCalibrationSample expected={0};
+ if(action==CALIBRATION_ACTION_CAPTURE)(void)MeasurementResult_GetCalibrationSample(&expected);
+ assert(CalibrationControl_Request(action,action==CALIBRATION_ACTION_CAPTURE?&expected:NULL));
 }
 /** @brief 排队十六进制网络输入。 @param hex 完整十六进制串。 @return 无返回值。 */
 static void Queue(const char *hex)
@@ -178,7 +247,13 @@ static void CaptureEvent(uint64_t frame)
   .raw_first_frame=frame,.frames=1408U,.samples=pcm};
  UDPSoundEvent_OnCapture(&slice);
 }
-/** @brief 一个板角色的独立进程入口。 @param argc 参数数。 @param argv 角色、启动毫秒、共同时间。 @return 正常0，错误非零。 */
+/**
+ * @brief 执行一个板角色的受控前台命令，包括真实标定控制请求。
+ * @param argc 参数数，应为4。
+ * @param argv 角色、启动毫秒、共同时间；仅进程启动时读取，不保留外部指针。
+ * @return 正常退出为0，未知命令或断言失败时非零。
+ * @note STEP才推进App；CAL仅排队，下一轮RefreshRanging刷新健康后消费。
+ */
 int main(int argc,char **argv)
 {
  assert(argc==4 && (argv[1][0]=='A' || argv[1][0]=='B'));
@@ -198,7 +273,7 @@ int main(int argc,char **argv)
    event_time=(uint64_t)strtoull(cursor,&end,10);
    if(end!=cursor){
    tick_ms=at;common_ns=clock;if(process_blocks)++audio_processed;if(seq!=0U){assert(!event_pending);next_event=(SoundEventTimeEvent){.sequence=seq,.session=audio_session,
-    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=EVENT_CLASS_CHIRP,.quality=98U};if(capture_enabled)CaptureEvent(next_event.frame);event_pending=true;}App_Process();
+    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=host_event_class,.quality=98U};if(capture_enabled)CaptureEvent(next_event.frame);event_pending=true;}App_Process();
    }
   }else if(strncmp(command,"RX ",3U)==0)Queue(command+3);
   else if(strncmp(command,"SNAP",4U)==0)Snapshot();
@@ -211,6 +286,19 @@ int main(int argc,char **argv)
   else if(sscanf(command,"DROP %u",&value)==1)audio_dropped=value;
   else if(sscanf(command,"PROCESS %u",&value)==1)process_blocks=value!=0U;
   else if(sscanf(command,"CAPTURE %u",&value)==1)capture_enabled=value!=0U;
+  else if(sscanf(command,"CLASS %u",&value)==1){assert(value<=EVENT_CLASS_CLAP);host_event_class=(EventClass)value;}
+  else if(strncmp(command,"ANCHOR ",7U)==0){
+   char *cursor=command+7,*end=NULL;
+   const uint32_t anchor_session=(uint32_t)strtoul(cursor,&end,10);cursor=end;
+   const uint32_t sec=(uint32_t)strtoul(cursor,&end,10);cursor=end;
+   const uint32_t nsec=(uint32_t)strtoul(cursor,&end,10);cursor=end;
+   const uint64_t frame=(uint64_t)strtoull(cursor,&end,10);
+   assert(end!=cursor && !anchor_pending && anchor_session!=0U && nsec<1000000000U);
+   next_anchor=(AudioTimeAnchorObservation){.sequence=++anchor_sequence,.captured_ms=tick_ms,
+    .anchor={.valid=true,.session=anchor_session,.frame_lo=(uint64_t)frame,
+    .frame_hi=(uint64_t)frame,.sec=sec,.nsec=nsec}};anchor_pending=true;
+  }
+  else if(strncmp(command,"CAL ",4U)==0)RequestCalibration(command+4);
   else if(strncmp(command,"REINIT",6U)==0)App_Init();
   else if(sscanf(command,"TEMP %u",&value)==1){host_temperature.temperature_milli_c=(int32_t)value;host_temperature.sound_speed_mm_s=331300U+(606U*value+500U)/1000U;++host_temperature.version;}
   else if(strncmp(command,"QUIT",4U)==0)break;
