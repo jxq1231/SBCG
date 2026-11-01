@@ -115,6 +115,7 @@ typedef struct
     bool b_toa_held;               /**< true表示本次输出保持旧接受齿。 */
     bool waveform_refined;         /**< true表示时差已由两板波形互相关精化。 */
     int32_t b_toa_candidate_q16[SOUND_EVENT_MAX_TOA_CANDIDATES]; /**< 诊断副本。 */
+    SoundEventType type;           /**< 原始配对事件类型；CLAP独立于标准音后处理。 */
 } SoundPairResult;
 
 /** @brief 队列和拒绝原因计数；均为单调饱和。 */

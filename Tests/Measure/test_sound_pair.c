@@ -1,6 +1,6 @@
 /**
  * @file test_sound_pair.c
- * @brief 验证纯C配对、旧标量模式及波形证据失败时拒绝新测量的边界。
+ * @brief 验证纯C配对的类型隔离、旧标量模式及波形证据失败拒绝边界。
  * @note 仅主机计算；成功回调的1m/2m结果不代表声学精度验收。
  */
 #include "Measure/sound_pair.h"
@@ -88,6 +88,58 @@ int main(void)
     assert(!result.valid && result.status==SOUND_PAIR_AMBIGUOUS);
     SoundPair_GetSnapshot(&manager,&snap);
     assert(snap.ambiguous==1U && snap.pending_a==0U && snap.pending_b==0U);
+
+    /* 两型真实事件同时排队：同窗也各自唯一，不得全局判歧义或互相消费。 */
+    for(unsigned clap_first=0U;clap_first<2U;++clap_first)
+    {
+        assert(SoundPair_Init(&manager,&config));
+        SoundEventRecord ca=Event(SOUND_SIDE_A,10U,1000000000U);
+        SoundEventRecord cb=Event(SOUND_SIDE_B,10U,1001000000U);
+        SoundEventRecord ka=Event(SOUND_SIDE_A,11U,1000000000U);
+        SoundEventRecord kb=Event(SOUND_SIDE_B,11U,1002000000U);
+        ka.type=kb.type=SOUND_EVENT_CLAP;
+        assert(SoundPair_Submit(&manager,clap_first?&ka:&ca,0U));
+        assert(SoundPair_Submit(&manager,clap_first?&cb:&kb,0U));
+        assert(SoundPair_Submit(&manager,clap_first?&ca:&ka,0U));
+        assert(SoundPair_Submit(&manager,clap_first?&kb:&cb,0U));
+        SoundPair_Process(&manager,0U);
+        assert(SoundPair_Take(&manager,&result) && result.valid);
+        assert(result.type==(clap_first?SOUND_EVENT_CLAP:SOUND_EVENT_CHIRP));
+        assert(result.distance_mm==(clap_first?686U:343U));
+        SoundPair_GetSnapshot(&manager,&snap);
+        assert(snap.ambiguous==0U && snap.pending_a==1U && snap.pending_b==1U);
+        SoundPair_Process(&manager,0U);
+        assert(SoundPair_Take(&manager,&result) && result.valid);
+        assert(result.type==(clap_first?SOUND_EVENT_CHIRP:SOUND_EVENT_CLAP));
+        assert(result.distance_mm==(clap_first?343U:686U));
+        SoundPair_GetSnapshot(&manager,&snap);
+        assert(snap.paired==2U && snap.pending_a==0U && snap.pending_b==0U);
+    }
+    /* 同型多候选仍严格拒绝；另一型的完整对及未配对事件保留。 */
+    for(unsigned ambiguous_clap=0U;ambiguous_clap<2U;++ambiguous_clap)
+    {
+        assert(SoundPair_Init(&manager,&config));
+        SoundEventRecord aa=Event(SOUND_SIDE_A,20U,1000000000U);
+        SoundEventRecord ab=Event(SOUND_SIDE_B,20U,1001000000U);
+        SoundEventRecord extra=Event(SOUND_SIDE_B,21U,1002000000U);
+        aa.type=ab.type=extra.type=ambiguous_clap?SOUND_EVENT_CLAP:SOUND_EVENT_CHIRP;
+        SoundEventRecord other_a=Event(SOUND_SIDE_A,22U,1000000000U);
+        SoundEventRecord other_b=Event(SOUND_SIDE_B,22U,1001000000U);
+        SoundEventRecord pending=Event(SOUND_SIDE_A,23U,2000000000U);
+        other_a.type=other_b.type=pending.type=ambiguous_clap?SOUND_EVENT_CHIRP:SOUND_EVENT_CLAP;
+        assert(SoundPair_Submit(&manager,&aa,0U));assert(SoundPair_Submit(&manager,&ab,0U));
+        assert(SoundPair_Submit(&manager,&other_a,0U));assert(SoundPair_Submit(&manager,&other_b,0U));
+        assert(SoundPair_Submit(&manager,&extra,0U));assert(SoundPair_Submit(&manager,&pending,0U));
+        SoundPair_Process(&manager,0U);
+        assert(SoundPair_Take(&manager,&result) && !result.valid && result.status==SOUND_PAIR_AMBIGUOUS);
+        assert(result.type==aa.type);
+        SoundPair_GetSnapshot(&manager,&snap);
+        assert(snap.ambiguous==1U && snap.pending_a==2U && snap.pending_b==1U);
+        SoundPair_Process(&manager,0U);
+        assert(SoundPair_Take(&manager,&result) && result.valid && result.type==other_a.type);
+        SoundPair_GetSnapshot(&manager,&snap);
+        assert(snap.paired==1U && snap.pending_a==1U && snap.pending_b==0U);
+    }
 
     /* Missing partner expires and produces no guessed result. */
     assert(SoundPair_Init(&manager,&config));

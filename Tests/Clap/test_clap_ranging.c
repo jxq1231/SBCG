@@ -1,0 +1,139 @@
+/** @file test_clap_ranging.c @brief 独立击掌权威、旧包屏障、重试与源寿命测试。 */
+#include "Measure/clap_ranging.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static RangingSessionSnapshot session={true,9U,7U,1000000000U};
+static TemperatureSnapshot temperature={.valid=true,.version=3U,
+    .temperature_milli_c=20000,.sound_speed_mm_s=343000U};
+static CalibrationSnapshot calibration={.calibrated=true,.enabled=true,
+    .offset_mm=12,.reference_mm=500,.version=4U};
+/** @brief 以调用方真实共同读时更新测试实例，A/B共用同一资格。 */
+static void Update(ClapRanging *self, BoardRole role, bool healthy,uint64_t now_ns,uint32_t now_ms)
+{ ClapRanging_Update(self,role,healthy,&session,now_ns,now_ms,&temperature,&calibration); }
+/** @brief 产生一条有效CLAP配对，固定1ms TDOA用于温补/标定断言。 */
+static SoundPairResult Pair(uint32_t seq,uint64_t a_ns)
+{
+    SoundPairResult pair={.valid=true,.status=SOUND_PAIR_OK,.delta_ns=1000000,
+        .distance_mm=1U,.direction=SOUND_DIRECTION_A,.quality=85U,.time_domain=9U,
+        .a_session=2U,.a_sequence=seq,.b_session=3U,.b_sequence=seq,
+        .a_time_ns=a_ns,.b_time_ns=a_ns+1000000U,.type=SOUND_EVENT_CLAP};
+    return pair;
+}
+/** @brief 验证只有A发布、共同时间期限、ACK重试与RSC2恢复屏障。 */
+int main(void)
+{
+    ClapRanging a,b;ClapResultMessage tx,duplicate;ClapAckMessage ack;
+    ClapRangingSnapshot snapshot;
+    ClapRanging_Init(&a); ClapRanging_Init(&b);
+    Update(&a,BOARD_ROLE_A,true,1100000000U,0U);
+    Update(&b,BOARD_ROLE_B,true,1100000000U,200U);
+    SoundPairResult pair=Pair(1U,1090000000U);
+    assert(!ClapRanging_PublishPair(&b,&pair));
+    assert(ClapRanging_PublishPair(&a,&pair));
+    ClapRanging_GetSnapshot(&a,&snapshot);
+    assert(snapshot.has_value && snapshot.fresh && snapshot.result.distance_mm==355);
+    assert(snapshot.result.sound_speed_mm_s==343000U && snapshot.result.calibration_offset_mm==12);
+    assert(snapshot.result.temperature_version==3U && snapshot.result.calibration_version==4U);
+    assert(snapshot.result.source_common_ns==1091000000U && snapshot.result.id!=0U);
+    assert(!ClapRanging_PublishPair(&a,&pair));
+    assert(ClapRanging_TakeTx(&a,0U,&tx));
+    assert(!ClapRanging_TakeTx(&a,499U,&duplicate));
+    assert(ClapRanging_TakeTx(&a,500U,&duplicate)); /* 首次发送失败也退避。 */
+    assert(!ClapRanging_OnMessage(&a,&tx));
+    assert(ClapRanging_OnMessage(&b,&tx));
+    assert(ClapRanging_TakeAck(&b,&ack));
+    ++ack.id;assert(!ClapRanging_OnAck(&a,&ack));--ack.id;
+    ++ack.domain;assert(!ClapRanging_OnAck(&a,&ack));--ack.domain;
+    ++ack.authority_epoch;assert(!ClapRanging_OnAck(&a,&ack));--ack.authority_epoch;
+    ++ack.source_common_ns;assert(!ClapRanging_OnAck(&a,&ack));--ack.source_common_ns;
+    assert(ClapRanging_OnAck(&a,&ack));
+    assert(!ClapRanging_TakeTx(&a,1000U,&duplicate));
+    assert(!ClapRanging_TakeAck(&b,&ack));
+    Update(&b,BOARD_ROLE_B,true,UINT64_C(3591000000),1000U);
+    assert(ClapRanging_OnMessage(&b,&tx)); /* 重复包ACK，但源已不新鲜。 */
+    assert(ClapRanging_TakeAck(&b,&ack));
+    ClapRanging_GetSnapshot(&b,&snapshot);
+    assert(snapshot.has_value && !snapshot.fresh && snapshot.source_age_ms==2500U);
+    Update(&b,BOARD_ROLE_B,true,UINT64_C(7591000000),1100U);
+    ClapRanging_GetSnapshot(&b,&snapshot);
+    assert(!snapshot.has_value); /* 6.5s，接收毫秒未决定寿命。 */
+
+    /* B失域立即撤；同资格恢复不能用旧重复包复活。 */
+    Update(&b,BOARD_ROLE_B,false,UINT64_C(7592000000),1200U);
+    assert(!ClapRanging_OnMessage(&b,&tx));
+    ClapRanging_GetSnapshot(&b,&snapshot);assert(!snapshot.has_value);
+    Update(&b,BOARD_ROLE_B,true,UINT64_C(7593000000),1300U);
+    assert(!ClapRanging_OnMessage(&b,&tx));
+
+    /* 新RSC2域/代际只接受source_floor之后的真实声事件。 */
+    session.authority_epoch=8U; session.source_floor_ns=8000000000ULL;
+    Update(&a,BOARD_ROLE_A,true,UINT64_C(8100000000),2000U);
+    Update(&b,BOARD_ROLE_B,true,UINT64_C(8100000000),2000U);
+    assert(!ClapRanging_OnMessage(&b,&tx));
+    pair=Pair(2U,7999000000ULL);assert(!ClapRanging_PublishPair(&a,&pair));
+    pair=Pair(2U,8090000000ULL);assert(ClapRanging_PublishPair(&a,&pair));
+    assert(ClapRanging_TakeTx(&a,2000U,&tx));
+    assert(ClapRanging_OnMessage(&b,&tx));
+    duplicate=tx;duplicate.distance_mm+=1;
+    assert(!ClapRanging_OnMessage(&b,&duplicate)); /* 同键不可偷换值。 */
+    duplicate=tx;duplicate.source_common_ns-=1U;++duplicate.id;
+    assert(!ClapRanging_OnMessage(&b,&duplicate));
+    duplicate=tx;duplicate.authority_epoch-=1U;++duplicate.id;
+    assert(!ClapRanging_OnMessage(&b,&duplicate));
+    duplicate=tx;duplicate.domain+=1U;++duplicate.id;
+    assert(!ClapRanging_OnMessage(&b,&duplicate));
+    duplicate=tx;duplicate.source_common_ns=8102000001ULL;++duplicate.id;
+    assert(!ClapRanging_OnMessage(&b,&duplicate));
+
+    /* 入口限制类型、身份、时差自洽和质量，拒绝不刷新已接受结果。 */
+    pair=Pair(3U,8091000000ULL);pair.type=SOUND_EVENT_CHIRP;
+    assert(!ClapRanging_PublishPair(&a,&pair));
+    pair.type=SOUND_EVENT_CLAP;pair.delta_ns=0;
+    assert(!ClapRanging_PublishPair(&a,&pair));
+    pair.delta_ns=1000000;pair.quality=101U;
+    assert(!ClapRanging_PublishPair(&a,&pair));
+    pair.quality=85U;pair.a_session=0U;
+    assert(!ClapRanging_PublishPair(&a,&pair));
+    pair=Pair(2U,8092000000ULL);assert(!ClapRanging_PublishPair(&a,&pair));
+    pair=Pair(3U,8092000000ULL);pair.time_domain=8U;
+    assert(!ClapRanging_PublishPair(&a,&pair));
+
+    /* 同资格短暂失健康后，旧接受源和旧id都不能恢复数值。 */
+    Update(&b,BOARD_ROLE_B,false,8100000001ULL,2100U);
+    Update(&b,BOARD_ROLE_B,true,8100000002ULL,2101U);
+    assert(ClapRanging_OnMessage(&b,&tx)); /* 可ACK精确重复，但保持无值。 */
+    ClapRanging_GetSnapshot(&b,&snapshot);assert(!snapshot.has_value);
+
+    /* 补偿变化撤旧值，新CLAP使用新参数，B不使用自己的温度重算。 */
+    temperature.sound_speed_mm_s=350000U;++temperature.version;
+    calibration.enabled=false;++calibration.version;
+    Update(&a,BOARD_ROLE_A,true,8200000000ULL,3000U);
+    ClapRanging_GetSnapshot(&a,&snapshot);assert(!snapshot.has_value);
+    pair=Pair(3U,8190000000ULL);assert(ClapRanging_PublishPair(&a,&pair));
+    assert(ClapRanging_TakeTx(&a,3000U,&tx));
+    assert(tx.distance_mm==350 && tx.calibration_offset_mm==0);
+    Update(&b,BOARD_ROLE_B,true,8200000000ULL,3000U);
+    assert(ClapRanging_OnMessage(&b,&tx));
+    temperature.valid=false;
+    Update(&b,BOARD_ROLE_B,true,8200000001ULL,3001U);
+    ClapRanging_GetSnapshot(&b,&snapshot);assert(snapshot.has_value && snapshot.result.distance_mm==350);
+    Update(&a,BOARD_ROLE_A,true,8200000001ULL,3001U);
+    ClapRanging_GetSnapshot(&a,&snapshot);assert(!snapshot.has_value);
+    assert(!ClapRanging_PublishPair(&a,&pair));
+
+    /* 共同时间倒退和0立即撤；毫秒回绕仍保持500ms退避。 */
+    Update(&b,BOARD_ROLE_B,true,8200000000ULL,3002U);
+    ClapRanging_GetSnapshot(&b,&snapshot);assert(!snapshot.has_value);
+    temperature.valid=true;ClapRanging_Init(&a);
+    Update(&a,BOARD_ROLE_A,true,8200000000ULL,UINT32_MAX-100U);
+    assert(ClapRanging_PublishPair(&a,&pair));
+    assert(ClapRanging_TakeTx(&a,UINT32_MAX-100U,&tx));
+    assert(!ClapRanging_TakeTx(&a,398U,&tx));
+    assert(ClapRanging_TakeTx(&a,399U,&tx));
+    Update(&a,BOARD_ROLE_A,true,0U,400U);
+    assert(!ClapRanging_TakeTx(&a,899U,&tx));
+    puts("PASS CLAP: authority, compensation, exact ACK, retry, source expiry, RSC2 barriers");
+    return 0;
+}

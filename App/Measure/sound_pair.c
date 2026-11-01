@@ -5,6 +5,7 @@
  *              d=c(T)|tB-tA|，符号给出A侧/B侧。重复、歧义、越窗、超量程均显式拒绝。
  *              安装波形精化器后只接受其成功结果，不将失败降级为标称/旧接受距离的新测量。
  *              未安装精化器的旧标量模式保留B候选齿选择与连续确认，供独立旧接口使用。
+ *              CLAP只使用本次两板源时间，不调用标准音波形精化或推进其候选齿状态。
  * @note        仅前台纯计算；无网络/PCM/HAL/动态内存；输入时间必须先由同步层证明同一时间域。
  */
 #include "sound_pair.h"
@@ -147,6 +148,7 @@ SoundPairStatus SoundPair_Compute(const SoundPairConfig *config,
     /* 诊断元数据按输入复制；即使后续拒绝也保留，不能改变原决定。 */
     if (a != NULL)
     {
+        result->type = a->type;
         result->a_session = a->session;
         result->a_sequence = a->sequence;
         result->a_time_ns = a->time_ns;
@@ -272,7 +274,8 @@ bool SoundPair_Submit(SoundPairManager *manager, const SoundEventRecord *event,
  * @param manager 已初始化且前台独占的可写管理器，NULL时不操作。
  * @param now_ms 本地单调毫秒，按无符号差计算队列年龄并支持正常回绕。
  * @return 无返回值；结果经Take消费，拒绝与成功分别计数。
- * @note 多个候选对同时落在窗口内时输出一条AMBIGUOUS并消费涉及事件，避免反复猜测。
+ * @note 每次只处理最先找到候选的事件类型；同型多个候选对输出一条AMBIGUOUS并消费
+ *       该类型事件，另一类型保留供后续调用；CHIRP与CLAP互不形成歧义。
  *       精化失败消费本次事件并输出无效结果，保留源身份；不推进旧齿确认或刷新有效测量年龄。
  */
 void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
@@ -303,11 +306,14 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
     {
         progressed = false;
         uint8_t pair_a = 0U, pair_b = 0U;
+        SoundEventType pair_type = SOUND_EVENT_INVALID;
         unsigned candidates = 0U;
         bool ambiguous = false;
         for (uint8_t i = 0U; i < manager->count[0]; ++i)
         {
             if (used_a[i]) { continue; }
+            if (pair_type != SOUND_EVENT_INVALID && manager->events[0][i].type != pair_type)
+            { continue; }
             unsigned matches = 0U;
             uint8_t last = 0U;
             for (uint8_t j = 0U; j < manager->count[1]; ++j)
@@ -315,7 +321,10 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
                 if (used_b[j]) { continue; }
                 if (CandidatePair(&manager->config, &manager->events[0][i],
                                   &manager->events[1][j]))
-                { ++matches; last = j; ++candidates; }
+                {
+                    pair_type = manager->events[0][i].type;
+                    ++matches; last = j; ++candidates;
+                }
             }
             if (matches == 1U && candidates == 1U) { pair_a = i; pair_b = last; }
             if (matches > 1U || candidates > 1U) { ambiguous = true; }
@@ -326,8 +335,11 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
             SoundPairResult invalid = {0};
             invalid.valid = false;
             invalid.status = SOUND_PAIR_AMBIGUOUS;
-            for (uint8_t i = 0U; i < manager->count[0]; ++i) { used_a[i] = true; }
-            for (uint8_t j = 0U; j < manager->count[1]; ++j) { used_b[j] = true; }
+            invalid.type = pair_type;
+            for (uint8_t i = 0U; i < manager->count[0]; ++i)
+            { used_a[i] = manager->events[0][i].type == pair_type; }
+            for (uint8_t j = 0U; j < manager->count[1]; ++j)
+            { used_b[j] = manager->events[1][j].type == pair_type; }
             Increment(&manager->stats.ambiguous);
             PushResult(manager, &invalid);
             progressed = true;
@@ -338,7 +350,8 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
         uint8_t selected_index = 0U;
         bool held = false;
         bool refined = false;
-        if (manager->tdoa_refiner != NULL)
+        const bool chirp = manager->events[0][pair_a].type == SOUND_EVENT_CHIRP;
+        if (chirp && manager->tdoa_refiner != NULL)
         {
             int64_t delta_ns = 0;
             if (manager->tdoa_refiner(manager->events[0][pair_a].sequence,
@@ -354,7 +367,7 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
                 }
             }
         }
-        if (manager->tdoa_refiner == NULL)
+        if (chirp && manager->tdoa_refiner == NULL)
         {
             SelectToaTooth(manager, &manager->config, &manager->events[0][pair_a],
                            &manager->events[1][pair_b], &selected_b, &selected_index,
@@ -362,7 +375,7 @@ void SoundPair_Process(SoundPairManager *manager, uint32_t now_ms)
         }
         (void)SoundPair_Compute(&manager->config, &manager->events[0][pair_a],
                                 &selected_b, &result);
-        if (manager->tdoa_refiner != NULL && !refined && result.valid)
+        if (chirp && manager->tdoa_refiner != NULL && !refined && result.valid)
         {
             result.valid = false;
             result.status = SOUND_PAIR_WAVEFORM_UNAVAILABLE;
