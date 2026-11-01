@@ -1,7 +1,7 @@
 /**
  * @file        test_bsp_ptp_fine.c
  * @brief       以实际STM32声明和模拟寄存器完成机制验证B板PTP接口。
- * @details     检查启动顺序、正负修正、范围、代际、失败失效及冻结tick下的有限等待；不访问实物。
+ * @details     检查启动顺序、正负修正、范围、代际、只读恢复资格、失败失效及冻结tick下的有限等待；不访问实物。
  * @note        在同一翻译单元纳入BSP实现以直接构造代际耗尽，不向生产接口加入测试注入方法。
  */
 #include "BSP/bsp_ptp.h"
@@ -142,9 +142,86 @@ static void Fine(void)
     assert(BSP_PTP_GetEpoch() != 0U && BSP_PTP_GetRateRevision() != 0U);
     assert(BSP_PTP_GetFrequencyPpb() == 0);
 }
+
+/**
+ * @brief 检查已确认fine频率只在硬件健康且命令完成时可读，并验证所有分支均不改硬件或代际。
+ * @return 无返回值，断言失败中止；不证明实际时钟频率或双板精度。
+ * @note 每个输入异常独立恢复后再测下一项；失败输出必须保持调用方原值。
+ */
+static void KnownFrequencyReadOnly(void)
+{
+    Fine();
+    assert(BSP_PTP_SetFrequencyPpb(42) == BSP_PTP_OK);
+    test_eth.PTPTSHR = 8U; test_eth.PTPTSLR = 250U;
+    const uint32_t before_writes = writes, before_commands = commands;
+    const uint32_t before_epoch = clock_epoch, before_revision = rate_revision;
+    const uint32_t before_hal_config = hal_config_calls;
+    const ETH_TypeDef before_registers = test_eth;
+    const RCC_TypeDef before_rcc = test_rcc;
+    int32_t frequency = -777;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_OK && frequency == 42);
+    heth.gState = HAL_ETH_STATE_STARTED;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_OK && frequency == 42);
+    heth.gState = HAL_ETH_STATE_READY;
+    assert(BSP_PTP_ReadKnownFrequency(NULL) == BSP_PTP_BAD_SNAPSHOT);
+    assert(memcmp(&test_eth, &before_registers, sizeof test_eth) == 0);
+    assert(memcmp(&test_rcc, &before_rcc, sizeof test_rcc) == 0);
+
+    const uint32_t pending[] = {ETH_PTPTSCR_TSSTI, ETH_PTPTSCR_TSSTU, ETH_PTPTSCR_TSARU};
+    for (unsigned i = 0U; i < sizeof pending / sizeof pending[0]; ++i)
+    {
+        frequency = -777;
+        test_eth.PTPTSCR |= pending[i];
+        const uint32_t pending_control = test_eth.PTPTSCR;
+        assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_BUSY && frequency == -777);
+        assert(test_eth.PTPTSCR == pending_control);
+        test_eth.PTPTSCR &= ~pending[i];
+    }
+    expected_hclk = 216000000U;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_BAD_CLOCK && frequency == -777);
+    expected_hclk = 200000000U;
+    test_eth.PTPTSAR ^= 1U;
+    const uint32_t changed_addend = test_eth.PTPTSAR;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_BAD_CONFIG && frequency == -777);
+    assert(test_eth.PTPTSAR == changed_addend);
+    test_eth.PTPTSAR ^= 1U;
+    read_failure = true;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_HAL_ERROR && frequency == -777);
+    read_failure = false;
+    test_eth.PTPTSLR = 1000000000U;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_BAD_SNAPSHOT && frequency == -777);
+    test_eth.PTPTSLR = 250U;
+    heth.gState = HAL_ETH_STATE_ERROR;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_NOT_READY && frequency == -777);
+    heth.gState = HAL_ETH_STATE_READY;
+    ready = 0U;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_NOT_READY && frequency == -777);
+    ready = 1U;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_OK && frequency == 42);
+    assert(writes == before_writes && commands == before_commands && hal_config_calls == before_hal_config);
+    assert(clock_epoch == before_epoch && rate_revision == before_revision);
+    assert(memcmp(&test_eth, &before_registers, sizeof test_eth) == 0);
+    assert(memcmp(&test_rcc, &before_rcc, sizeof test_rcc) == 0);
+
+    Reset();
+    assert(BSP_PTP_Init() == BSP_PTP_OK);
+    const uint32_t coarse_writes = writes, coarse_epoch = clock_epoch, coarse_revision = rate_revision;
+    frequency = -777;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_NOT_READY && frequency == -777);
+    assert(writes == coarse_writes && clock_epoch == coarse_epoch && rate_revision == coarse_revision);
+    Fine();
+    stuck_mask = ETH_PTPTSCR_TSARU;
+    assert(BSP_PTP_SetFrequencyPpb(1) == BSP_PTP_UPDATE_TIMEOUT);
+    const uint32_t failed_writes = writes, failed_epoch = clock_epoch, failed_revision = rate_revision;
+    assert(BSP_PTP_ReadKnownFrequency(&frequency) == BSP_PTP_NOT_READY && frequency == -777);
+    assert(writes == failed_writes && clock_epoch == failed_epoch && rate_revision == failed_revision);
+    assert(!ready && heth.IsPtpConfigured == HAL_ETH_PTP_NOT_CONFIGURED);
+    puts("PASS: known frequency requires completed healthy fine hardware, preserves failure output, and never writes or changes generations");
+}
 /** @brief 运行fine时钟、频率、相位和故障场景。 @return 全部通过为0。 @note 断言失败中止测试。 */
 int main(void)
 {
+    KnownFrequencyReadOnly();
     Fine();
     BSP_PtpTime sample = {99U,99U};
     test_eth.PTPTSHR = 3U; test_eth.PTPTSLR = 750000000U;

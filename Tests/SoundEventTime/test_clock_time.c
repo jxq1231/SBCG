@@ -2,7 +2,7 @@
  * @file        test_clock_time.c
  * @brief       真实协调器对校时动作与声音时间模型的交接验证。
  * @details     相位动作在任何写时钟之前撤销模型；成功且相位连续的调频保留声音队列与采锚节拍，
- *              只按新旧绝对频率差通报模型；调频失败或未知代际变化仍撤销模型。
+ *              只按新旧绝对频率差通报模型；调频失败、未知代际变化及故障恢复仍撤销旧模型。
  * @note        复用协调器测试的依赖替代；本文件只检查调用时序与参数，不模拟硬件精度。
  */
 #define main old_controller_main
@@ -88,5 +88,14 @@ int main(void)
     assert(sound_invalidations>0 && frequency_notices==0);
     stop_ok=true;
     #endif
+    Reset();Init(BOARD_ROLE_B);ClearObservations();
+    read_status=BSP_PTP_BAD_SNAPSHOT;Sample();
+    read_status=BSP_PTP_OK;now_tick+=1000U;TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_ACQUIRING);
+    assert(sound_invalidations>0 && frequency_notices==0 && clock_writes==0U);
+    assert(strchr(trace,'A')!=NULL && strchr(trace,'M')!=NULL && !have_exchange);
+    TimeSyncSnapshot recovered;TimeSync_GetSnapshot(now_tick,&recovered);
+    assert(!recovered.offset_valid && !recovered.internal_locked);
+    puts("PASS recovery: old sound model, anchor and exchange are revoked before new acquisition; no clock write");
     puts("PASS real controller: phase revokes; successful continuous frequency keeps model and reports delta; failure revokes");return 0;
 }

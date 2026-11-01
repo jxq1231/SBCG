@@ -1,6 +1,6 @@
 /**
  * @file        bsp_ptp.h
- * @brief       ETH PTP本地读时、最近RX硬件戳及B板有界校正接口。
+ * @brief       ETH PTP本地读时、最近RX硬件戳及B板有界校正与只读恢复资格接口。
  * @details     声明秒/十进制纳秒结构、A板粗更新及B板精细更新初始化、绝对频率修正、相位步进和不回绕代际。
  * @note        仅NO_SYS前台，依赖200MHz HCLK、HAL_ETH_USE_PTP和ETH初始化。调用者负责角色、TX空闲与
  *              网络/音频旧数据清理；接口成功仅表示本地硬件命令完成，不是跨板同步或声学精度验收。
@@ -82,6 +82,14 @@ uint32_t BSP_PTP_GetRateRevision(void);
  * @note    仅前台；失效后数值仅为历史记录，不能代替就绪判断。
  */
 int32_t BSP_PTP_GetFrequencyPpb(void);
+/**
+ * @brief   校验B板fine硬件状态后读取最近确认的频率修正。
+ * @param   frequency_ppb 调用方拥有的输出，单位ppb；NULL返回BAD_SNAPSHOT，失败保持原值。
+ * @return  OK表示模式、HCLK、addend、无未决命令及新鲜读时均通过，其它为拒绝原因。
+ * @note    仅NO_SYS前台；不初始化、不发命令、不改变寄存器或代际。成功只证明本地状态可供重新获取，
+ *          不证明已同步；真实命令超时关闭时钟后仍返回未就绪，不隐式恢复硬件。
+ */
+BSP_PtpStatus BSP_PTP_ReadKnownFrequency(int32_t *frequency_ppb);
 /**
  * @brief   读取并校验本地 ETH PTP 秒/纳秒快照。
  * @param   time 调用者拥有的输出；NULL 返回 BAD_SNAPSHOT，失败不改原值，成功纳秒范围为 0..999999999。

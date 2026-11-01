@@ -1,7 +1,7 @@
 /**
  * @file        test_time_sync.c
  * @brief       用真实接口和依赖替代验证同步协调器的写时钟门控。
- * @details     检查角色隔离、代际清理顺序、动作提交、外部变化、时效及生命周期；不模拟硬件精度。
+ * @details     检查角色隔离、代际清理顺序、动作提交、故障后有节拍重获取、时效及生命周期；不模拟硬件精度。
  * @note        纯C伺服与四时刻数学由各自测试验证，本测试只检查模块之间的真实调用约定。
  */
 #include "Sync/time_sync.h"
@@ -26,6 +26,8 @@ static bool deinit_ok, install_ok, udp_clear_ok, have_exchange, peer_reset, obse
 static uint32_t process_advance_ms;
 static bool capture_on_process;
 static BSP_PtpStatus read_status, clean_status, write_status;
+static BSP_PtpStatus recovery_status;
+static uint32_t recovery_checks;
 static SyncEstimatorStatus estimate_status;
 static int32_t hardware_frequency;
 static ClockServoAction requested;
@@ -106,6 +108,14 @@ void SyncObservation_NotifyClockChange(void) { Event('S'); }
 /** @brief 模拟本地读时。 @param time 非NULL输出，失败保持。 @return 当前预置读时状态。 */
 BSP_PtpStatus BSP_PTP_Read(BSP_PtpTime *time)
 { assert(time); if(read_status==BSP_PTP_OK) *time=(BSP_PtpTime){1U,1U}; return read_status; }
+/** @brief 模拟只读硬件恢复检查。@param ppb 非NULL输出，失败保持。@return 预置健康检查或读时错误。 */
+BSP_PtpStatus BSP_PTP_ReadKnownFrequency(int32_t *ppb)
+{
+    assert(ppb); ++recovery_checks;
+    BSP_PtpStatus status=recovery_status==BSP_PTP_OK?read_status:recovery_status;
+    if(status==BSP_PTP_OK)*ppb=hardware_frequency;
+    return status;
+}
 /** @brief 记录TX空闲前置检查。 @return 当前预置清理状态。 */
 BSP_PtpStatus BSP_PTP_TxClean(void) { Event('T'); return clean_status; }
 /** @brief 返回模拟时间代际。 @return 当前epoch。 */
@@ -239,6 +249,7 @@ static void Reset(void)
     protocol_calls=observe_calls=tick_calls=commit_calls=invalidate_calls=clock_writes=estimator_calls=notify_calls=0U;
     deinit_ok=install_ok=udp_clear_ok=observe_ok=true; have_exchange=peer_reset=false;
     read_status=clean_status=write_status=BSP_PTP_OK; estimate_status=SYNC_ESTIMATOR_OK;
+    recovery_status=BSP_PTP_OK; recovery_checks=0U;
     hardware_frequency=0; requested=(ClockServoAction){CLOCK_SERVO_NONE,0,0}; active_servo=NULL;
     process_advance_ms=0U; capture_on_process=false;
     trace_length=0U; trace[0]=logs[0]='\0';
@@ -384,16 +395,83 @@ int main(void)
     assert(strstr(logs,"EPOCH=4294967295,RATE_REV=4294967295")!=NULL);
     puts("PASS: log cadence survives tick wrap and full-width signed fields fit complete nano-safe lines");
 
-    Reset(); Init(BOARD_ROLE_B); read_status=BSP_PTP_BAD_CONFIG; Sample();
+    Reset(); hardware_frequency=70; Init(BOARD_ROLE_B);
+    active_servo->valid_samples=17U; active_servo->rejected_samples=3U;
+    read_status=BSP_PTP_BAD_SNAPSHOT; Sample();
     assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==0U);
-    read_status=BSP_PTP_OK; peer_reset=true; Sample();
+    read_status=BSP_PTP_OK; now_tick+=999U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_FAULT && recovery_checks==0U);
+    ++now_tick; have_exchange=true; captured=now_tick;
+    TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_ACQUIRING && recovery_checks==1U);
+    assert(active_servo->frequency_ppb==70 && active_servo->valid_samples==17U && active_servo->rejected_samples==3U);
+    assert(!have_exchange && observe_calls==0U && clock_writes==0U);
+    assert(strstr(trace,"UCAMSN")!=NULL && strstr(logs,"$SYNC_RECOVERY,")!=NULL);
+    TimeSyncSnapshot recovered; TimeSync_GetSnapshot(now_tick,&recovered);
+    assert(!recovered.faulted && !recovered.offset_valid && !recovered.internal_locked);
+    requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,80}; Sample();
+    assert(active_servo->state==CLOCK_SERVO_TRACKING && clock_writes==1U);
+    puts("PASS: one failed local read recovers after 1000ms at known frequency; old exchange revoked, new samples required");
+
+    Reset(); Init(BOARD_ROLE_B); read_status=BSP_PTP_HAL_ERROR; Sample();
+    read_status=BSP_PTP_OK; recovery_status=BSP_PTP_BUSY;
+    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(recovery_checks==1U && active_servo->state==CLOCK_SERVO_FAULT);
+    now_tick+=999U; TimeSync_Process(now_tick,true); assert(recovery_checks==1U);
+    ++now_tick; TimeSync_Process(now_tick,false); assert(recovery_checks==1U);
+    recovery_status=BSP_PTP_OK; TimeSync_Process(now_tick,true);
+    assert(recovery_checks==2U && active_servo->state==CLOCK_SERVO_ACQUIRING && clock_writes==0U);
+    puts("PASS: busy/unknown clock stays faulted; retry is bounded to 1000ms and obeys processing gate");
+
+    Reset(); Init(BOARD_ROLE_B); read_status=BSP_PTP_HAL_ERROR; Sample();
+    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(recovery_checks==1U && active_servo->state==CLOCK_SERVO_FAULT);
+    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(recovery_checks==2U && active_servo->state==CLOCK_SERVO_FAULT);
+    read_status=BSP_PTP_OK; now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(recovery_checks==3U && active_servo->state==CLOCK_SERVO_ACQUIRING);
+    assert(strstr(logs,"RECOVERIES=1")!=NULL && clock_writes==0U);
+    puts("PASS: repeated local-read failures never move the retry deadline or starve eventual recovery");
+
+    Reset(); Init(BOARD_ROLE_B); requested=(ClockServoAction){CLOCK_SERVO_STEP,10,0};
+    clean_status=BSP_PTP_NOT_READY; Sample();
+    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_FAULT && recovery_checks==0U && clock_writes==0U);
+    clean_status=BSP_PTP_OK; now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_ACQUIRING && active_servo->pending.kind==CLOCK_SERVO_NONE && recovery_checks==1U);
+    puts("PASS: unissued correction blocked by TX busy can reacquire after TX becomes idle");
+
+    Reset(); Init(BOARD_ROLE_B); read_status=BSP_PTP_HAL_ERROR; Sample();
+    read_status=BSP_PTP_OK; udp_clear_ok=false; now_tick+=1000U; TimeSync_Process(now_tick,true);
     assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==0U);
+    udp_clear_ok=true; now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_ACQUIRING && recovery_checks==2U);
+    puts("PASS: recovery must revoke consumers successfully before clearing the fault");
+
+    Reset(); Init(BOARD_ROLE_B); requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10};
+    write_status=BSP_PTP_UPDATE_TIMEOUT; Sample(); recovery_status=BSP_PTP_NOT_READY;
+    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==1U);
+    assert(strstr(logs,"RECOVERIES=0")!=NULL);
+    puts("PASS: update timeout with disabled hardware never becomes a software-only recovery");
+
+    Reset(); Init(BOARD_ROLE_A); ++epoch; udp_clear_ok=false; TimeSync_Process(now_tick,true);
+    udp_clear_ok=true; now_tick+=2000U; TimeSync_Process(now_tick,true);
+    assert(recovery_checks==0U && clock_writes==0U);
+    puts("PASS: B recovery never resets or disciplines the A reference clock");
+
+    Reset(); now_tick=UINT32_MAX-500U; Init(BOARD_ROLE_B);
+    read_status=BSP_PTP_HAL_ERROR; Sample(); read_status=BSP_PTP_OK;
+    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_ACQUIRING && recovery_checks==1U);
+    puts("PASS: fault recovery cadence survives uint32 millisecond wrap");
+
     assert(TimeSync_Init(now_tick,&(BoardIdentityProfile){.role=BOARD_ROLE_B},Tick,NULL));
     requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10}; Sample();
     assert(clock_writes==1U && active_servo->frequency_ppb==10);
     assert(!TimeSync_Init(now_tick,NULL,Tick,Log));
     assert(!TimeSync_Init(now_tick,&(BoardIdentityProfile){.role=BOARD_ROLE_UNCONFIGURED},Tick,Log));
     assert(!TimeSync_Init(now_tick,&(BoardIdentityProfile){.role=BOARD_ROLE_B},NULL,Log));
-    puts("PASS: clock loss faults without implicit recovery; explicit known-state reinstall supports disabled logging and rejects invalid inputs");
+    puts("PASS: explicit known-state reinstall still supports disabled logging and rejects invalid inputs");
     return 0;
 }

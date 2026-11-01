@@ -1,6 +1,6 @@
 /**
  * @file test_controller_pps.c
- * @brief 检查真实TimeSync在硬件动作前后交接PPS资格，保留原协调测试。
+ * @brief 检查真实TimeSync在硬件动作及故障恢复时交接PPS资格，保留原协调测试。
  * @note 主机替代PPS和硬件，不证明真实脉冲精度。
  */
 #define main previous_controller_tests
@@ -60,6 +60,18 @@ int main(void)
  unsigned stopped=pps_deinits;deinit_ok=false;assert(!TimeSync_Deinit());assert(pps_deinits==stopped);deinit_ok=true;
  track_hooks=false;Reset();Init(BOARD_ROLE_A);unsigned a_invalidations=pps_invalidations;
  peer_reset=true;TimeSync_Process(now_tick,true);assert(pps_invalidations==a_invalidations);
+ Reset();Init(BOARD_ROLE_B);read_status=BSP_PTP_HAL_ERROR;Sample();
+ unsigned observations_before=pps_observations,stops_before=pps_invalidations;
+ read_status=BSP_PTP_OK;pps_stop_ok=false;now_tick+=1000U;TimeSync_Process(now_tick,true);
+ assert(active_servo->state==CLOCK_SERVO_FAULT && pps_observations==observations_before);
+ pps_stop_ok=true;now_tick+=1000U;TimeSync_Process(now_tick,true);
+ assert(active_servo->state==CLOCK_SERVO_ACQUIRING && pps_invalidations>stops_before);
+ assert(pps_observations==observations_before && clock_writes==0U);
+ TimeSyncSnapshot recovered;TimeSync_GetSnapshot(now_tick,&recovered);
+ assert(!recovered.offset_valid && !recovered.internal_locked);
+ requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10};Sample();
+ assert(pps_observations==observations_before+1U && !pps_saw_lock);
+ puts("PASS PPS recovery: stop failure blocks reacquisition; successful recovery waits for new Observe without old qualification");
  Reset();unsigned init_count=pps_inits;pps_init_ok=false;BoardIdentityProfile p={.role=BOARD_ROLE_A};
  assert(!TimeSync_Init(now_tick,&p,Tick,Log) && pps_inits==init_count+1U);pps_init_ok=true;
  puts("PASS PPS integration: before-commit lock, pre-step stop, frequency handoff, stop-failure no clock write, invalidation and lifecycle");return 0;

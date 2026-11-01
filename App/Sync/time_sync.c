@@ -4,11 +4,14 @@
  * @details     B端先检查250ms结果时效及100ms交换历时，再交给纯C伺服。相位动作在写时钟前撤销旧时域
  *              配对、锚点及模型；成功且相位连续的调频保留声音队列与采锚节拍，仅按已知频率差扩大
  *              跨界时间误差界；调频失败或未知时钟变化仍撤销。随后立即向伺服提交有界BSP结果。
- *              A只推进协议，不运行伺服或写时钟。
+ *              B瞬态故障后每至少一秒核验已知硬件状态，撤销旧消费者并重新获取；A只推进协议，不运行伺服或写时钟。
  * @note        仅NO_SYS串行前台，放行信号为false时整次返回。旧服务须先安装，新服务须先卸载；SYNC固定为0，
  *              内部锁定仅是闭环观测状态，不代表独立精度验收。无新的IRQ/DMA/缓存配置。
  */
 #include "Sync/time_sync.h"
+#ifdef SBCG_USE_ADVANCED_UI
+#include "UI/waveform_service.h"
+#endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
 #endif
@@ -33,11 +36,13 @@
 #define EXCHANGE_MAX_WINDOW_NS UINT64_C(100000000)
 #define CONTROL_LOG_PERIOD_MS 1000U
 #define CONTROL_LINE_CAPACITY 256U
+#define RECOVERY_RETRY_MS 1000U
 
 static bool configured, faulted;
 static BoardRole board_role;
 static ClockServo servo;
 static uint32_t cached_epoch, cached_revision, last_log_ms, rejected_samples, errors;
+static uint32_t last_recovery_ms, recovery_attempts, recoveries;
 static uint32_t (*read_tick)(void);
 static void (*emit_line)(const char *,int);
 /* 与App日志队列相同的固定上限，前台单一调用者，不保留外部字符串。 */
@@ -123,12 +128,12 @@ static void Emit(int length)
  * @brief   在不写硬件的情况下锁存协调故障。
  * @param   now_ms 当前单调毫秒值。
  * @return  无返回值。
- * @note    B使用失败的NONE提交进入核心FAULT，保留已确认频率；A不调用伺服。重复故障不重复计数。
+ * @note    B使用失败的NONE提交进入核心FAULT，保留已确认频率并开始恢复退避；A不调用伺服。重复故障不重复计数或续延退避。
  */
 static void Fault(uint32_t now_ms)
 {
     if (faulted) { return; }
-    faulted=true; Increment(&errors);
+    faulted=true; last_recovery_ms=now_ms; Increment(&errors);
 #ifdef SBCG_USE_PPS
     (void)PpsService_Invalidate(now_ms);
 #endif
@@ -148,6 +153,9 @@ static void Fault(uint32_t now_ms)
  */
 static bool InvalidateConsumers(uint32_t now_ms)
 {
+#ifdef SBCG_USE_ADVANCED_UI
+    WaveformService_NotifyClockChange();
+#endif
 #ifdef SBCG_USE_SOUND_TIME
     /* 模型失效不得被可失败的协议卸载阻断。 */
     SoundEventTime_Invalidate(SOUND_TIME_CLOCK);
@@ -171,6 +179,10 @@ static bool InvalidateConsumers(uint32_t now_ms)
 static bool NotifyContinuousFrequencyChange(int32_t delta_ppb)
 {
     if (!UDPTimeExchange_NotifyClockChange()) { return false; }
+#ifdef SBCG_USE_ADVANCED_UI
+    /* 显示模型不能沿用变频前斜率；只影响波形观察，不撤销原标准音连续调频模型。 */
+    WaveformService_NotifyClockChange();
+#endif
     PtpClock_NotifyClockChange();
 #ifdef SBCG_USE_SOUND_TIME
     SoundEventTime_NotifyFrequencyChange(delta_ppb);
@@ -198,7 +210,7 @@ static void PublishClockGeneration(void)
  * @brief   按严格门控、消费者失效、硬件操作、立即提交的顺序执行一个动作。
  * @param   now_ms 与本次Observe相同的前台毫秒值。
  * @param   action 非NULL，必须是核心刚生成且尚未提交的原样动作。
- * @return  无返回值；失败使核心FAULT，不重试硬件。
+ * @return  无返回值；失败使核心FAULT，不重发该硬件动作，后续由前台核验恢复资格。
  * @note    正phase推进B，正frequency加快B；仅实际BSP_OK允许成功提交。相位动作始终先撤销模型；
  *          调频先保留声音模型并按频率差通报，写入失败或回读不一致时再撤销，避免调频盲窗丢声音。
  */
@@ -253,7 +265,7 @@ static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
     {
         /* 调频失败或实际未执行：硬件速率状态不确定，已保留的旧模型必须撤销。 */
         if (frequency_model_retained) { (void)InvalidateConsumers(now_ms); }
-        faulted=true; Increment(&errors);
+        faulted=true; last_recovery_ms=now_ms; Increment(&errors);
     }
     if (issued) { PublishClockGeneration(); }
     if (BSP_PTP_GetFrequencyPpb()!=servo.frequency_ppb)
@@ -382,6 +394,7 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     board_role=profile->role; read_tick=tick; emit_line=log;
     cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
     last_log_ms=now_ms; rejected_samples=errors=0U; faulted=false; configured=true;
+    last_recovery_ms=now_ms; recovery_attempts=recoveries=0U;
     return true;
 }
 
@@ -390,7 +403,8 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
  * @param   now_ms 入口HAL毫秒计数，协议处理后由保存的tick刷新用于样本年龄和提交。
  * @param   processing_allowed false时整次返回，不发送、不估计、不清理描述符或写时钟。
  * @return  无返回值。
- * @note    A不调用核心；B失联由Tick撤锁，peerReset清历史。所有动作在包装回调之外的串行前台执行。
+ * @note    A不调用核心；B失联由Tick推进，peerReset清历史。B故障每至少一秒核验硬件并重新获取，
+ *          不初始化或写时钟；未决命令、关闭时钟或消费者无法撤销时继续FAULT。所有动作均在串行前台执行。
  */
 void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
 {
@@ -400,6 +414,42 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
     PtpBoardSync_Process(now_ms);
     now_ms=read_tick();
     if (board_role==BOARD_ROLE_B) { ClockServo_Tick(&servo,now_ms); }
+    if (board_role==BOARD_ROLE_B && (faulted || servo.state==CLOCK_SERVO_FAULT))
+    {
+        if (!faulted) { Fault(now_ms); }
+        if ((uint32_t)(now_ms-last_recovery_ms)>=RECOVERY_RETRY_MS)
+        {
+            last_recovery_ms=now_ms; Increment(&recovery_attempts);
+            int32_t frequency_ppb=0;
+            BSP_PtpStatus status=BSP_PTP_TxClean();
+            if (status==BSP_PTP_OK) { status=BSP_PTP_ReadKnownFrequency(&frequency_ppb); }
+#ifdef SBCG_USE_PPS
+            if (status==BSP_PTP_OK && !PpsService_Invalidate(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
+#endif
+            if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
+            if (status==BSP_PTP_OK)
+            {
+                /* InitKnown清除旧偏差与待执行动作，累计样本诊断仍属于本次启动，不能因恢复倒退。 */
+                const uint32_t valid_samples=servo.valid_samples, rejected=servo.rejected_samples;
+                const bool initialized=ClockServo_InitKnown(&servo,now_ms,frequency_ppb);
+                servo.valid_samples=valid_samples; servo.rejected_samples=rejected;
+                if (initialized)
+                {
+                    cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
+                    faulted=false; Increment(&recoveries);
+                }
+                else { status=BSP_PTP_OUT_OF_RANGE; }
+            }
+            Emit(snprintf(line,sizeof line,
+                "$SYNC_RECOVERY,ROLE=B,STATUS=%u,ATTEMPTS=%" PRIu32 ",RECOVERIES=%" PRIu32
+                ",FREQ_PPB=%" PRId32 ",EPOCH=%" PRIu32 ",RATE_REV=%" PRIu32 ",SYNC=0\r\n",
+                (unsigned)status,recovery_attempts,recoveries,BSP_PTP_GetFrequencyPpb(),
+                BSP_PTP_GetEpoch(),BSP_PTP_GetRateRevision()));
+        }
+        /* 本次即使恢复也不消费旧交换；从下一轮开始只接受重新形成的四时刻。 */
+        LogControl(now_ms);
+        return;
+    }
     const bool peer_changed=PtpBoardSync_TakePeerReset();
     if (peer_changed)
     {

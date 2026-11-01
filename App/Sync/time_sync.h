@@ -1,7 +1,7 @@
 /**
  * @file        time_sync.h
  * @brief       固定A参考/B跟随的前台时间同步协调接口。
- * @details     安装板间协议包装，B端消费硬件四时刻并协调纯C伺服、消费者失效与有界BSP校正。
+ * @details     安装板间协议包装，B端消费硬件四时刻并协调纯C伺服、消费者失效、有界BSP校正及瞬态故障重获取。
  * @note        ETH/PTP须先完成角色对应初始化，B采用BSP记录的已确认有界频率。仅NO_SYS串行前台调用，不表示独立精度验收。
  */
 #ifndef SBCG_TIME_SYNC_H
@@ -49,7 +49,8 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
  * @param   now_ms 当前HAL毫秒计数；协议处理后再读tick取得新鲜时间，均使用无符号差。
  * @param   processing_allowed 本次前台是否允许处理；false不发送协议、不估计、不写时钟。
  * @return  无返回值。
- * @note    A不运行伺服或写时钟。B校正前要求TX空闲并清理旧配对与音频窗口，失败进入FAULT；SYNC始终为0。
+ * @note    A不运行伺服或写时钟。B校正失败进入FAULT；每至少1000ms在TX空闲、fine硬件已知且无未决命令时
+ *          撤销旧消费者并重新获取，不初始化时钟。恢复本身不产生有效偏差，实际关闭时钟保持FAULT；SYNC始终为0。
  */
 void TimeSync_Process(uint32_t now_ms,bool processing_allowed);
 #endif

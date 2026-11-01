@@ -2,7 +2,7 @@
  * @file        bsp_ptp.c
  * @brief       ETH PTP本地时钟读写、接收戳及B板有界驯服接口。
  * @details     保留A板5ns粗更新；B板采用10ns精细更新与名义addend0x80000000，提供频率修正及新鲜读时后的
- *              TSSTI绝对步进。时钟epoch与速率代际帮助上层隔离旧交换、锚点和插值窗口。
+ *              TSSTI绝对步进；只读恢复资格核对本地硬件及已确认频率。时钟epoch与速率代际帮助上层隔离旧交换、锚点和插值窗口。
  * @note        仅NO_SYS前台，依赖200MHz HCLK、ETH初始化及HAL_ETH_USE_PTP一致编译。校正前由调用方确认
  *              TxClean为空闲并退出网络回调。超时使时钟失效，不承诺已发硬件命令回滚，不证明跨板精度。
  */
@@ -324,6 +324,23 @@ uint32_t BSP_PTP_GetRateRevision(void) { return rate_revision; }
  * @note    前台纯读；失效后保留历史成功记录，不能据此判断硬件完成状态。
  */
 int32_t BSP_PTP_GetFrequencyPpb(void) { return applied_frequency_ppb; }
+
+/**
+ * @brief   仅在fine硬件状态确定、无未决命令且新鲜读时成功后交付已确认频率。
+ * @param   frequency_ppb 调用方拥有的ppb输出；可NULL，失败时保持原值且不保留指针。
+ * @return  OK为可供上层重新获取的本地状态；NULL或硬件/快照异常返回对应状态。
+ * @note    仅前台只读；复用校正前置检查但不发出校正、初始化或恢复命令，不提升代际。
+ */
+BSP_PtpStatus BSP_PTP_ReadKnownFrequency(int32_t *frequency_ppb)
+{
+    if (frequency_ppb == NULL) { return BSP_PTP_BAD_SNAPSHOT; }
+    BSP_PtpStatus status = CheckFineUpdate();
+    if (status != BSP_PTP_OK) { return status; }
+    BSP_PtpTime snapshot;
+    status = BSP_PTP_Read(&snapshot);
+    if (status == BSP_PTP_OK) { *frequency_ppb = applied_frequency_ppb; }
+    return status;
+}
 
 /**
  * @brief   读取并校验本地 ETH PTP 秒/纳秒快照。
