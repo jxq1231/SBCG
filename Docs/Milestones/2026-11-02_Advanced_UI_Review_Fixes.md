@@ -32,4 +32,4 @@
 
 ## 提交
 
-本轮软件检查点定向提交，作者/提交者`jxq`；不push、不改写历史、不包含用户受保护的LICENSE删除、`Analysis/`、旧`Docs/`与`nul`文件。
+本轮软件检查点定向提交 `11b64dc`（`fix: close seven advanced UI review defects`），作者/提交者`jxq`；不push、不改写历史、不包含用户受保护的LICENSE删除、`Analysis/`、旧`Docs/`与`nul`文件。

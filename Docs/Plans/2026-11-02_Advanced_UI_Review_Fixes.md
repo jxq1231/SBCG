@@ -26,7 +26,7 @@
 - [x] 交叉审查新逻辑、必要的边界单次校验和资源变化。
 - [x] 核对diff，定向提交软件检查点（jxq/jxq），保留所有用户文件。
 
-完成证据见 `Docs/Milestones/2026-11-02_Advanced_UI_Review_Fixes.md`。本轮软件测试通过不等于物理精度通过，实机验收仍未执行。
+完成证据见 `Docs/Milestones/2026-11-02_Advanced_UI_Review_Fixes.md`，软件检查点提交 `11b64dc`。本轮软件测试通过不等于物理精度通过，实机验收仍未执行。
 
 此前全套测试有四组既存失败（ChirpMatcher资产期望、Sdram应用stub、SoundDetector初始化器、SoundDetectorService日志断言），另有旧UI服务stub失败。本轮若受影响用例必须修复；其他既存失败单独如实记录，不放宽断言掩盖功能问题。
 
