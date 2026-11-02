@@ -398,8 +398,10 @@ void MeasurementResult_Update(const MeasurementContext *context,
     { value.state=MEASUREMENT_PRESENTATION_ACQUIRING; }
     if(snapshot.state==RANGING_STATE_FAULT)
     { ClearPresentation(MEASUREMENT_PRESENTATION_FAULT,now_ms);return; }
-    /* 只同步同一源的确认窗口状态；旧窗口STALE不能覆盖新声的临时值。 */
-    if(snapshot.has_value && value.source_common_ns==snapshot.source_common_ns)
+    /* 只同步同一源且仍有显示值的确认窗口状态；旧窗口STALE不能覆盖新声的临时值，
+       软撤值后的无值快照也不能被tracker重新标成HOLD。 */
+    if(value.has_value && snapshot.has_value &&
+       value.source_common_ns==snapshot.source_common_ns)
     { value.state=PresentationFromTracker(snapshot.state);value.fresh=snapshot.fresh; }
     if(value.has_value)
     {
@@ -456,7 +458,6 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
                                                      bool formal,uint32_t now_ms,
                                                      uint64_t now_common_ns)
 {
-    (void)formal;
     if(authority_cache.mode)
     {
         const MeasurementContext trusted=authority_cache.context;
@@ -488,7 +489,11 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
     if(snapshot.has_value)
     {
         value.state=PresentationFromTracker(snapshot.state);value.has_value=true;
-        value.fresh=snapshot.fresh;value.formal=false;value.provisional=true;
+        value.fresh=snapshot.fresh;
+        /* PROXY只证明独立配对流程，不能冒充身份/序列形式证据。 */
+        value.formal=formal && snapshot.fresh &&
+            snapshot.evidence_kind!=RANGING_EVIDENCE_PROXY;
+        value.provisional=!value.formal;
         value.filtered_delta_ns=snapshot.filtered_delta_ns;
         if(!CorrectedDistance(snapshot.filtered_delta_ns,authority_cache.temperature.sound_speed_mm_s,
             &raw_mm,&corrected_mm))
@@ -519,6 +524,19 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
         ((decision==RANGING_DECISION_HOLD || decision==RANGING_DECISION_REACQUIRE)?
          MEASUREMENT_DECISION_REJECT_OUTLIER:MEASUREMENT_DECISION_REJECT_INVALID);
     FillTrackerDiagnostic(decision);return decision;
+}
+
+/**
+ * @brief 静默/瞬态门控只撤显示值，不删tracker已接受历史。
+ * @param now_ms 当前前台毫秒，仅作内容捕获记录。
+ * @return 无返回值；非A权威、无值或已FAULT时保持原状。
+ */
+void MeasurementResult_WithdrawForGate(uint32_t now_ms)
+{
+    if(!authority_cache.mode || !authority_cache.healthy ||
+       !authority_cache.context.authority || !presentation.has_value ||
+       presentation.state==MEASUREMENT_PRESENTATION_FAULT)return;
+    ClearPresentation(MEASUREMENT_PRESENTATION_STALE,now_ms);
 }
 
 /**

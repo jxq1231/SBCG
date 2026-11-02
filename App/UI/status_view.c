@@ -72,15 +72,21 @@ bool UI_StatusFormat(const UI_StatusSnapshot *s,uint32_t now_ms,UI_StatusText *o
  (void)snprintf(out->quality,sizeof out->quality,"QUALITY --");
  if(range_state!=0U)
  {
-  const char *state =
-   range_state==1U?"CONFIRMING":
-   range_state==2U?(s->measurement_formal?"VALID":"CONFIRMING"):
-   range_state==3U?"HOLD":range_state==4U?"REACQUIRE":
-   range_state==5U?"STALE":"FAULT";
-  if((range_state==3U || range_state==4U) && numeric)
-   (void)snprintf(out->quality,sizeof out->quality,"%s %u.%uS",state,
+  const unsigned quality=(unsigned)(s->measurement_quality>100U?100U:s->measurement_quality);
+  if(range_state==1U && numeric)
+   (void)snprintf(out->quality,sizeof out->quality,"CONFIRM Q%u",quality);
+  else if(range_state==2U && numeric)
+   (void)snprintf(out->quality,sizeof out->quality,
+       s->measurement_formal?"VALID Q%u":"TRACKED Q%u",quality);
+  else if((range_state==3U || range_state==4U) && numeric)
+   (void)snprintf(out->quality,sizeof out->quality,"%s Q%u %u.%uS",
+       range_state==3U?"HOLD":"REACQ",quality,
        (unsigned)(source_age_ms/1000U),(unsigned)((source_age_ms%1000U)/100U));
-  else (void)snprintf(out->quality,sizeof out->quality,"%s",state);
+  else (void)snprintf(out->quality,sizeof out->quality,"%s",
+       range_state==1U?"CONFIRMING":
+       range_state==2U?(s->measurement_formal?"VALID":"TRACKING"):
+       range_state==3U?"HOLD":range_state==4U?"REACQUIRE":
+       range_state==5U?"STALE":"FAULT");
  }
  else if(fresh && s->measurement_valid)
   (void)snprintf(out->quality,sizeof out->quality,"QUALITY %u",(unsigned)s->measurement_quality);

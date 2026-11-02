@@ -171,6 +171,35 @@ static void TestCalibrationContract(void)
     CHECK(p.measurement_id>id && p.distance_mm==345 && p.calibration_version==6U);
 }
 /**
+ * @brief 验证门控软撤值保留跟踪历史，且PROXY证据不能被formal参数升级。
+ * @return 无返回值；断言失败时结束主机测试。
+ */
+static void TestGateWithdraw(void)
+{
+    Setup();
+    (void)Push(315,0U);(void)Push(314,2000U);
+    MeasurementPresentationSnapshot p=Push(316,4000U);
+    CHECK(p.has_value && p.state==MEASUREMENT_PRESENTATION_TRACKING);
+    uint32_t rev=p.state_revision;
+    MeasurementResult_WithdrawForGate(5000U);
+    MeasurementResult_GetPresentation(&p);
+    CHECK(!p.has_value && p.state==MEASUREMENT_PRESENTATION_STALE && p.state_revision>rev);
+    rev=p.state_revision;
+    MeasurementResult_WithdrawForGate(5100U);
+    MeasurementResult_GetPresentation(&p);
+    CHECK(!p.has_value && p.state_revision==rev);
+    /* 只清显示，不清tracker接受窗口；新声音应快速恢复。 */
+    p=Push(315,6000U);
+    CHECK(p.has_value && p.state==MEASUREMENT_PRESENTATION_TRACKING);
+    const SoundPairResult pair=PairMm(315,8000U);
+    current_ns=(pair.a_time_ns>pair.b_time_ns?pair.a_time_ns:pair.b_time_ns)+20000000ULL;
+    MeasurementResult_Update(&context,&temperature,9000U,current_ns);
+    (void)MeasurementResult_PublishTrackedPair(&pair,&temperature,true,9000U,current_ns);
+    MeasurementResult_GetPresentation(&p);
+    CHECK(p.has_value && !p.formal && p.provisional);
+}
+
+/**
  * @brief 确认拒绝标定取样时清零输出，且读取不改变当前展示。
  * @return 无返回值；断言失败时结束主机测试。
  * @note 仅依赖测试已建立的前台状态，不推进共同时间或修改测量缓存。
@@ -272,7 +301,7 @@ static void TestCalibrationSampleEligibility(void)
 int main(void)
 {
     TestProvisionalRecovery();TestNewSoundAfterExpiry();TestTrustedInput();TestRemoteRevocation();TestCalibrationContract();
-    TestCalibrationSample();TestCalibrationSampleEligibility();
+    TestGateWithdraw();TestCalibrationSample();TestCalibrationSampleEligibility();
     Setup();MeasurementResult_SetCalibration(20,5U);
     MeasurementPresentationSnapshot p=Push(315,0U);CHECK(p.measurement_id==1U);
     uint32_t rev=p.state_revision;

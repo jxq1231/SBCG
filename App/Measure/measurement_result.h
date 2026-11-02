@@ -197,7 +197,8 @@ bool MeasurementResult_GetDiagnostics(MeasurementDiagnosticsSnapshot *out);
  * @brief 将独立pair送入tracker并更新显式展示状态。
  * @param pair 非NULL已配对结果；域/session/源时刻必须完整。
  * @param temperature 可NULL；无效时硬撤销展示值。
- * @param formal 标准序列/门控是否已确认；false表示PROVISIONAL。
+ * @param formal 上游标准序列/门控是否已确认；PROXY观测仍不授予formal，
+ *               false表示PROVISIONAL。
  * @param now_ms 本地HAL毫秒，仅写展示/诊断。
  * @param now_common_ns 实际读取的当前共同时间纳秒；0表示读时失败，不能用源时刻替代。
  * @return tracker本次决策；展示副本通过GetPresentation读取。
@@ -207,6 +208,14 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
                                                      bool formal,
                                                      uint32_t now_ms,
                                                      uint64_t now_common_ns);
+
+/**
+ * @brief 静默/瞬态门控要求软撤当前展示值。
+ * @param now_ms 当前前台毫秒，仅作内容捕获记录。
+ * @return 无返回值；只清显示值，保留tracker已接受历史，供新声音快速恢复。
+ * @note 失域/断流已由Update硬撤销；本接口不把FAULT降级为STALE。
+ */
+void MeasurementResult_WithdrawForGate(uint32_t now_ms);
 
 /** @brief 复制当前展示快照；无结果时state=NONE且has_value=false。 */
 void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out);

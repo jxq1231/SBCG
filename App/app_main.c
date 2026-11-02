@@ -582,7 +582,6 @@ static void ServiceDomain(uint32_t now_ms)
     if(profile->role==BOARD_ROLE_A)
     {
         MeasurementGate_Tick(now_ms);
-        (void)MeasurementGate_TakeInvalidation(); /* 健康协调者负责硬撤值，静默不清历史。 */
     }
     TimeDomainSnapshot domain;
     TimeDomain_Get(&domain);
@@ -597,7 +596,17 @@ static void ServiceDomain(uint32_t now_ms)
         else MeasurementGate_OnDomainInvalid(now_ms);
         last_domain_valid=domain.valid;
     }
+    /* 先取走门控请求，再刷新本拍状态：会话换代只重置资格，不撤掉换代后的新结果；
+       3秒静默才软撤显示值，失域/断流仍由Update硬撤销。 */
+    MeasurementGateSnapshot gate;
+    MeasurementGate_Get(&gate);
+    (void)MeasurementGate_TakeInvalidation();
     RefreshRanging(now_ms);
+    MeasurementPresentationSnapshot visible;
+    MeasurementResult_GetPresentation(&visible);
+    if(profile->role==BOARD_ROLE_A && gate.state==MEASUREMENT_GATE_SILENCE &&
+       visible.has_value && visible.source_age_ms>=MEASUREMENT_GATE_SILENCE_MS)
+        MeasurementResult_WithdrawForGate(now_ms);
     static bool last_valid;
     static uint32_t last_domain_log_ms;
     if(domain.valid!=last_valid)

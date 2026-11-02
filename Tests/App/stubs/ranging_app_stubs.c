@@ -53,6 +53,8 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
   return RANGING_DECISION_REJECT; }
 void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out)
 { if(out!=NULL)memset(out,0,sizeof *out); }
+void MeasurementResult_WithdrawForGate(uint32_t now_ms)
+{ (void)now_ms; }
 bool MeasurementResult_PublishRemotePresentation(const MeasurementPresentationSnapshot *remote,
                                                  uint32_t time_domain,uint32_t now_ms)
 { (void)remote;(void)time_domain;(void)now_ms;return false; }

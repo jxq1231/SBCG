@@ -32,6 +32,14 @@ int main(int argc,char **argv){
  CHECK(UI_StatusFormat(&s,100,&text) && strstr(text.quality,"HOLD") && strstr(text.quality,"4.5S"));
  s.measurement_source_age_ms=6500U;
  CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"-- M")==0);
+ s.measurement_state=1U;s.measurement_source_age_ms=0U;s.measurement_valid=true;s.measurement_quality=87U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.quality,"CONFIRM Q87")==0);
+ s.measurement_state=2U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.quality,"TRACKED Q87")==0);
+ s.measurement_formal=true;
+ CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.quality,"VALID Q87")==0);
+ s.measurement_formal=false;s.measurement_state=4U;s.measurement_source_age_ms=4500U;
+ CHECK(UI_StatusFormat(&s,100,&text) && strstr(text.quality,"REACQ") && strstr(text.quality,"Q87"));
  s.measurement_state=5U;s.measurement_source_age_ms=0U;
  CHECK(UI_StatusFormat(&s,100,&text) && strcmp(text.distance,"-- M")==0 && strcmp(text.quality,"STALE")==0);
  s.measurement_state=6U;
