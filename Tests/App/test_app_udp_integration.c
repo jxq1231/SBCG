@@ -42,7 +42,7 @@ static ip_addr_t peer_ip;
 static BoardIdentityProfile identity;
 static uint64_t common_ns;
 static uint32_t audio_session=1U,clock_epoch=3U;
-static uint32_t audio_dropped, audio_processed;
+static uint32_t audio_dropped, audio_processed, audio_index_faults;
 static bool clock_ok=true,sync_faulted,send_ok=true,event_pending,process_blocks=true;
 static bool capture_enabled=true;
 static EventClass host_event_class=EVENT_CLASS_CHIRP;
@@ -123,7 +123,8 @@ void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation *
 /** @brief 提供受控SAI快照；DROP注入累计缺口，PROCESS决定后续STEP是否完成新块。 @param out 可空输出。 @return 无返回值。 */
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out)
 {if(out)*out=(BSP_AudioSnapshot){.running=true,.session=audio_session,.callback_count=1U,
-    .last_callback_ms=tick_ms,.dropped_blocks=audio_dropped,.processed_blocks=audio_processed};}
+    .last_callback_ms=tick_ms,.dropped_blocks=audio_dropped,.processed_blocks=audio_processed,
+    .index_faults=audio_index_faults};}
 /** @brief 返回检测计数元数据。 @param out 可空输出。 @return 无返回值。 */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 {if(out)*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=event_delivered};}
@@ -192,6 +193,7 @@ static void Snapshot(void)
  ",\"distance_text\":\"%s\",\"quality_text\":\"%s\",\"rx_ok\":%" PRIu32
  ",\"rx_bad\":%" PRIu32 ",\"packet_attempts\":%" PRIu32 ",\"event_takes\":%" PRIu32
  ",\"audio_allowed\":%u,\"anchor_allowed\":%u,\"audio_valid\":%u,\"audio_dropped\":%" PRIu32
+ ",\"audio_index_faults\":%" PRIu32
  ",\"cal_saved\":%u,\"cal_enabled\":%u,\"cal_offset_mm\":%" PRId32 ",\"cal_version\":%u"
  ",\"applied_offset_mm\":%d,\"applied_version\":%u,\"control_result\":%u"
  ",\"control_completed\":%" PRIu32 ",\"control_applied_offset_mm\":%" PRId32
@@ -203,6 +205,7 @@ static void Snapshot(void)
  p.formal?1U:0U,p.provisional?1U:0U,p.distance_mm,(unsigned)p.direction,p.source_common_ns,
  p.fresh_deadline_ns,p.display_deadline_ns,p.temperature_version,text.distance,text.quality,
  rx_ok,rx_bad,packet_attempts,event_takes,audio_allowed,anchor_allowed,s.audio_valid?1U:0U,s.audio_dropped,
+ audio_index_faults,
  calibration.calibrated?1U:0U,calibration.enabled?1U:0U,calibration.offset_mm,(unsigned)calibration.version,
  (int)p.calibration_offset_mm,(unsigned)p.calibration_version,(unsigned)control.result,control.completed,
  control.applied_offset_mm,(unsigned)control.applied_version,advanced,
@@ -284,6 +287,7 @@ int main(int argc,char **argv)
   else if(sscanf(command,"SESSION %u",&value)==1)audio_session=value;
   else if(sscanf(command,"SEND %u",&value)==1)send_ok=value!=0U;
   else if(sscanf(command,"DROP %u",&value)==1)audio_dropped=value;
+  else if(sscanf(command,"FAULTS %u",&value)==1)audio_index_faults=value;
   else if(sscanf(command,"PROCESS %u",&value)==1)process_blocks=value!=0U;
   else if(sscanf(command,"CAPTURE %u",&value)==1)capture_enabled=value!=0U;
   else if(sscanf(command,"CLASS %u",&value)==1){assert(value<=EVENT_CLASS_CLAP);host_event_class=(EventClass)value;}

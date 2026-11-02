@@ -24,6 +24,21 @@ static void Clap(void)
     memset(samples,0,sizeof samples);
     for(unsigned i=0;i<600U;++i)samples[i]=(int16_t)((i%2U?1:-1)*(12000-16*i));
 }
+/** @brief 1kHz持续纯音：不是上扫chirp，更不能兜底成拍掌。 */
+static void Tone(void)
+{
+    for(unsigned i=0U;i<2400U;++i)
+        samples[i]=(int16_t)(sin(2.0*3.14159265358979323846*1000.0*(double)i/48000.0)*12000.0);
+}
+/** @brief 截断标准chirp片段：活动段短但包络平稳，不是独立拍掌瞬态。 */
+static void TruncatedChirp(unsigned offset)
+{
+    Chirp();
+    int16_t segment[960];
+    memcpy(segment,samples+offset,sizeof segment);
+    memset(samples,0,sizeof samples);
+    memcpy(samples,segment,sizeof segment);
+}
 int main(void)
 {
     EventClassResult result;
@@ -33,11 +48,20 @@ int main(void)
     assert(result.active_frames>1200U && result.zcr_late>result.zcr_early);
     Clap();
     assert(EventClassifier_Classify(samples,2400,&result));
-    assert(result.valid && result.type==EVENT_CLASS_CLAP);
+    assert(result.valid && result.type==EVENT_CLASS_CLAP && result.quality>=50U);
+    Tone();
+    assert(EventClassifier_Classify(samples,2400,&result));
+    assert(result.valid && result.type==EVENT_CLASS_UNKNOWN); /* 持续纯音不能变成拍掌 */
+    TruncatedChirp(0U);
+    assert(EventClassifier_Classify(samples,2400,&result));
+    assert(result.valid && result.type==EVENT_CLASS_UNKNOWN); /* 截断扫频前缀 */
+    TruncatedChirp(1440U);
+    assert(EventClassifier_Classify(samples,2400,&result));
+    assert(result.valid && result.type==EVENT_CLASS_UNKNOWN); /* 截断扫频尾段 */
     memset(samples,0,sizeof samples);
     assert(!EventClassifier_Classify(samples,2400,&result));
     assert(!EventClassifier_Classify(samples,479,&result));
     assert(!EventClassifier_Classify(NULL,2400,&result));
-    puts("PASS event classifier: chirp envelope/upward ZCR vs short clap; silence/length rejection");
+    puts("PASS event classifier: chirp envelope/upward ZCR vs short clap; tone/truncated chirp stay UNKNOWN");
     return 0;
 }

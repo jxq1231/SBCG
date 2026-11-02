@@ -425,7 +425,8 @@ static void RefreshRanging(uint32_t now_ms)
     { ranging_app.gap_pending=false; }
     const bool stream_ok=audio.running && audio.session!=0U && audio.callback_count!=0U &&
         (uint32_t)(audio_now-audio.last_callback_ms)<1000U && audio.error_count==0U &&
-        audio.hal_error==0U && audio.dma_error==0U && audio.start_error==0U && !ranging_app.gap_pending;
+        audio.hal_error==0U && audio.dma_error==0U && audio.start_error==0U &&
+        audio.index_faults==0U && !ranging_app.gap_pending;
     uint64_t common_ns;uint32_t clock_epoch;
     const bool clock_ok=ReadRangingClock(&common_ns,&clock_epoch);
     ranging_app.local_audio_session=audio.session;
@@ -807,12 +808,10 @@ static void PublishRemoteRangingStatus(const RangingStatusMessage *message)
     const bool accepted=MeasurementResult_PublishRemotePresentation(
         &presentation,domain.id,now);
 #ifdef SBCG_USE_ADVANCED_UI
-    /* 沿已有标定合同传播撤值；不让B继续显示旧系数下的击掌结果。 */
-    ClapRangingSnapshot clap;ClapRanging_GetSnapshot(&clap_ranging,&clap);
-    if(accepted && clap.has_value &&
-       (clap.result.calibration_version!=message->calibration_version ||
-        clap.result.calibration_offset_mm!=message->calibration_offset_mm))
-        ClapRanging_Invalidate(&clap_ranging);
+    /* RST2与CLP1共用有序标定合同：迟到的旧状态不能把旧系数结果带回来。 */
+    if(accepted)
+        ClapRanging_ObserveCalibration(&clap_ranging,message->calibration_version,
+            message->calibration_offset_mm);
 #endif
     RangingStatusAck ack={accepted?RANGING_STATUS_ACK_OK:RANGING_STATUS_ACK_REJECT,
         message->domain,message->authority_clock_epoch,message->state_revision,

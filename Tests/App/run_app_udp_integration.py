@@ -521,6 +521,24 @@ def main():
         sa,sb=snap(a,b,'anchor-single-slot-consumed')
         check((sa['wave_anchors'],sb['wave_anchors'])==tuple(n+1 for n in anchors_before),
               'later App rounds without a new anchor never repeat waveform ObserveAnchor')
+
+        # Audio index fault is a late, sticky index failure: the existing audio stream
+        # counters stay healthy, so only audio.index_faults can revoke the displayed value.
+        a.cmd('SYNC 1');b.cmd('SYNC 1')
+        a.cmd('CLASS 1');b.cmd('CLASS 1')
+        a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
+        for t in range(111750,120501,50):
+            step(t,{113000:50,115000:51,117000:52}.get(t,0))
+        sa,sb=snap(a,b,'index-fault-precondition')
+        check(sa['has']==sb['has']==1 and sa['audio_index_faults']==0,
+              'healthy audio produces a live value before index-fault injection')
+        a.cmd('FAULTS 1');step(120550)
+        sa,sb=snap(a,b,'index-fault-withdraw')
+        check(sa['has']==0 and sa['audio_valid']==0 and sa['audio_index_faults']==1,
+              'audio.index_faults immediately revokes A freshness despite healthy counters')
+        a.cmd('FAULTS 0');step(120600)
+        sa,sb=snap(a,b,'index-fault-cleared')
+        check(sa['audio_valid']==1,'clearing audio.index_faults restores audio health without reboot')
     finally:
         a.stop();b.stop()
     print(f'RESULT PASS ({CHECKS} checks: {baseline_checks-1} preserved baseline + '

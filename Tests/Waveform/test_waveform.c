@@ -48,12 +48,12 @@ static void History(double phase)
  */
 static void CheckFractionalPhase(void)
 {
-    const double frequencies[]={2000.0,997.0};
+    const double frequencies[]={2000.0,997.0,1882.35};
     const unsigned block_shifts[]={0,1,17,35};
     const double phases[]={0.11,0.94,1.77,0.26};
     WaveformSnapshot baseline={0}, snapshot;
     double maximum_error=0.0, maximum_jitter=0.0;
-    for (unsigned frequency=0;frequency<2;frequency++) {
+    for (unsigned frequency=0;frequency<3;frequency++) {
         tone_period_frames=48000.0/frequencies[frequency];
         for (unsigned variant=0;variant<4;variant++) {
             double phase=phases[variant];
@@ -131,6 +131,61 @@ static void CheckInterpolationBoundary(void)
         assert(snapshot.synced==(boundary==0));
     }
 }
+/**
+ * @brief 验证只移动A时A相位变化可见、B固定不动，且共同窗起点仍沿A参考的整数周期网格。
+ * @note 旧实现每次用A当前过零重设窗口，A相位被钉住而B随A滑动；此处同时比较A/B快照。
+ */
+static void CheckMovingBoard(void)
+{
+    tone_period_frames=24.0;
+    WaveformService_Init(); History(0); Anchors();
+    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
+    WaveformPlan p,q; assert(WaveformService_TakePlan(&p));
+    WaveformService_Update(BOARD_ROLE_A,true,&domain,p.display_deadline_ns,2500);
+    WaveformSnapshot a0; WaveformService_GetSnapshot(&a0);
+    assert(a0.valid && a0.synced && a0.period_valid);
+    /* A移动：后续PCM相位整体改变，计划时间推进1秒，窗口落在新相位段。 */
+    for (uint64_t frame=114688;frame<163840;frame+=8192) Feed(frame,1.0,true,(uint32_t)(frame/48));
+    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(13200000000),3300);
+    assert(WaveformService_TakePlan(&q));
+    WaveformService_Update(BOARD_ROLE_A,true,&domain,q.display_deadline_ns,3400);
+    WaveformSnapshot a1; WaveformService_GetSnapshot(&a1);
+    assert(a1.valid && a1.synced && a1.period_valid);
+    const double period_ns=1.0e12/(double)q.period_milli_hz;
+    double difference=(double)q.window_start_ns-(double)p.window_start_ns;
+    double cycles=(double)(uint64_t)(difference/period_ns);
+    assert(fabs(difference-cycles*period_ns)<20.0);
+    double moved=0.0;
+    for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
+        double delta=fabs((double)a1.points[i]-(double)a0.points[i]);
+        if (delta>moved) moved=delta;
+    }
+    assert(moved>3000.0); /* A相位必须可见，不能再次被窗口重设钉住。 */
+    /* B保持不动：同一份PCM接受两个计划，绘出的波形应基本一致。 */
+    WaveformService_Init();
+    for (uint64_t frame=65536;frame<114688;frame+=8192) Feed(frame,0.0,true,(uint32_t)(frame/48));
+    Anchors();
+    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12300000000),2400);
+    assert(WaveformService_OnPlan(&p,2400));
+    WaveformService_Update(BOARD_ROLE_B,true,&domain,p.display_deadline_ns,2500);
+    WaveformSnapshot b0; WaveformService_GetSnapshot(&b0);
+    assert(b0.valid && b0.synced);
+    for (uint64_t frame=114688;frame<163840;frame+=8192) Feed(frame,0.0,true,(uint32_t)(frame/48));
+    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(13200000000),3300);
+    assert(WaveformService_OnPlan(&q,3300));
+    WaveformService_Update(BOARD_ROLE_B,true,&domain,q.display_deadline_ns,3400);
+    WaveformSnapshot b1; WaveformService_GetSnapshot(&b1);
+    assert(b1.valid && b1.synced);
+    double stationary=0.0;
+    for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
+        double delta=fabs((double)b1.points[i]-(double)b0.points[i]);
+        if (delta>stationary) stationary=delta;
+    }
+    assert(stationary<1400.0); /* B静止时不能随A移动而滑动。 */
+    printf("moving board: A delta %.0f PCM, B delta %.0f PCM\\n",moved,stationary);
+    tone_period_frames=96.0;
+}
+
 int main(void)
 {
     WaveformSnapshot a,b; WaveformPlan p,q; uint8_t wire[WAVEFORM_PLAN_WIRE_BYTES];
@@ -259,6 +314,7 @@ int main(void)
     WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(13200000000),3300);
     assert(WaveformService_TakePlan(&p));
     CheckFractionalPhase();
+    CheckMovingBoard();
     CheckInterpolationBoundary();
     puts("waveform: PASS"); return 0;
 }

@@ -40,13 +40,15 @@ _Static_assert(sizeof(WaveformStorage) < 128U * 1024U, "waveform SDRAM budget");
 static struct {
     bool initialized, staged, have_ring, healthy, model_valid, have_left;
     bool pending, outgoing, have_sequence, have_refresh;
+    /** A首次过零建立的共同相位参考；建立后不再跟随A声学相位重置。 */
+    bool phase_valid;
     BoardRole role;
     uint32_t stage_session, stage_count, session, last_block_ms, refresh_ms;
     uint32_t sequence, received_sequence, plan_ms, anchor_ms;
     uint64_t stage_first, first_frame, end_frame, common_ns;
     RangingSessionSnapshot domain;
     AudioTimeMapAnchor left, right;
-    double model_frame, model_ns, frames_per_ns;
+    double model_frame, model_ns, frames_per_ns, phase_origin_ns, phase_period_ns;
     WaveformPlan plan;
     WaveformSnapshot snapshot;
 } state;
@@ -86,6 +88,7 @@ void WaveformService_NotifyClockChange(void)
     state.pending = false;
     state.outgoing = false;
     state.have_refresh = false;
+    state.phase_valid = false;
     if (state.snapshot.synced) Invalidate();
 }
 
@@ -195,7 +198,7 @@ static int16_t Sample(uint64_t frame)
  */
 static bool LoadPeriodWindow(uint64_t start)
 {
-    if (start + PERIOD_SCRATCH_FRAMES >= state.end_frame) return false;
+    if (start + PERIOD_SCRATCH_FRAMES > state.end_frame) return false;
     uint32_t index = (uint32_t)(start % WAVEFORM_RING_FRAMES);
     for (uint32_t i = 0U; i < PERIOD_SCRATCH_FRAMES; ++i) {
         storage.period[i] = storage.ring[index];
@@ -234,22 +237,48 @@ static float PeriodError(uint32_t lag)
 /**
  * @brief A从历史PCM寻找首个强自相关周期，不使用B相位。
  * @param start 窗口附近帧。
- * @return 24..960帧周期；静音、无稳定周期或窗口越界时为0。
- * @note 静音先按能量快速返回，避免每次200ms计划都扫满960帧滞后。
+ * @return 24..960帧的分数周期；静音、无稳定周期或窗口越界时为0。
+ * @note 整数滞后最优点用抛物线插值到分数帧，避免25/26帧切换造成横轴4%跳动。
  */
-static uint32_t FindPeriod(uint64_t start)
+static double FindPeriod(uint64_t start)
 {
-    if (!LoadPeriodWindow(start) || !PeriodWindowHasSignal()) return 0U;
-    /* 先看到真实短周期再判断范围，避免把4kHz的二倍周期误报为2kHz。 */
-    float previous = PeriodError(1U), current = PeriodError(2U);
+    if (!LoadPeriodWindow(start) || !PeriodWindowHasSignal()) return 0.0;
+    float best = 2.0f;
+    uint32_t best_lag = 0U;
+    /* 全窗扫描一次；DoG相关的极值可能落在25与26之间，先取最小整数滞后。 */
     for (uint32_t lag = 2U; lag <= PERIOD_MAX_LAG; ++lag) {
-        float next = PeriodError(lag + 1U);
-        if (current < 0.04f && current < previous && current <= next)
-            return lag >= PERIOD_MIN_LAG ? lag : 0U;
-        previous = current;
-        current = next;
+        const float error = PeriodError(lag);
+        if (error < best) {
+            best = error;
+            best_lag = lag;
+        }
     }
-    return 0U;
+    if (best_lag == 0U || best > 0.04f) return 0.0;
+    double period = (double)best_lag;
+    /* 两端不能取邻点拟合；内部用误差更小的一侧做三点抛物线。 */
+    if (best_lag >= 3U && best_lag < PERIOD_MAX_LAG) {
+        const float before = PeriodError(best_lag - 1U);
+        const float at = PeriodError(best_lag);
+        const float after = PeriodError(best_lag + 1U);
+        float left, middle, right;
+        double centre = (double)best_lag;
+        if (after < before) {
+            left = at;
+            middle = after;
+            right = PeriodError(best_lag + 2U);
+            centre += 1.0;
+        } else {
+            left = before;
+            middle = at;
+            right = after;
+        }
+        const float denominator = left - 2.0f * middle + right;
+        if (denominator > 1.0e-6f) {
+            double offset = 0.5 * (double)(left - right) / (double)denominator;
+            if (offset >= -0.5 && offset <= 0.5) period = centre + offset;
+        }
+    }
+    return period >= (double)PERIOD_MIN_LAG - 0.25 ? period : 0.0;
 }
 
 /** @brief 从CPU环线性插值有界窗口，消除整帧取整造成的相位跳动。 @param first 起始帧，可带小数。 @param span 帧跨度。 @param plan 共同计划，NULL表示本地自由运行。 @return 整窗及右邻样本在环内才true。 */
@@ -278,7 +307,12 @@ static bool Render(double first, double span, const WaveformPlan *plan)
     return true;
 }
 
-/** @brief A生成200ms节流共同窗及未来显示deadline，稳定周期时按A过零对齐。 @return 无返回值。 */
+/**
+ * @brief A生成200ms节流共同窗；首次过零锁定相位参考，后续按整数周期延续。
+ * @return 无返回值。
+ * @note 参考只由A建立一次；A麦克风移动只改变声学相位，不重置共同窗起点，
+ *       因而A波形的相位变化可见、B固定不动。周期变化超过2%才重建参考。
+ */
 static void MakePlan(void)
 {
     if (state.common_ns <= HISTORY_DELAY_NS) return;
@@ -286,7 +320,55 @@ static void MakePlan(void)
     if (start_ns < state.domain.source_floor_ns) return;
     double first = FrameAt(start_ns);
     if (first < (double)state.first_frame || first + 1500.0 >= (double)state.end_frame) return;
-    uint32_t period = FindPeriod((uint64_t)first);
+    double period = FindPeriod((uint64_t)first);
+    double period_ns = period > 0.0 ? period / state.frames_per_ns : 0.0;
+    if (period_ns > 0.0) {
+        bool relock = !state.phase_valid || state.phase_period_ns <= 0.0 ||
+            period_ns > state.phase_period_ns * 1.02 || period_ns < state.phase_period_ns * 0.98;
+        if (relock) {
+            uint64_t start_frame = (uint64_t)first;
+            uint32_t limit = (uint32_t)period + 2U;
+            state.phase_valid = false;
+            for (uint32_t i = 0U; i <= limit; ++i) {
+                double left = Sample(start_frame + i), right = Sample(start_frame + i + 1U);
+                if (left <= 0.0 && right > 0.0) {
+                    double crossing = (double)(start_frame + i) - left / (right - left);
+                    if (crossing < first) continue;
+                    state.phase_origin_ns = (double)start_ns +
+                        (crossing - first) / state.frames_per_ns;
+                    state.phase_period_ns = period_ns;
+                    state.phase_valid = true;
+                    break;
+                }
+            }
+            /* 单周期相关估计有几十纳秒误差，长时间按整数周期延续会累积成整帧相位漂移；
+             * 用窗口首尾过零间隔的平均周期替代，保持A波形在绝对时间网格上稳定。 */
+            if (state.phase_valid) {
+                double first_cross = -1.0, last_cross = -1.0;
+                uint32_t cycles = 0U;
+                for (uint32_t i = 0U; i + 1U < PERIOD_SCRATCH_FRAMES; ++i) {
+                    double left = storage.period[i], right = storage.period[i + 1U];
+                    if (left <= 0.0 && right > 0.0) {
+                        double crossing = (double)i - left / (right - left);
+                        if (first_cross < 0.0) first_cross = crossing;
+                        else {
+                            last_cross = crossing;
+                            cycles++;
+                        }
+                    }
+                }
+                if (first_cross >= 0.0 && cycles >= 1U && last_cross > first_cross) {
+                    double precise = (last_cross - first_cross) / (double)cycles /
+                        state.frames_per_ns;
+                    if (precise >= (double)PERIOD_MIN_LAG / state.frames_per_ns &&
+                        precise <= (double)PERIOD_MAX_LAG / state.frames_per_ns) {
+                        state.phase_period_ns = precise;
+                        period_ns = precise;
+                    }
+                }
+            }
+        }
+    }
     WaveformPlan plan = {0};
     plan.domain = state.domain.domain;
     plan.authority_epoch = state.domain.authority_epoch;
@@ -294,22 +376,19 @@ static void MakePlan(void)
     plan.display_deadline_ns = state.common_ns + DISPLAY_LEAD_NS;
     plan.window_start_ns = start_ns;
     plan.window_span_ns = FIXED_SPAN_NS;
-    if (period != 0U) {
-        uint64_t start_frame = (uint64_t)first;
-        /* 起点可能已越过首段分数过零；包含末段才能看到下一次完整上升沿。 */
-        for (uint32_t i = 0U; i <= period; ++i) {
-            double left = Sample(start_frame + i), right = Sample(start_frame + i + 1U);
-            if (left <= 0.0 && right > 0.0) {
-                /* 仅A寻找参考上升过零；B直接逆算相同共同起点，保留声学相移。 */
-                double crossing = (double)(start_frame + i) - left / (right - left);
-                if (crossing < first) continue;
-                double delta_ns = (crossing - first) / state.frames_per_ns;
-                plan.window_start_ns += (uint64_t)(delta_ns + 0.5);
-                break;
-            }
+    if (period_ns > 0.0) {
+        if (state.phase_valid) {
+            double ratio = ((double)start_ns - state.phase_origin_ns) / state.phase_period_ns;
+            double steps = ratio > 0.0 ? (double)(uint64_t)ratio : 0.0;
+            if (state.phase_origin_ns + steps * state.phase_period_ns < (double)start_ns)
+                steps += 1.0;
+            plan.window_start_ns = (uint64_t)(state.phase_origin_ns +
+                steps * state.phase_period_ns + 0.5);
         }
-        plan.window_span_ns = (uint32_t)(3.0 * period / state.frames_per_ns);
-        plan.period_milli_hz = (uint32_t)(state.frames_per_ns * 1.0e12 / period + 0.5);
+        double span = 3.0 * period_ns;
+        if (span < 1000000.0) span = 1000000.0;
+        plan.window_span_ns = (uint32_t)(span + 0.5);
+        plan.period_milli_hz = (uint32_t)(1.0e12 / period_ns + 0.5);
     }
     state.plan = plan;
     state.pending = true;
@@ -338,6 +417,7 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
             state.model_valid = false;
             state.have_left = false;
         }
+        state.phase_valid = false;
     }
     state.role = role;
     state.healthy = qualified;

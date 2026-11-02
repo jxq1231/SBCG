@@ -570,7 +570,9 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     local_profile=*profile;read_tick=tick;emit=log;
     IP_ADDR4(&peer,profile->peer_ip[0],profile->peer_ip[1],
              profile->peer_ip[2],profile->peer_ip[3]);
-    pair_config=(SoundPairConfig){40000000U,10000U,343000U,0U,SOUND_EVENT_PAIR_TIMEOUT_MS,
+    /* 粗配对固定按343m/s，低温低声速下真实10m会算到约10.75m；先放宽到11m，
+       最终10m量程由温补后的权威结果判断，避免在入口误拒有效声源。 */
+    pair_config=(SoundPairConfig){40000000U,11000U,343000U,0U,SOUND_EVENT_PAIR_TIMEOUT_MS,
                                   0U,0U,0U};
     if(!SoundPair_Init(&pair_manager,&pair_config))return false;
     SoundPair_SetTdoaRefiner(&pair_manager,RefinePairTdoa);

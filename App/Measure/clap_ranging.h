@@ -50,6 +50,10 @@ typedef struct {
 typedef struct {
     BoardRole role;
     bool healthy, have_clock, pending_tx, have_tx, pending_ack, have_source;
+    bool temperature_ok; /**< A最近一次入口温补可用于新结果；false只停新发布，不清已发布值。 */
+    bool have_calibration_contract; /**< B已收到RST2/CLP1中的标定合同。 */
+    uint16_t calibration_contract_version;
+    int16_t calibration_contract_offset_mm;
     uint64_t now_common_ns, last_source_ns;
     uint32_t next_id, last_id, last_tx_ms;
     RangingSessionSnapshot session;
@@ -71,6 +75,16 @@ void ClapRanging_Init(ClapRanging *self);
 void ClapRanging_Invalidate(ClapRanging *self);
 
 /**
+ * @brief B记录RST2携带的标定合同；只前进，旧合同不撤新合同结果。
+ * @param self 非NULL B前台实例。
+ * @param version A已应用的标定版本（0表示未标定）。
+ * @param offset_mm A已应用的标定偏移，单位mm。
+ * @return 无返回值；合同变化时撤销不同合同的旧击掌结果，旧RST2被忽略。
+ * @note 与CLP1中的同一合同共用有序高水位；旧包不能借迟到恢复旧系数。
+ */
+void ClapRanging_ObserveCalibration(ClapRanging *self, uint16_t version, int16_t offset_mm);
+
+/**
  * @brief 更新角色、当前RSC2资格、真实读时以及A当前补偿参数，推进源期限。
  * @param self 非NULL可写实例。
  * @param role 当前板身份，A计算、B接收，未知身份撤值。
@@ -78,9 +92,9 @@ void ClapRanging_Invalidate(ClapRanging *self);
  * @param session 当前RSC2快照，可NULL表示无资格；仅established且非零域/代际有效。
  * @param now_common_ns 实际读到的共同时间纳秒；0或倒退立即撤值，不能用源时刻代替。
  * @param now_ms 本机毫秒，供调用节奏保持一致，不决定源有效期。
- * @param temperature A当前温度副本；A无有效温度撤值，B可NULL且不本地重算。
+ * @param temperature A当前温度副本；A无有效温度只拒绝新发布，已发布结果按源期限保留，B可NULL。
  * @param calibration A当前标定副本；NULL表示未标定，B忽略。
- * @return 无返回值；A标定改变或温度无效撤旧值；有效温度更新只用于下一次真实击掌，
+ * @return 无返回值；A标定改变撤旧值；温度无效只拒绝新发布，旧结果仍按源期限到期。
  *         已发布结果的温补字段、距离、源期限和重试保持不变。
  */
 void ClapRanging_Update(ClapRanging *self, BoardRole role, bool healthy,

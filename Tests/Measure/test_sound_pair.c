@@ -58,6 +58,12 @@ int main(void)
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_TDOA_RANGE);
     b=Event(SOUND_SIDE_B,2U,1000000000U+40000000U);
     assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_DISTANCE_RANGE);
+    /* 低温真实10m在343m/s粗算约10745mm：旧10m门先拒绝，放宽到11m后由温补终判。 */
+    b=Event(SOUND_SIDE_B,2U,1000000000U+31327000U);
+    assert(SoundPair_Compute(&config,&a,&b,&result)==SOUND_PAIR_DISTANCE_RANGE);
+    SoundPairConfig widened=config;widened.max_distance_mm=11000U;
+    assert(SoundPair_Compute(&widened,&a,&b,&result)==SOUND_PAIR_OK);
+    assert(result.valid && result.distance_mm==10745U);
 
     /* Queue pairs regardless of arrival order and is one-shot. */
     SoundPairManager manager;

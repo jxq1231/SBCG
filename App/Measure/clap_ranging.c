@@ -23,6 +23,29 @@ void ClapRanging_Invalidate(ClapRanging *self)
     self->pending_ack=false;
 }
 
+/**
+ * @brief B采用RST2标定合同；版本/偏移只前进，旧合同不能复活旧结果。
+ * @param self 非NULL B前台实例。
+ * @param version A当前标定版本。
+ * @param offset_mm A当前实际应用偏移。
+ * @return 无返回值；合同变化撤销不同合同旧结果，旧RST2忽略。
+ */
+void ClapRanging_ObserveCalibration(ClapRanging *self,uint16_t version,int16_t offset_mm)
+{
+    if(self==NULL)return;
+    if(self->have_calibration_contract && version<self->calibration_contract_version)return;
+    const bool changed=!self->have_calibration_contract ||
+        version!=self->calibration_contract_version ||
+        offset_mm!=self->calibration_contract_offset_mm;
+    self->have_calibration_contract=true;
+    self->calibration_contract_version=version;
+    self->calibration_contract_offset_mm=offset_mm;
+    if(changed && self->snapshot.has_value &&
+       (self->snapshot.result.calibration_version!=version ||
+        self->snapshot.result.calibration_offset_mm!=offset_mm))
+    { ClapRanging_Invalidate(self); }
+}
+
 /** @brief 核对源下界、2ms未来容差和6.5s展示上限；self已具备健康资格。 */
 static bool SourceValid(const ClapRanging *self,uint64_t source_ns)
 {
@@ -129,20 +152,20 @@ void ClapRanging_Update(ClapRanging *self,BoardRole role,bool healthy,
         const bool temperature_ok=temperature!=NULL && temperature->valid &&
             temperature->version!=0U && temperature->sound_speed_mm_s>0U &&
             temperature->sound_speed_mm_s<=1000000U;
-        if(!temperature_ok || offset < -CALIBRATION_MAX_ABS_OFFSET_MM ||
-           offset > CALIBRATION_MAX_ABS_OFFSET_MM)
-        { self->healthy=false; }
-        if(temperature_ok)
-        {
-            if(self->calibration.version!=cal->version ||
-               self->calibration.enabled!=cal->enabled ||
-               self->calibration.calibrated!=cal->calibrated ||
-               self->calibration.offset_mm!=cal->offset_mm)
-            { ClapRanging_Invalidate(self); }
-            self->temperature=*temperature;
-        }
+        const bool calibration_ok=offset>=-CALIBRATION_MAX_ABS_OFFSET_MM &&
+            offset<=CALIBRATION_MAX_ABS_OFFSET_MM;
+        self->temperature_ok=temperature_ok;
+        /* 标定合同变化立即撤旧结果；温度失效只停止新发布，不清已冻结的旧结果。 */
+        if(self->calibration.version!=cal->version ||
+           self->calibration.enabled!=cal->enabled ||
+           self->calibration.calibrated!=cal->calibrated ||
+           self->calibration.offset_mm!=cal->offset_mm)
+        { ClapRanging_Invalidate(self); }
         self->calibration=*cal;
+        if(temperature_ok)self->temperature=*temperature;
+        if(!calibration_ok)self->healthy=false;
     }
+    else self->temperature_ok=true;
     if(!self->healthy)ClapRanging_Invalidate(self);
     else RefreshAge(self);
 }
@@ -155,7 +178,7 @@ void ClapRanging_Update(ClapRanging *self,BoardRole role,bool healthy,
  */
 bool ClapRanging_PublishPair(ClapRanging *self,const SoundPairResult *pair)
 {
-    if(!self->healthy || self->role!=BOARD_ROLE_A || pair==NULL ||
+    if(!self->healthy || !self->temperature_ok || self->role!=BOARD_ROLE_A || pair==NULL ||
        !pair->valid || pair->status!=SOUND_PAIR_OK || pair->type!=SOUND_EVENT_CLAP ||
        pair->time_domain!=self->session.domain || pair->quality>100U ||
        pair->a_session==0U || pair->b_session==0U ||
@@ -215,6 +238,12 @@ bool ClapRanging_OnMessage(ClapRanging *self,const ClapResultMessage *message)
        message->domain!=self->session.domain ||
        message->authority_epoch!=self->session.authority_epoch ||
        !SourceValid(self,message->source_common_ns))return false;
+    if(self->have_calibration_contract)
+    {
+        if(message->calibration_version<self->calibration_contract_version)return false;
+        if(message->calibration_version==self->calibration_contract_version &&
+           message->calibration_offset_mm!=self->calibration_contract_offset_mm)return false;
+    }
     if(self->have_source && message->id==self->last_id)
     {
         if(!SameResult(message,&self->snapshot.result))return false;
@@ -225,6 +254,13 @@ bool ClapRanging_OnMessage(ClapRanging *self,const ClapResultMessage *message)
            (message->id<=self->last_id || message->source_common_ns<=self->last_source_ns)))
         { return false; }
         Accept(self,message);
+    }
+    if(!self->have_calibration_contract ||
+       message->calibration_version>self->calibration_contract_version)
+    {
+        self->have_calibration_contract=true;
+        self->calibration_contract_version=message->calibration_version;
+        self->calibration_contract_offset_mm=message->calibration_offset_mm;
     }
     self->ack=(ClapAckMessage){message->domain,message->authority_epoch,
         message->id,message->source_common_ns};

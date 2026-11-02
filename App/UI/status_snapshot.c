@@ -60,7 +60,7 @@ void UI_StatusSnapshot_Read(uint32_t now_ms, UI_StatusSnapshot *out)
        丢块后的测距撤值与重新握手由App的流连续性门控负责。 */
     out->audio_valid=audio.running && audio.session!=0U && audio.callback_count!=0U &&
         (uint32_t)(audio_now_ms-audio.last_callback_ms)<1000U && audio.error_count==0U &&
-        audio.hal_error==0U && audio.dma_error==0U;
+        audio.hal_error==0U && audio.dma_error==0U && audio.index_faults==0U;
     SoundDetectorServiceSnapshot detector; SoundDetectorService_GetSnapshot(&detector);
     if (detector.configured) { out->candidates=detector.candidates; }
     MeasurementPresentationSnapshot presentation={0};

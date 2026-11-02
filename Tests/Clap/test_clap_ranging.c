@@ -159,14 +159,44 @@ int main(void)
     temperature.valid=false;
     Update(&b,BOARD_ROLE_B,true,8200000001ULL,3001U);
     ClapRanging_GetSnapshot(&b,&snapshot);assert(snapshot.has_value && snapshot.result.distance_mm==350);
-    Update(&a,BOARD_ROLE_A,true,8200000001ULL,3001U);
+    Update(&a,BOARD_ROLE_A,true,8200000002ULL,3002U);
+    ClapRanging_GetSnapshot(&a,&snapshot);
+    assert(snapshot.has_value && snapshot.result.distance_mm==350); /* 温度失效不清已发布值。 */
+    assert(!ClapRanging_PublishPair(&a,&pair)); /* 只拒绝新发布。 */
+    temperature.valid=true;
+    Update(&a,BOARD_ROLE_A,true,8200000003ULL,3003U);
+    ClapRanging_GetSnapshot(&a,&snapshot);
+    assert(snapshot.has_value && snapshot.result.distance_mm==350); /* 新温度不改旧结果。 */
+    /* 两板都按真实源期限到期，而不是由A单方提前撤值。 */
+    Update(&a,BOARD_ROLE_A,true,14691000000ULL,4000U);
+    Update(&b,BOARD_ROLE_B,true,14691000000ULL,4000U);
     ClapRanging_GetSnapshot(&a,&snapshot);assert(!snapshot.has_value);
-    assert(!ClapRanging_PublishPair(&a,&pair));
-
-    /* 共同时间倒退和0立即撤；毫秒回绕仍保持500ms退避。 */
-    Update(&b,BOARD_ROLE_B,true,8200000000ULL,3002U);
     ClapRanging_GetSnapshot(&b,&snapshot);assert(!snapshot.has_value);
-    temperature.valid=true;ClapRanging_Init(&a);
+
+    /* RST2与CLP1共用标定合同高水位：旧合同包不能复活旧系数结果。 */
+    {
+        ClapRanging c;ClapRanging_Init(&c);
+        Update(&c,BOARD_ROLE_B,true,8200000000ULL,0U);
+        ClapResultMessage m=tx;m.id=1U;m.source_common_ns=8191000000U;
+        m.calibration_version=2U;m.calibration_offset_mm=0;
+        assert(ClapRanging_OnMessage(&c,&m));
+        ClapRanging_GetSnapshot(&c,&snapshot);assert(snapshot.has_value);
+        ClapResultMessage stale=m;stale.id=2U;stale.source_common_ns+=1000000U;
+        stale.calibration_version=1U;stale.calibration_offset_mm=12;
+        assert(!ClapRanging_OnMessage(&c,&stale)); /* 旧合同不能写入。 */
+        ClapRanging_ObserveCalibration(&c,3U,12);
+        ClapRanging_GetSnapshot(&c,&snapshot);
+        assert(!snapshot.has_value); /* 新合同撤旧系数值。 */
+        ClapRanging_ObserveCalibration(&c,2U,0);
+        assert(!ClapRanging_OnMessage(&c,&stale)); /* 迟到旧RST2不降合同。 */
+        ClapResultMessage next=m;next.id=3U;next.source_common_ns+=2000000U;
+        next.calibration_version=3U;next.calibration_offset_mm=12;
+        assert(ClapRanging_OnMessage(&c,&next));
+        ClapRanging_GetSnapshot(&c,&snapshot);
+        assert(snapshot.has_value && snapshot.result.calibration_version==3U);
+    }
+    /* 共同时间倒退和0立即撤；毫秒回绕仍保持500ms退避。 */
+    ClapRanging_Init(&a);
     Update(&a,BOARD_ROLE_A,true,8200000000ULL,UINT32_MAX-100U);
     assert(ClapRanging_PublishPair(&a,&pair));
     assert(ClapRanging_TakeTx(&a,UINT32_MAX-100U,&tx));
