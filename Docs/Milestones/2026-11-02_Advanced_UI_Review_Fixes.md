@@ -33,3 +33,23 @@
 ## 提交
 
 本轮软件检查点定向提交 `11b64dc`（`fix: close seven advanced UI review defects`），作者/提交者`jxq`；不push、不改写历史、不包含用户受保护的LICENSE删除、`Analysis/`、旧`Docs/`与`nul`文件。
+
+## 后续三处缺口（2026-11-03）
+
+用户要求处理上节“审查发现但未修改”中的formal、gate撤值、质量显示三处。仍只做软件验证，不烧录、不实机。
+
+| 缺口 | 修复 | 主机证据 |
+|---|---|---|
+| formal参数被丢弃 | `MeasurementResult_PublishTrackedPair` 接入formal；仅当新鲜且证据等级不是PROXY时置formal，PROXY仍为PROVISIONAL；B的`RemoteValid`/RST2既有FORMAL门槛不变 | `Tests/Measure` 断言formal=true+PROXY仍`!formal&&provisional` |
+| gate 3s撤值被丢弃 | 新增`MeasurementResult_WithdrawForGate`：仅A权威、有值且非FAULT时软撤到STALE，保留tracker已接受历史；`ServiceDomain`在静默且显示源年龄≥3s时调用；会话换代不再撤掉换代后新结果；无值快照不再被tracker回写成HOLD | `Tests/App/run_app_udp_integration.py` ACK恢复、静默到期、域失效等路径通过；`Tests/Measure`新增软撤值/重复调用/恢复测试 |
+| 无数值质量显示 | `UI_StatusFormat`质量字段改为`CONFIRM Qn`、`VALID Qn`/`TRACKED Qn`、`HOLD Qn a.bS`、`REACQ Qn a.bS`；无数值时回退既有状态文本 | `Tests/UI/test_status.c` 与`Tests/UI/run_tests.py`通过；TouchGFX View/布局专项通过 |
+
+验证结果：
+
+- 标准35组`Tests/*/run_tests.py`：31通过；仍仅4组既存无关失败（`ChirpMatcher`、`Sdram`、`SoundDetector`、`SoundDetectorService`），未放宽断言。
+- 专项：`Tests/App/run_app_udp_integration.py` 100检查通过；`Tests/TouchGFXView`四组、`Tests/Waveform/check_layout.py`、`Tests/UI/run_snapshots.py`、`Tests/ChirpService/run_diagnostics_tests.py`通过。
+- Debug构建：PASS，`build/Debug/SBCG.elf` sha256 `846d4a213216495306ac09ff1170b7ebfbb490e948774aa69790c0dffe22ba15`；FLASH 378792B/36.12%，ITCM 14944B/91.21%。
+- Release构建：PASS，`build/Release/SBCG.elf` sha256 `df85042d980f157978be4bad2912a89f020547955dd46076a16bc498b7bb1171`；FLASH 241652B/23.05%。
+- 未实机：真实声音质量/静默撤值/两屏同步仍待硬件验收；主机测试不能替代物理结论。
+
+代码提交 `5222e81`（`fix: complete formal gate and quality status paths`），作者/提交者`jxq`；未push。
