@@ -120,6 +120,7 @@ void Screen1View::configureNavigation()
     const auto accent = touchgfx::Color::getColorFromRGB(45, 212, 191);
     // 组员信息固定显示在顶部状态行下沿，不占用各页面板区域。
     roleText.setPosition(110, 8, 180, 24);
+    header.setPosition(319, 6, 150, 20);
     groupLine.setPosition(110, 33, 358, 12);
     groupLine.setTypedText(touchgfx::TypedText(T_T_DETAILTEXT));
     groupLine.setWildcard(groupLineBuffer);
