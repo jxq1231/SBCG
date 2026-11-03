@@ -56,4 +56,22 @@ void PtpBoardSync_NotifyClockChange(uint32_t epoch);
  * @note 仅前台；这是异常/重新获取信号，不是可靠跨掉电启动识别。
  */
 bool PtpBoardSync_TakePeerReset(void);
+/**
+ * @brief 查询最近一次协议推进时的链路可用状态。
+ * @return true表示链路曾可用；false表示最近一次推进时链路断开或尚未建立。
+ * @note 仅前台；状态由 Process 刷新，调用方应先推进协议再查询。
+ */
+bool PtpBoardSync_LinkUsable(void);
+/**
+ * @brief 消费一次链路从断开到恢复的事件。
+ * @return true表示本次取走一次恢复事件；false为无待取事件。
+ * @note 仅前台；恢复时内部已清除旧候选并把启动静默重新计时，调用方负责重建参考状态。
+ */
+bool PtpBoardSync_TakeLinkRecovery(void);
+/**
+ * @brief 读取累计完成的完整四时刻交换数。
+ * @return 自本次初始化以来的完成计数，只增不减。
+ * @note 仅前台只读；用于B端判断同步观测是否长时间停滞，不改变协议状态。
+ */
+uint32_t PtpBoardSync_GetCompletedCount(void);
 #endif

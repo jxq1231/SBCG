@@ -45,6 +45,7 @@ static uint8_t local_identity[10],peer_identity[10];
 static uint32_t (*read_tick)(void);
 static void (*emit)(const char *,int);
 static bool installed,peer_reset,have_peer_sequence,have_master_time,have_output;
+static bool link_usable,link_recovered;
 static unsigned int active;
 static uint16_t tx_sequence,peer_sequence;
 static uint32_t guard_start_ms,last_send_ms,last_bind_ms,last_log_ms,last_peer_ms,clock_epoch;
@@ -248,7 +249,7 @@ bool PtpBoardSync_Deinit(void)
     if(installed) { gnetif.input=original_input;gnetif.linkoutput=original_output; }
     if(event_pcb!=NULL) { udp_remove(event_pcb);event_pcb=NULL; }
     if(general_pcb!=NULL) { udp_remove(general_pcb);general_pcb=NULL; }
-    installed=false;ClearPending();return true;
+    installed=false;link_usable=false;link_recovered=false;ClearPending();return true;
 }
 bool PtpBoardSync_Init(uint32_t now,const BoardIdentityProfile *profile,uint32_t (*tick)(void),void (*log)(const char *,int))
 {
@@ -264,6 +265,7 @@ bool PtpBoardSync_Init(uint32_t now,const BoardIdentityProfile *profile,uint32_t
     PtpWire_Identity(registered_peer.local_mac,peer_identity);
     IP_ADDR4(&peer,board.peer_ip[0],board.peer_ip[1],board.peer_ip[2],board.peer_ip[3]);
     peer_reset=have_peer_sequence=have_master_time=false;clock_epoch=0;tx_sequence=0;
+    link_usable=netif_is_up(&gnetif)&&netif_is_link_up(&gnetif);link_recovered=false;
     guard_start_ms=last_peer_ms=last_log_ms=now;last_send_ms=now-PERIOD_MS;last_bind_ms=now-RETRY_MS;
     original_input=gnetif.input;original_output=gnetif.linkoutput;gnetif.input=Input;gnetif.linkoutput=Output;installed=true;return true;
 }
@@ -298,7 +300,17 @@ static void LogStats(uint32_t now)
 void PtpBoardSync_Process(uint32_t now)
 {
     if(!installed||active!=0U) { return; }Expire(now);
-    if(!netif_is_up(&gnetif)||!netif_is_link_up(&gnetif)) { ClearPending();LogStats(now);return; }
+    const bool link_now=netif_is_up(&gnetif)&&netif_is_link_up(&gnetif);
+    if(!link_now)
+    {
+        if(link_usable) { link_usable=false;ClearPending(); }
+        LogStats(now);return;
+    }
+    if(!link_usable)
+    {
+        /* 链路恢复后旧候选/发送快照已无可信时间戳，重新进入启动静默。 */
+        link_usable=true;link_recovered=true;guard_start_ms=now;ClearPending();
+    }
     if((event_pcb==NULL||general_pcb==NULL)&&(uint32_t)(now-last_bind_ms)>=RETRY_MS)
     {
         last_bind_ms=now;if(event_pcb==NULL) { event_pcb=Bind(319); }if(general_pcb==NULL) { general_pcb=Bind(320); }
@@ -351,3 +363,7 @@ void PtpBoardSync_NotifyClockChange(uint32_t epoch)
 { if(active!=0U) { return; }clock_epoch=epoch;++stats.clock_clear;ClearPending(); }
 bool PtpBoardSync_TakePeerReset(void)
 { bool result=peer_reset;peer_reset=false;return result; }
+bool PtpBoardSync_LinkUsable(void) { return link_usable; }
+bool PtpBoardSync_TakeLinkRecovery(void)
+{ const bool result=link_recovered;link_recovered=false;return result; }
+uint32_t PtpBoardSync_GetCompletedCount(void) { return stats.completed; }
