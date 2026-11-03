@@ -39,7 +39,7 @@ touchgfx::Rect WaveformWidget::getSolidRect() const
     return touchgfx::Rect(0, 0, getWidth(), getHeight());
 }
 
-/** @brief 使用LCD填充裁剪后的细条，连接真实PCM点；不分配Canvas。@param area 局部脏矩形。@return 无返回值。 */
+/** @brief 每像素Min/Max包络绘制原始PCM；固定幅度刻度，不插值/不平滑。@param area 局部脏矩形。@return 无返回值。 */
 void WaveformWidget::draw(const touchgfx::Rect& area) const
 {
     touchgfx::Rect clip = area & getSolidRect();
@@ -48,36 +48,48 @@ void WaveformWidget::draw(const touchgfx::Rect& area) const
     auto& lcd = touchgfx::HAL::lcd();
     lcd.fillRect(clip, touchgfx::Color::getColorFromRGB(11, 18, 32));
     const auto origin = getAbsoluteRect();
-    touchgfx::Rect axis(origin.x, origin.y + getHeight()/2, getWidth(), 1);
-    axis &= clip;
-    if (!axis.isEmpty()) { lcd.fillRect(axis, touchgfx::Color::getColorFromRGB(55, 77, 94)); }
+    touchgfx::Rect axis1(origin.x, origin.y + getHeight()/2, getWidth(), 1);
+    touchgfx::Rect axis2(origin.x, origin.y + getHeight()/4, getWidth(), 1);
+    axis1 &= clip;
+    axis2 &= clip;
+    if (!axis1.isEmpty()) { lcd.fillRect(axis1, touchgfx::Color::getColorFromRGB(55, 77, 94)); }
+    if (!axis2.isEmpty()) { lcd.fillRect(axis2, touchgfx::Color::getColorFromRGB(30, 44, 58)); }
     if (!frame.valid || frame.point_count < 2U) { return; }
-    // 服务保证point_count<=256。只改变显示比例；至少256 PCM，避免微小噪声铺满画面。
-    int32_t peak_pcm = 256;
-    for (uint16_t i=0U; i<frame.point_count; ++i)
+    /* 第一阶段统一固定满量程；不随信号自动缩放，避免两板幅度视觉不可比。
+     * 该常量需在实机按两板P0/P1与噪声底共同标定，显示映射不修改PCM。 */
+    const int32_t height = getHeight();
+    const int32_t centre = (height-1)/2;
+    const uint32_t count = frame.point_count;
+    const auto scale = [height](int32_t sample) -> int32_t {
+        int32_t numerator = sample * (height - 1);
+        numerator += sample >= 0 ? 8192 : -8192;
+        return numerator / 16384;
+    };
+    for (int16_t x = 0; x < getWidth(); ++x)
     {
-        const int32_t sample = frame.points[i];
-        peak_pcm = std::max(peak_pcm, sample<0 ? -sample : sample);
-    }
-    const int32_t display_span_pcm = 2*peak_pcm;
-    // 每像素一条竖线连接相邻插值点，不改变源样本、时间窗或横坐标。
-    int16_t previous_y = static_cast<int16_t>((getHeight()-1)/2 -
-        static_cast<int32_t>(frame.points[0])*(getHeight()-1)/display_span_pcm);
-    for (int16_t x=0; x<getWidth(); ++x)
-    {
-        const uint32_t position = static_cast<uint32_t>(x)*(frame.point_count-1U);
-        const uint32_t index = position/(getWidth()-1);
-        const uint32_t fraction = position%(getWidth()-1);
-        int32_t sample = frame.points[index];
-        if (index+1U < frame.point_count)
-            sample += (static_cast<int32_t>(frame.points[index+1U])-sample)*
-                static_cast<int32_t>(fraction)/(getWidth()-1);
-        const int16_t y = static_cast<int16_t>((getHeight()-1)/2-sample*(getHeight()-1)/display_span_pcm);
-        touchgfx::Rect line(origin.x+x, origin.y+std::min(y,previous_y), 1,
-            static_cast<int16_t>(std::max(y,previous_y)-std::min(y,previous_y)+1));
+        uint32_t begin = static_cast<uint32_t>(x)*count/static_cast<uint32_t>(getWidth());
+        uint32_t end = static_cast<uint32_t>(x+1)*count/static_cast<uint32_t>(getWidth());
+        if (end <= begin) { end = begin+1U; }
+        if (begin >= count) { break; }
+        if (end > count) { end = count; }
+        int32_t low = 32767, high = -32768;
+        for (uint32_t i = begin; i < end; ++i)
+        {
+            const int32_t sample = frame.points[i];
+            if (sample < low) { low = sample; }
+            if (sample > high) { high = sample; }
+        }
+        int32_t y_low = centre - scale(low);
+        int32_t y_high = centre - scale(high);
+        if (y_low < 0) y_low = 0;
+        if (y_low > height-1) y_low = height-1;
+        if (y_high < 0) y_high = 0;
+        if (y_high > height-1) y_high = height-1;
+        const int32_t top = std::min(y_low, y_high);
+        const int32_t bottom = std::max(y_low, y_high);
+        touchgfx::Rect line(origin.x+x, origin.y+top, 1, bottom-top+1);
         line &= clip;
         if (!line.isEmpty()) { lcd.fillRect(line, touchgfx::Color::getColorFromRGB(45, 212, 191)); }
-        previous_y = y;
     }
 }
 
@@ -369,21 +381,24 @@ void Screen1View::refreshClap()
     UpdateText(pageLines[4],pageLineBuffers[4],"STANDARD RANGING CONTINUES");
 }
 
-/** @brief 可见时取CPU波形并显示实际窗口和同步资格，未同步仍可画本地PCM。@return 无返回值。 */
+/** @brief 可见时取CPU波形并显示实际窗口和同步资格，未同步仍画本地原始PCM。@return 无返回值。 */
 void Screen1View::refreshWaveform()
 {
     waveform.refresh();
     const auto& wave = waveform.snapshot();
-    UpdateText(pageLines[0],pageLineBuffers[0],!wave.valid?"WAIT / NO AUDIO":
-        wave.synced?"SYNC / COMMON WINDOW":"LOCAL / UNSYNCED");
+    UpdateText(pageLines[0],pageLineBuffers[0],!wave.valid?"NO DATA / NO AUDIO":
+        wave.source==WAVEFORM_SOURCE_COMMON?"SYNC / COMMON WINDOW":"LOCAL / UNSYNCED");
     char text[64];
-    if (wave.period_valid)
-        std::snprintf(text,sizeof text,"PERIOD %lu.%03lu HZ / WINDOW %lu MS",
+    if (wave.valid && wave.period_valid)
+        std::snprintf(text,sizeof text,"PERIOD %lu.%03lu HZ / %lu MS",
             static_cast<unsigned long>(wave.period_milli_hz/1000U),
             static_cast<unsigned long>(wave.period_milli_hz%1000U),
             static_cast<unsigned long>(wave.window_span_ns/1000000U));
-    else std::snprintf(text,sizeof text,"FIXED / WINDOW %lu MS / PCM16",
+    else if (wave.valid)
+        std::snprintf(text,sizeof text,"RAW %u PCM / %lu MS",
+            static_cast<unsigned>(wave.point_count),
             static_cast<unsigned long>(wave.window_span_ns/1000000U));
+    else std::snprintf(text,sizeof text,"WAITING FOR SAI DMA");
     UpdateText(pageLines[1],pageLineBuffers[1],text);
 }
 

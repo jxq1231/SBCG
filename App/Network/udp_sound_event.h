@@ -21,7 +21,7 @@
 
 typedef void (*UDPSoundEvent_Log)(const char *line, int length);
 #ifdef SBCG_USE_ADVANCED_UI
-/** @brief 固定对端辅助短包回调；仅CLP1/CLA1/WVP1，data只在本次回调有效。 */
+/** @brief 固定对端辅助短包回调；仅CLP1/CLA1/WVP2，data只在本次回调有效。 */
 typedef void (*UDPSoundEvent_AuxiliarySink)(const uint8_t *data,uint16_t length);
 /** @brief 安装辅助短包消费者。@param sink 可NULL停用消费。@return 无返回值。 */
 void UDPSoundEvent_SetAuxiliarySink(UDPSoundEvent_AuxiliarySink sink);

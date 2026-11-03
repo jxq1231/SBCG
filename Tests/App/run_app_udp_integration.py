@@ -468,13 +468,13 @@ def main():
         before_bad=a.cmd('SNAP')['rx_bad']
         # Correct ACK uses current exact key; malformed new-protocol short packets cannot
         # accidentally be treated as that ACK or as an RSC2 handshake.
-        for payload in (b'CLP1'+bytes(20),b'WVP1'+bytes(20),bytes.fromhex(current_ack)[:-1]):
+        for payload in (b'CLP1'+bytes(20),b'WVP2'+bytes(20),bytes.fromhex(current_ack)[:-1]):
             a.cmd('RX '+payload.hex())
         a.cmd('RX '+current_ack)
         step(103150)
         sa,sb=snap(a,b,'clap-short-magic-dispatch')
         check(sa['rx_bad']==before_bad+3 and sa['clap_id']==sb['clap_id'],
-              '24-byte CLP1/WVP1 and truncated CLA1 are rejected without changing active result')
+              '24-byte CLP1/WVP2 and truncated CLA1 are rejected without changing active result')
         confirmed=len(clap_packets(a))
         for t in range(103200,104201,50):step(t)
         check(len(clap_packets(a))==confirmed,'only the exact CLA1 key stops the pending CLP1')
