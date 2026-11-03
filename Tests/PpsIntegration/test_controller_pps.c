@@ -7,7 +7,7 @@
 #include "../SyncController/test_time_sync.c"
 #undef main
 #include "Sync/pps_service.h"
-static unsigned pps_inits,pps_deinits,pps_observations,pps_invalidations,pps_before,pps_after;
+static unsigned pps_inits,pps_deinits,pps_observations,pps_invalidations,pps_before,pps_after,pps_requalifies;
 static bool pps_init_ok=true,pps_stop_ok=true,pps_before_ok=true,pps_saw_lock,track_hooks;
 static char pps_stage;
 /** @brief 模拟PPS初始化。 @param now 当前毫秒。 @param role A/B。 @param log 可空日志。 @return 预置结果。 */
@@ -27,6 +27,8 @@ void PpsService_Observe(uint32_t now,uint32_t ms,bool locked,bool drift_valid,in
 { assert(now==now_tick && ms==captured && offset==last_offset && delay==last_delay);(void)drift_valid;(void)drift;++pps_observations;pps_saw_lock=locked;if(track_hooks)pps_stage='O'; }
 /** @brief 记录同步撤资格。 @param now 当前毫秒。 @return 预置停止结果。 */
 bool PpsService_Invalidate(uint32_t now) { assert(now==now_tick);++pps_invalidations;if(track_hooks)pps_stage='I';return pps_stop_ok; }
+/** @brief 模拟A链路恢复后重建PPS资格。 @param now 当前毫秒。 @return 预置初始化结果。 */
+bool PpsService_RequalifyReference(uint32_t now) { assert(now==now_tick);++pps_requalifies;return pps_init_ok; }
 /** @brief 检查频率动作前交接。 @param now 当前毫秒。 @param previous 已知硬件ppb。 @param next 目标ppb。 @return 预置许可。 */
 bool PpsService_BeforeFrequency(uint32_t now,int32_t previous,int32_t next)
 { assert(now==now_tick && previous==hardware_frequency && next==requested.frequency_ppb);++pps_before;if(track_hooks){assert(pps_stage=='O');pps_stage='B';}return pps_before_ok; }
