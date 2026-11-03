@@ -477,6 +477,11 @@ int main(void)
 
     Reset(); Init(BOARD_ROLE_A); now_tick+=1000U;
     link_usable=false; TimeSync_Process(now_tick,true);
+    TimeSyncSnapshot a_boot; TimeSync_GetSnapshot(now_tick,&a_boot);
+    assert(!a_boot.faulted && strstr(logs,"STATE=REFERENCE")!=NULL);
+    link_usable=true; TimeSync_Process(now_tick,true);
+    now_tick+=1000U;
+    link_usable=false; TimeSync_Process(now_tick,true);
     TimeSyncSnapshot a_down; TimeSync_GetSnapshot(now_tick,&a_down);
     assert(a_down.faulted && strstr(logs,"ROLE=A")!=NULL && strstr(logs,"STATE=FAULT")!=NULL);
     const uint32_t reads_before=read_calls;
@@ -486,7 +491,7 @@ int main(void)
     assert(read_calls==reads_before+1U);
     TimeSyncSnapshot a_after; TimeSync_GetSnapshot(now_tick,&a_after);
     assert(!a_after.faulted);
-    puts("PASS: A declares FAULT while its link is down and reinitializes the reference after link recovery");
+    puts("PASS: A stays REFERENCE until its link was seen, then faults on link loss and reinitializes after recovery");
 
     Reset(); Init(BOARD_ROLE_B); now_tick+=3000U;
     TimeSync_Process(now_tick,true); assert(active_servo->state!=CLOCK_SERVO_FAULT);

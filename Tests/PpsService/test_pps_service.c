@@ -248,6 +248,29 @@ static void TestLogs(void)
     snapshot.emitted = snapshot.missed = snapshot.errors = UINT32_MAX;
     PpsService_Process(2000U, false); assert(log_count == 2U && strlen(last_log) < 256U);
 }
+/** @brief 验证A链路恢复后的PPS资格重建及非法角色/硬件失败边界；无参数，无返回值。 */
+static void TestRequalifyReference(void)
+{
+    PpsServiceSnapshot out;
+    Reset(BOARD_ROLE_A, 0U);
+    assert(PpsService_RequalifyReference(5U));
+    assert(PpsService_GetSnapshot(5U, &out));
+    assert(out.configured && out.qualified && !out.faulted &&
+           out.state == PPS_SERVICE_QUALIFIED);
+
+    Reset(BOARD_ROLE_B, 0U);
+    assert(!PpsService_RequalifyReference(6U));
+
+    Reset(BOARD_ROLE_A, 0U);
+    init_status = BSP_PPS_BAD_CONFIG;
+    assert(!PpsService_RequalifyReference(7U));
+    init_status = BSP_PPS_OK;
+
+    Reset(BOARD_ROLE_A, 0U);
+    read_status = BSP_PTP_HAL_ERROR;
+    assert(!PpsService_RequalifyReference(8U));
+    read_status = BSP_PTP_OK;
+}
 /** @brief 验证只读资格快照，不改变PPS输出/伺服状态。 */
 static void TestSnapshot(void)
 {
@@ -264,7 +287,7 @@ static void TestSnapshot(void)
 int main(void)
 {
     TestAcquisition(); TestFreshness(); TestQuality(); TestRateRequalification();
-    TestInvalidation(); TestFaults(); TestFaultRecovery(); TestLogs(); TestSnapshot();
+    TestInvalidation(); TestFaults(); TestFaultRecovery(); TestRequalifyReference(); TestLogs(); TestSnapshot();
     puts("PPS service: acquisition, quality, timeouts, frequency, faults, logs PASS");
     return 0;
 }

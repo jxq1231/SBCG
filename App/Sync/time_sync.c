@@ -45,7 +45,7 @@ static ClockServo servo;
 static uint32_t cached_epoch, cached_revision, last_log_ms, rejected_samples, errors;
 static uint32_t last_recovery_ms, recovery_attempts, recoveries;
 static uint32_t observation_count, observation_ms;
-static bool observation_seen, a_recovery_pending;
+static bool observation_seen, a_recovery_pending, a_link_seen;
 static uint32_t (*read_tick)(void);
 static void (*emit_line)(const char *,int);
 /* 与App日志队列相同的固定上限，前台单一调用者，不保留外部字符串。 */
@@ -329,7 +329,8 @@ static void RecoverReference(uint32_t now_ms)
     /* A使用粗更新时钟，ReadKnownFrequency只适用于B的fine模式；读取本地时间以确认配置仍有效。 */
     if (status==BSP_PTP_OK) { status=BSP_PTP_Read(&sample); }
 #ifdef SBCG_USE_PPS
-    if (status==BSP_PTP_OK && !PpsService_Invalidate(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
+    /* 断链时PPS资格已被撤销；链路恢复后必须重新初始化硬件，不能只改状态。 */
+    if (status==BSP_PTP_OK && !PpsService_RequalifyReference(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
 #endif
     if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
     if (status==BSP_PTP_OK)
@@ -433,6 +434,7 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     last_recovery_ms=now_ms; recovery_attempts=recoveries=0U;
     observation_count=PtpBoardSync_GetCompletedCount(); observation_ms=now_ms; observation_seen=false;
     a_recovery_pending=false;
+    a_link_seen=false;
     return true;
 }
 
@@ -453,12 +455,14 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
     now_ms=read_tick();
     if (board_role==BOARD_ROLE_A)
     {
-        if (!PtpBoardSync_LinkUsable())
+        const bool link_usable=PtpBoardSync_LinkUsable();
+        if (link_usable) { a_link_seen=true; }
+        if (a_link_seen && !link_usable)
         {
-            /* A的参考资格依赖可用链路；断链后不再继续宣称REFERENCE。 */
+            /* A的参考资格依赖可用链路；仅在链路曾经可用后断开时撤销REFERENCE。 */
             a_recovery_pending=true; Fault(now_ms);
         }
-        else
+        else if (link_usable)
         {
             if (PtpBoardSync_TakeLinkRecovery())
             {

@@ -58,6 +58,14 @@ bool PpsService_GetSnapshot(uint32_t now_ms, PpsServiceSnapshot *out);
 bool PpsService_Init(uint32_t now_ms, BoardRole role, void (*log)(const char *, int));
 
 /**
+ * @brief   重新建立A参考板的PPS输出资格。
+ * @param   now_ms 当前HAL毫秒计数，允许自然回绕。
+ * @return  true表示PPS硬件已重新初始化且A资格恢复；false保持未合格/FAULT。
+ * @note    仅供A在链路恢复后调用；B的资格必须继续由新鲜四时刻观测取得，不能经本接口伪造。
+ */
+bool PpsService_RequalifyReference(uint32_t now_ms);
+
+/**
  * @brief   同步取消输出并停用服务。
  * @return  true表示已确认安全停用；false表示停止失败并锁存FAULT。
  * @note    即使未初始化也尝试停止；成功卸载不会消除既有锁存故障。

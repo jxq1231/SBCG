@@ -64,6 +64,34 @@ static void Fail(uint32_t now_ms,BSP_PpsStatus status)
     (void)PpsService_Invalidate(now_ms);
 }
 /**
+ * @brief   重新建立A参考板的PPS输出资格。
+ * @param   now_ms 当前HAL毫秒；不刷新已有样本时效，只重建硬件输出与资格。
+ * @return  true表示硬件重新初始化、读时成功且A资格已恢复；false保持未合格/FAULT。
+ * @note    链路恢复时旧参考已被撤销，必须重新初始化PPS硬件，不能仅把状态改回QUALIFIED。
+ */
+bool PpsService_RequalifyReference(uint32_t now_ms)
+{
+    if (board_role!=BOARD_ROLE_A) { return false; }
+    const BSP_PpsStatus init_status=BSP_PPS_Init();
+    if (init_status!=BSP_PPS_OK)
+    {
+        Fail(now_ms,init_status);
+        return false;
+    }
+    BSP_PtpTime sample;
+    if (BSP_PTP_Read(&sample)!=BSP_PTP_OK)
+    {
+        Fail(now_ms,BSP_PPS_CLOCK_ERROR);
+        return false;
+    }
+    CacheGeneration();
+    configured=true; pending=preserve=false; sample_ms=now_ms;
+    state=QUALIFIED;
+    ++recoveries;
+    return true;
+}
+
+/**
  * @brief 在FAULT后限频重试BSP初始化；成功则恢复为A合格或B待锁定。
  * @param now_ms 当前毫秒，允许回绕。
  * @return 无返回值；失败保持FAULT，下一窗口继续重试。
