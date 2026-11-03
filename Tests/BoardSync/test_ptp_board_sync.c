@@ -167,5 +167,12 @@ int main(void)
     BComplete(3);assert(PtpBoardSync_TakeExchange(&e,&captured));
     assert(PtpBoardSync_Deinit());
     puts("PASS diagnostics: distinguish busy/old/FU/response/expiry/clock-clear without accepting rejected data");
+    Reset(BOARD_ROLE_A,0);PtpBoardSync_Process(now);
+    assert(PtpBoardSync_LinkUsable());gnetif.flags&=(u8_t)~NETIF_FLAG_LINK_UP;now+=1;PtpBoardSync_Process(now);
+    assert(!PtpBoardSync_LinkUsable());
+    gnetif.flags|=NETIF_FLAG_LINK_UP;now+=1;PtpBoardSync_Process(now);
+    assert(PtpBoardSync_LinkUsable()&&PtpBoardSync_TakeLinkRecovery()&&!PtpBoardSync_TakeLinkRecovery());
+    assert(PtpBoardSync_GetCompletedCount()==0U);
+    puts("PASS link: down/up transition is visible once and clears pending protocol state");
     puts("PASS transport integration through actual legacy PtpRx/PtpTx wrappers");return 0;
 }

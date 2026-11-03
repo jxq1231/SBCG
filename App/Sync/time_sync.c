@@ -37,12 +37,15 @@
 #define CONTROL_LOG_PERIOD_MS 1000U
 #define CONTROL_LINE_CAPACITY 256U
 #define RECOVERY_RETRY_MS 1000U
+#define OBSERVATION_STALL_MS 3000U
 
 static bool configured, faulted;
 static BoardRole board_role;
 static ClockServo servo;
 static uint32_t cached_epoch, cached_revision, last_log_ms, rejected_samples, errors;
 static uint32_t last_recovery_ms, recovery_attempts, recoveries;
+static uint32_t observation_count, observation_ms;
+static bool observation_seen, a_recovery_pending;
 static uint32_t (*read_tick)(void);
 static void (*emit_line)(const char *,int);
 /* 与App日志队列相同的固定上限，前台单一调用者，不保留外部字符串。 */
@@ -313,6 +316,39 @@ static void CheckClockGeneration(uint32_t now_ms)
 }
 
 /**
+ * @brief   链路恢复后重建A参考端的硬件时间戳与消费者状态。
+ * @param   now_ms 当前前台毫秒计数。
+ * @return  无返回值；成功清FAULT，失败保留FAULT并由调用方按退避重试。
+ * @note    A不运行伺服、不写时钟；只清发送快照并读取本地时间核验配置，随后撤销旧消费者，
+ *          避免链路恢复后继续使用断链前的结论。
+ */
+static void RecoverReference(uint32_t now_ms)
+{
+    BSP_PtpTime sample;
+    BSP_PtpStatus status=BSP_PTP_TxClean();
+    /* A使用粗更新时钟，ReadKnownFrequency只适用于B的fine模式；读取本地时间以确认配置仍有效。 */
+    if (status==BSP_PTP_OK) { status=BSP_PTP_Read(&sample); }
+#ifdef SBCG_USE_PPS
+    if (status==BSP_PTP_OK && !PpsService_Invalidate(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
+#endif
+    if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
+    if (status==BSP_PTP_OK)
+    {
+        cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
+        faulted=false; a_recovery_pending=false; Increment(&recoveries);
+    }
+    else
+    {
+        faulted=true; a_recovery_pending=true; last_recovery_ms=now_ms;
+    }
+    Emit(snprintf(line,sizeof line,
+        "$SYNC_RECOVERY,ROLE=A,STATUS=%u,ATTEMPTS=%" PRIu32 ",RECOVERIES=%" PRIu32
+        ",EPOCH=%" PRIu32 ",RATE_REV=%" PRIu32 ",SYNC=0\\r\n",
+        (unsigned)status,recovery_attempts,recoveries,BSP_PTP_GetEpoch(),
+        BSP_PTP_GetRateRevision()));
+}
+
+/**
  * @brief   每至少一秒报告一次内部状态、时差、漂移与实际频率记录。
  * @param   now_ms 当前HAL毫秒计数，使用无符号差节流并支持自然回绕。
  * @return  无返回值。
@@ -395,6 +431,8 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
     last_log_ms=now_ms; rejected_samples=errors=0U; faulted=false; configured=true;
     last_recovery_ms=now_ms; recovery_attempts=recoveries=0U;
+    observation_count=PtpBoardSync_GetCompletedCount(); observation_ms=now_ms; observation_seen=false;
+    a_recovery_pending=false;
     return true;
 }
 
@@ -413,7 +451,43 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
     CheckClockGeneration(now_ms);
     PtpBoardSync_Process(now_ms);
     now_ms=read_tick();
-    if (board_role==BOARD_ROLE_B) { ClockServo_Tick(&servo,now_ms); }
+    if (board_role==BOARD_ROLE_A)
+    {
+        if (!PtpBoardSync_LinkUsable())
+        {
+            /* A的参考资格依赖可用链路；断链后不再继续宣称REFERENCE。 */
+            a_recovery_pending=true; Fault(now_ms);
+        }
+        else
+        {
+            if (PtpBoardSync_TakeLinkRecovery())
+            {
+                /* 链路刚恢复，至少留一秒观察硬件状态；失败按退避重试。 */
+                a_recovery_pending=true; last_recovery_ms=now_ms;
+            }
+            if (a_recovery_pending && (uint32_t)(now_ms-last_recovery_ms)>=RECOVERY_RETRY_MS)
+            {
+                Increment(&recovery_attempts);
+                RecoverReference(now_ms);
+            }
+        }
+    }
+
+    if (board_role==BOARD_ROLE_B)
+    {
+        ClockServo_Tick(&servo,now_ms);
+        const uint32_t completed=PtpBoardSync_GetCompletedCount();
+        if (completed!=observation_count)
+        {
+            observation_count=completed; observation_ms=now_ms; observation_seen=true;
+        }
+        else if (observation_seen && !faulted && servo.state!=CLOCK_SERVO_FAULT &&
+                 (uint32_t)(now_ms-observation_ms)>=OBSERVATION_STALL_MS)
+        {
+            /* 四时刻完成数长时间不增长说明同步观测已停滞，走既有重获取流程。 */
+            Fault(now_ms);
+        }
+    }
     if (board_role==BOARD_ROLE_B && (faulted || servo.state==CLOCK_SERVO_FAULT))
     {
         if (!faulted) { Fault(now_ms); }
@@ -437,6 +511,7 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
                 {
                     cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
                     faulted=false; Increment(&recoveries);
+                    observation_count=PtpBoardSync_GetCompletedCount(); observation_ms=now_ms;
                 }
                 else { status=BSP_PTP_OUT_OF_RANGE; }
             }
