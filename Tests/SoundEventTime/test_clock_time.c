@@ -20,6 +20,7 @@ static bool stop_ok=true;
 bool PpsService_Init(uint32_t n,BoardRole r,void(*l)(const char*,int)){(void)n;(void)r;(void)l;return true;}
 bool PpsService_Deinit(void){return true;}
 bool PpsService_Invalidate(uint32_t n){(void)n;return stop_ok;}
+bool PpsService_RequalifyReference(uint32_t n){(void)n;return true;}
 void PpsService_Observe(uint32_t n,uint32_t m,bool l,bool v,int64_t o,int64_t d,int32_t f){(void)n;(void)m;(void)l;(void)v;(void)o;(void)d;(void)f;}
 bool PpsService_BeforeFrequency(uint32_t n,int32_t p,int32_t q){(void)n;(void)p;(void)q;return true;}
 void PpsService_AfterFrequency(uint32_t n,bool ok){(void)n;(void)ok;}
