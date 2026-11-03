@@ -18,6 +18,9 @@ extern "C" {
 #include "app_main.h"
 }
 
+/** @brief 组员信息；Verdana字体无中文字形，姓名使用拼音以保证可显示。 */
+static const char kGroupMembers[] = "23211181 JIN XUANQI / 22211151 LU JINPENG";
+
 /** @brief 清空尚未接收的CPU波形副本。@return 构造无返回值。 */
 WaveformWidget::WaveformWidget() : frame{}, haveFrame(false) {}
 
@@ -115,6 +118,15 @@ void Screen1View::configureNavigation()
     const auto muted = touchgfx::Color::getColorFromRGB(146, 164, 184);
     const auto white = touchgfx::Color::getColorFromRGB(232, 240, 248);
     const auto accent = touchgfx::Color::getColorFromRGB(45, 212, 191);
+    // 组员信息固定显示在顶部状态行下沿，不占用各页面板区域。
+    roleText.setPosition(110, 8, 180, 24);
+    groupLine.setPosition(110, 33, 358, 12);
+    groupLine.setTypedText(touchgfx::TypedText(T_T_DETAILTEXT));
+    groupLine.setWildcard(groupLineBuffer);
+    groupLine.setColor(muted);
+    groupLineBuffer[0] = 0;
+    UpdateText(groupLine, groupLineBuffer, kGroupMembers);
+    add(groupLine);
     measurePanel.setPosition(12, 46, 216, 104);
     syncPanel.setPosition(240, 46, 228, 104);
     waiting.setVisible(false);
