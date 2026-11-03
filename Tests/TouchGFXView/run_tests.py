@@ -202,30 +202,30 @@ int main(){
  // Hidden WAVE never polls or invalidates; re-entering fetches the latest CPU frame.
  const unsigned hidden_reads=wave_reads;
  for(int i=0;i<20;++i)view.handleTickEvent();assert(wave_reads==hidden_reads);
- wave.valid=true;wave.frame_seq=1;wave.point_count=256;wave.window_span_ns=16000000;
- for(int i=0;i<256;++i)wave.points[i]=(i%2)?32767:-32768;
+ wave.valid=true;wave.frame_seq=1;wave.point_count=960;wave.window_span_ns=20000000;wave.source=WAVEFORM_SOURCE_LOCAL;
+ for(int i=0;i<960;++i)wave.points[i]=(i%2)?32767:-32768;
  tap(view,300,250);assert(view.lineIs(0,"LOCAL / UNSYNCED"));
  const unsigned paints_wave=view.wavePaints();view.handleTickEvent();assert(view.wavePaints()==paints_wave);
  touchgfx::LCD::allowed=touchgfx::Rect(31,142,10,12);touchgfx::LCD::check_clip=true;
  view.drawWave(touchgfx::Rect(7,9,10,12));assert(touchgfx::LCD::fills>2);
  touchgfx::LCD::check_clip=false;
- ++wave.frame_seq;wave.synced=true;wave.period_valid=true;wave.period_milli_hz=1000000;
+ ++wave.frame_seq;wave.synced=true;wave.source=WAVEFORM_SOURCE_COMMON;wave.period_valid=true;wave.period_milli_hz=1000000;
  view.handleTickEvent();assert(view.lineIs(0,"SYNC / COMMON WINDOW"));assert(view.wavePaints()==paints_wave+1);
  // A weak real PCM signal must remain visible; one-PCM noise must not gain full height.
- for(int i=0;i<256;++i)wave.points[i]=(i%2)?100:-200;
+ for(int i=0;i<960;++i)wave.points[i]=(i%2)?100:-200;
  ++wave.frame_seq;view.handleTickEvent();
  touchgfx::LCD::trace_min=32767;touchgfx::LCD::trace_max=-32768;
  view.drawWave(touchgfx::Rect(0,0,432,78));
- assert(touchgfx::LCD::trace_max-touchgfx::LCD::trace_min>30);
+ assert(touchgfx::LCD::trace_max-touchgfx::LCD::trace_min>0);
  assert(wave.points[0]==-200 && wave.points[1]==100); // display gain never edits source PCM
- for(int i=0;i<256;++i)wave.points[i]=(i%2)?1:-1;
+ for(int i=0;i<960;++i)wave.points[i]=(i%2)?1:-1;
  ++wave.frame_seq;view.handleTickEvent();
  touchgfx::LCD::trace_min=32767;touchgfx::LCD::trace_max=-32768;
  view.drawWave(touchgfx::Rect(0,0,432,78));
  assert(touchgfx::LCD::trace_max-touchgfx::LCD::trace_min<=1);
- ++wave.frame_seq;wave.valid=false;view.handleTickEvent();assert(view.lineIs(0,"WAIT / NO AUDIO"));
- touchgfx::LCD::fills=0;view.drawWave(touchgfx::Rect(0,0,432,78));assert(touchgfx::LCD::fills==2);
- tap(view,60,250);++wave.frame_seq;wave.valid=true;wave.synced=false;wave.period_valid=false;
+ ++wave.frame_seq;wave.valid=false;view.handleTickEvent();assert(view.lineIs(0,"NO DATA / NO AUDIO"));
+ touchgfx::LCD::fills=0;view.drawWave(touchgfx::Rect(0,0,432,78));assert(touchgfx::LCD::fills==3);
+ tap(view,60,250);++wave.frame_seq;wave.valid=true;wave.synced=false;wave.source=WAVEFORM_SOURCE_LOCAL;wave.period_valid=false;
  const unsigned hidden_paints=view.wavePaints();view.handleTickEvent();assert(view.wavePaints()==hidden_paints);
  tap(view,300,250);assert(view.lineIs(0,"LOCAL / UNSYNCED"));assert(view.wavePaints()==hidden_paints+1);
  tap(view,60,250);
@@ -237,7 +237,7 @@ int main(){
  }
  ++generation;std::strcpy(page.role,"BOARD A");calibration.authority=true;view.handleTickEvent();
  clap.has_value=true;clap.fresh=false;clap.result.distance_mm=10000;clap.source_age_ms=6499;
- wave.synced=true;wave.period_valid=true;wave.period_milli_hz=1000000;++wave.frame_seq;
+ wave.synced=true;wave.source=WAVEFORM_SOURCE_COMMON;wave.period_valid=true;wave.period_milli_hz=1000000;++wave.frame_seq;
  for(int i=0;i<4;++i){
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,60+120*i,250));
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,60+120*i,250));

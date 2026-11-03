@@ -355,7 +355,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
 #ifdef SBCG_USE_ADVANCED_UI
     if((packet->tot_len==80U && HasMagic(packet,"CLP1")) ||
        (packet->tot_len==24U && HasMagic(packet,"CLA1")) ||
-       (packet->tot_len==44U && HasMagic(packet,"WVP1")))
+       (packet->tot_len==56U && HasMagic(packet,"WVP2")))
     {
         uint8_t data[80];const uint16_t length=packet->tot_len;
         const bool copied=pbuf_copy_partial(packet,data,length,0)==length;

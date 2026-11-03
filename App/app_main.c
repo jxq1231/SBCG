@@ -498,7 +498,7 @@ static void HandleAuxiliary(const uint8_t *data,uint16_t length)
     else if(memcmp(data,"CLA1",4)==0 && profile->role==BOARD_ROLE_A)
     { ClapAckMessage ack;if(ClapWire_DecodeAck(data,length,&ack))
         (void)ClapRanging_OnAck(&clap_ranging,&ack); }
-    else if(memcmp(data,"WVP1",4)==0 && profile->role==BOARD_ROLE_B)
+    else if(memcmp(data,"WVP2",4)==0 && profile->role==BOARD_ROLE_B)
     { WaveformPlan plan;if(WaveformPlanWire_Decode(data,length,&plan))
         (void)WaveformService_OnPlan(&plan,now); }
 }
@@ -1511,6 +1511,17 @@ void App_Process(void)
             audio_profile.chirp_process_ms, audio_profile.io_ms, audio_profile.log_ms,
             audio_profile.other_ms);
         if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+#ifdef SBCG_USE_ADVANCED_UI
+        WaveformSnapshot wave_ui;
+        WaveformService_GetSnapshot(&wave_ui);
+        length = snprintf(line, sizeof(line),
+            "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%" PRIu64
+            ",SEQ=%" PRIu32 ",STATE=%u\r\n",
+            wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
+            wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
+            wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state);
+        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+#endif
     }
 #endif
 #endif

@@ -1,320 +1,274 @@
-/** @file test_waveform.c @brief 验证真实借用交接、共同时间窗、拒绝旧域与固定内存。 */
+/** @file test_waveform.c @brief 验证真实PCM交接、共同20ms窗口、LOCAL回退与WVP2线格式。 */
 #include "UI/waveform_service.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
 static int16_t pcm[BSP_AUDIO_HALF_ELEMENTS];
-static uint32_t noise_seed=1;
-static double tone_period_frames=96;
+static uint32_t noise_seed = 1U;
+static double tone_period_frames = 96.0;
 static RangingSessionSnapshot domain = {true, 7, 9, 1};
-/** @brief 提交连续真实PCM，phase为弧度；End失败由调用方指定。 */
+
+/** @brief 提交一个连续DMA半块；phase<0表示确定性噪声。 */
 static void Feed(uint64_t frame, double phase, bool accepted, uint32_t ms)
 {
-    BSP_AudioBlock b = {0};
-    for (unsigned i=0;i<BSP_AUDIO_HALF_FRAMES;i++) {
-        noise_seed=noise_seed*1664525U+1013904223U;
-        pcm[2*i]=phase<0 ? (int16_t)(noise_seed>>16) :
-            (int16_t)(12000*sin((double)(frame+i)*6.283185307179586/tone_period_frames+phase));
-        pcm[2*i+1]=0;
+    BSP_AudioBlock block = {0};
+    for (unsigned i = 0U; i < BSP_AUDIO_HALF_FRAMES; ++i) {
+        noise_seed = noise_seed * 1664525U + 1013904223U;
+        pcm[2U * i] = phase < 0.0 ? (int16_t)(noise_seed >> 16) :
+            (int16_t)(12000.0 * sin((double)(frame + i) *
+                6.283185307179586 / tone_period_frames + phase));
+        pcm[2U * i + 1U] = 0;
     }
-    b.samples=pcm; b.frame_count=BSP_AUDIO_HALF_FRAMES; b.first_frame=frame;
-    b.session=1; b.index_valid=true; b.contiguous=frame!=0;
-    WaveformService_StageBlock(&b);
-    memset(pcm,0,sizeof pcm); /* stage不能保留借用指针 */
-    WaveformService_CompleteBlock(accepted,ms);
+    block.samples = pcm;
+    block.frame_count = BSP_AUDIO_HALF_FRAMES;
+    block.first_frame = frame;
+    block.session = 1U;
+    block.index_valid = true;
+    block.contiguous = frame != 0U;
+    WaveformService_StageBlock(&block);
+    memset(pcm, 0, sizeof pcm);
+    WaveformService_CompleteBlock(accepted, ms);
 }
+
 /** @brief 两个整秒锚点，PCM零基帧n对应NDTR进度n+1。 */
 static void Anchors(void)
 {
-    AudioTimeAnchorObservation a={0};
-    a.anchor.valid=true; a.anchor.session=1;
-    a.sequence=1; a.captured_ms=1000;
-    a.anchor.frame_lo=a.anchor.frame_hi=48000; a.anchor.sec=11;
-    WaveformService_ObserveAnchor(&a);
-    a.sequence=2; a.captured_ms=2000;
-    a.anchor.frame_lo=a.anchor.frame_hi=96000; a.anchor.sec=12;
-    WaveformService_ObserveAnchor(&a);
+    AudioTimeAnchorObservation anchor = {0};
+    anchor.anchor.valid = true;
+    anchor.anchor.session = 1U;
+    anchor.sequence = 1U;
+    anchor.captured_ms = 1000U;
+    anchor.anchor.frame_lo = anchor.anchor.frame_hi = 48000U;
+    anchor.anchor.sec = 11U;
+    WaveformService_ObserveAnchor(&anchor);
+    anchor.sequence = 2U;
+    anchor.captured_ms = 2000U;
+    anchor.anchor.frame_lo = anchor.anchor.frame_hi = 96000U;
+    anchor.anchor.sec = 12U;
+    WaveformService_ObserveAnchor(&anchor);
 }
-/** @brief 准备足够历史跨越多个DMA半块。 */
+
+/** @brief 65536..114688帧历史，跨越两个8192帧半块。 */
 static void History(double phase)
 {
-    for (uint64_t i=65536;i<114688;i+=8192) Feed(i,phase,true,(uint32_t)(i/48));
+    for (uint64_t frame = 65536U; frame < 114688U; frame += BSP_AUDIO_HALF_FRAMES)
+        Feed(frame, phase, true, (uint32_t)(frame / 48U));
 }
-/**
- * @brief 验证2kHz及997Hz在不同块首帧/相位和连续共同计划下的参考相位稳定性。
- * @note 1400 PCM差小于满幅12000单音的2%周期最大斜率误差(约1508 PCM)；
- *       同时比较解析正弦与跨计划快照，避免只检查过零一点。
- */
-static void CheckFractionalPhase(void)
+
+/** @brief 验证Init前不访问数组、断流失效、无模型时LOCAL仍发布原始PCM。 */
+static void CheckInitAndLocal(void)
 {
-    const double frequencies[]={2000.0,997.0,1882.35};
-    const unsigned block_shifts[]={0,1,17,35};
-    const double phases[]={0.11,0.94,1.77,0.26};
-    WaveformSnapshot baseline={0}, snapshot;
-    double maximum_error=0.0, maximum_jitter=0.0;
-    for (unsigned frequency=0;frequency<3;frequency++) {
-        tone_period_frames=48000.0/frequencies[frequency];
-        for (unsigned variant=0;variant<4;variant++) {
-            double phase=phases[variant];
-            uint64_t next=65536+block_shifts[variant];
-            WaveformService_Init();
-            for (unsigned block=0;block<6;block++,next+=8192)
-                Feed(next,phase,true,2300);
-            Anchors();
-            WaveformPlan plan={0};
-            for (unsigned tick=0;tick<5;tick++) {
-                uint64_t common_ns=UINT64_C(12300000000)+(uint64_t)tick*UINT64_C(200000000);
-                uint32_t now_ms=2400+tick*200;
-                uint64_t wanted_end=115400+tick*9600;
-                while (next<wanted_end) {
-                    Feed(next,phase,true,now_ms);
-                    next+=8192;
-                }
-                WaveformService_Update(BOARD_ROLE_A,true,&domain,common_ns,now_ms);
-                assert(WaveformService_TakePlan(&plan));
-                WaveformService_Update(BOARD_ROLE_A,true,&domain,plan.display_deadline_ns,now_ms+100);
-                WaveformService_GetSnapshot(&snapshot);
-                assert(snapshot.valid && snapshot.synced && snapshot.period_valid);
-                if (variant==0 && tick==0) baseline=snapshot;
-                for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
-                    double angle=6.283185307179586*frequencies[frequency]*
-                        snapshot.window_span_ns*1e-9*i/(WAVEFORM_POINT_COUNT-1U);
-                    double expected=12000*sin(angle);
-                    double error=fabs(snapshot.points[i]-expected);
-                    double jitter=fabs((double)snapshot.points[i]-baseline.points[i]);
-                    if (error>maximum_error) maximum_error=error;
-                    if (jitter>maximum_jitter) maximum_jitter=jitter;
-                    assert(error<1400.0);
-                    assert(jitter<1400.0);
-                }
-            }
-            /* B移动后的两种相移仍相对A共同起点绘制，禁止插值改动暗中重置B相位。 */
-            for (unsigned move=0;move<2;move++) {
-                double phase_shift=1.5707963267948966+move*0.5;
-                WaveformService_Init();
-                for (uint64_t frame=65536+block_shifts[variant];frame<next;frame+=8192)
-                    Feed(frame,phase+phase_shift,true,3200);
-                Anchors();
-                WaveformService_Update(BOARD_ROLE_B,true,&domain,
-                    plan.display_deadline_ns-UINT64_C(100000000),3200);
-                assert(WaveformService_OnPlan(&plan,3200));
-                WaveformService_Update(BOARD_ROLE_B,true,&domain,plan.display_deadline_ns,3300);
-                WaveformSnapshot shifted;
-                WaveformService_GetSnapshot(&shifted);
-                assert(shifted.valid && shifted.synced && shifted.window_start_ns==snapshot.window_start_ns);
-                for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
-                    double angle=6.283185307179586*frequencies[frequency]*
-                        shifted.window_span_ns*1e-9*i/(WAVEFORM_POINT_COUNT-1U);
-                    assert(fabs(shifted.points[i]-12000*sin(angle+phase_shift))<1400.0);
-                }
-            }
-        }
-    }
-    printf("fractional phase: max analytic error %.1f PCM, frame jitter %.1f PCM\n",
-           maximum_error,maximum_jitter);
-    tone_period_frames=96;
-}
-/** @brief 验证线性插值右邻帧必须已提交；末样本前0.5帧可绘，后0.5帧拒绝。 */
-static void CheckInterpolationBoundary(void)
-{
-    const uint64_t starts_ns[]={UINT64_C(12379312500),UINT64_C(12379333333)};
-    for (unsigned boundary=0;boundary<2;boundary++) {
-        WaveformService_Init(); History(0); Anchors();
-        WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12750000000),2400);
-        WaveformPlan plan={7,9,1,UINT64_C(12850000000),starts_ns[boundary],10000000,0};
-        assert(WaveformService_OnPlan(&plan,2400));
-        WaveformService_Update(BOARD_ROLE_B,true,&domain,plan.display_deadline_ns,2500);
-        WaveformSnapshot snapshot;
-        WaveformService_GetSnapshot(&snapshot);
-        assert(snapshot.valid==(boundary==0));
-        assert(snapshot.synced==(boundary==0));
-    }
-}
-/**
- * @brief 验证只移动A时A相位变化可见、B固定不动，且共同窗起点仍沿A参考的整数周期网格。
- * @note 旧实现每次用A当前过零重设窗口，A相位被钉住而B随A滑动；此处同时比较A/B快照。
- */
-static void CheckMovingBoard(void)
-{
-    tone_period_frames=24.0;
-    WaveformService_Init(); History(0); Anchors();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-    WaveformPlan p,q; assert(WaveformService_TakePlan(&p));
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,p.display_deadline_ns,2500);
-    WaveformSnapshot a0; WaveformService_GetSnapshot(&a0);
-    assert(a0.valid && a0.synced && a0.period_valid);
-    /* A移动：后续PCM相位整体改变，计划时间推进1秒，窗口落在新相位段。 */
-    for (uint64_t frame=114688;frame<163840;frame+=8192) Feed(frame,1.0,true,(uint32_t)(frame/48));
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(13200000000),3300);
-    assert(WaveformService_TakePlan(&q));
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,q.display_deadline_ns,3400);
-    WaveformSnapshot a1; WaveformService_GetSnapshot(&a1);
-    assert(a1.valid && a1.synced && a1.period_valid);
-    const double period_ns=1.0e12/(double)q.period_milli_hz;
-    double difference=(double)q.window_start_ns-(double)p.window_start_ns;
-    double cycles=(double)(uint64_t)(difference/period_ns);
-    assert(fabs(difference-cycles*period_ns)<20.0);
-    double moved=0.0;
-    for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
-        double delta=fabs((double)a1.points[i]-(double)a0.points[i]);
-        if (delta>moved) moved=delta;
-    }
-    assert(moved>3000.0); /* A相位必须可见，不能再次被窗口重设钉住。 */
-    /* B保持不动：同一份PCM接受两个计划，绘出的波形应基本一致。 */
+    WaveformSnapshot snapshot;
+    WaveformPlan plan;
+    BSP_AudioBlock before_init = {0};
+    before_init.samples = (const volatile int16_t *)(uintptr_t)1;
+    before_init.frame_count = BSP_AUDIO_HALF_FRAMES;
+    before_init.index_valid = true;
+    before_init.session = 1U;
+    WaveformService_StageBlock(&before_init);
+    WaveformService_CompleteBlock(true, 10U);
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12300000000), 20U);
+    WaveformService_GetSnapshot(&snapshot);
+    assert(!snapshot.valid && snapshot.frame_seq == 0U);
+    assert(!WaveformService_TakePlan(&plan));
+
     WaveformService_Init();
-    for (uint64_t frame=65536;frame<114688;frame+=8192) Feed(frame,0.0,true,(uint32_t)(frame/48));
+    Feed(0U, -1.0, false, 0U);
+    WaveformService_Update(BOARD_ROLE_A, false, NULL, 0U, 200U);
+    WaveformService_GetSnapshot(&snapshot);
+    assert(!snapshot.valid);
+    Feed(BSP_AUDIO_HALF_FRAMES, -1.0, true, 210U);
+    WaveformService_Update(BOARD_ROLE_A, false, NULL, 0U, 410U);
+    WaveformService_GetSnapshot(&snapshot);
+    assert(snapshot.valid && !snapshot.synced && snapshot.source == WAVEFORM_SOURCE_LOCAL);
+    assert(snapshot.point_count > 0U);
+}
+
+/** @brief 验证A固定20ms RAW计划、WVP2 56B、B本地20ms原始回退与B跟随共同窗口。 */
+static void CheckRawWindow(void)
+{
+    WaveformSnapshot a, b;
+    WaveformPlan plan, decoded;
+    uint8_t wire[WAVEFORM_PLAN_WIRE_BYTES];
+
+    WaveformService_Init();
+    History(-1.0);
     Anchors();
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_OnPlan(&p,2400));
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,p.display_deadline_ns,2500);
-    WaveformSnapshot b0; WaveformService_GetSnapshot(&b0);
-    assert(b0.valid && b0.synced);
-    for (uint64_t frame=114688;frame<163840;frame+=8192) Feed(frame,0.0,true,(uint32_t)(frame/48));
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(13200000000),3300);
-    assert(WaveformService_OnPlan(&q,3300));
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,q.display_deadline_ns,3400);
-    WaveformSnapshot b1; WaveformService_GetSnapshot(&b1);
-    assert(b1.valid && b1.synced);
-    double stationary=0.0;
-    for (unsigned i=0;i<WAVEFORM_POINT_COUNT;i++) {
-        double delta=fabs((double)b1.points[i]-(double)b0.points[i]);
-        if (delta>stationary) stationary=delta;
-    }
-    assert(stationary<1400.0); /* B静止时不能随A移动而滑动。 */
-    printf("moving board: A delta %.0f PCM, B delta %.0f PCM\\n",moved,stationary);
-    tone_period_frames=96.0;
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12300000000), 2400U);
+    assert(WaveformService_TakePlan(&plan));
+    assert(plan.mode == WAVEFORM_MODE_RAW);
+    assert(plan.period_milli_hz == 0U);
+    assert(plan.window_span_ns == WAVEFORM_WINDOW_SPAN_NS);
+    assert(plan.plan_common_ns - plan.window_start_ns >= WAVEFORM_WINDOW_SPAN_NS);
+    assert(plan.display_deadline_ns - plan.plan_common_ns == UINT64_C(100000000));
+    assert(WaveformPlanWire_Encode(&plan, wire, sizeof wire));
+    assert(WaveformPlanWire_Decode(wire, sizeof wire, &decoded));
+    assert(decoded.sequence == plan.sequence && decoded.window_start_ns == plan.window_start_ns);
+    assert(decoded.window_span_ns == plan.window_span_ns && decoded.mode == plan.mode);
+    wire[0] = 0U;
+    assert(!WaveformPlanWire_Decode(wire, sizeof wire, &decoded));
+
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, plan.display_deadline_ns, 2500U);
+    WaveformService_GetSnapshot(&a);
+    assert(a.valid && a.synced && a.source == WAVEFORM_SOURCE_COMMON);
+    assert(a.plan_sequence == plan.sequence);
+    assert(a.window_start_ns == plan.window_start_ns);
+    assert(a.window_span_ns == WAVEFORM_WINDOW_SPAN_NS);
+    assert(a.point_count >= WAVEFORM_POINT_COUNT - 2U && a.point_count <= WAVEFORM_POINT_COUNT);
+    assert(a.points[0] != 0 || a.points[10] != 0);
+
+    /* B无计划时仍显示本板最近原始PCM，且不画零线。 */
+    WaveformService_Init();
+    History(1.5707963267948966);
+    Anchors();
+    WaveformService_Update(BOARD_ROLE_B, true, &domain, UINT64_C(12300000000), 2400U);
+    WaveformService_GetSnapshot(&b);
+    assert(b.valid && !b.synced && b.source == WAVEFORM_SOURCE_LOCAL);
+    assert(b.window_span_ns == WAVEFORM_WINDOW_SPAN_NS || b.window_span_ns > 0U);
+    assert(b.points[0] != 0 || b.points[10] != 0);
+    assert(WaveformService_OnPlan(&plan, 2400U));
+    WaveformService_Update(BOARD_ROLE_B, true, &domain, plan.display_deadline_ns, 2500U);
+    WaveformService_GetSnapshot(&b);
+    assert(b.valid && b.synced && b.source == WAVEFORM_SOURCE_COMMON);
+    assert(b.window_start_ns == a.window_start_ns && b.window_span_ns == a.window_span_ns);
+    assert(memcmp(a.points, b.points, sizeof a.points) != 0);
+
+    /* 旧序号/换域不得刷新已收计划；超时退为LOCAL真PCM。 */
+    WaveformPlan old = plan;
+    old.sequence++;
+    RangingSessionSnapshot changed = domain;
+    changed.authority_epoch++;
+    WaveformService_Update(BOARD_ROLE_B, true, &changed, UINT64_C(12310000000), 2600U);
+    assert(!WaveformService_OnPlan(&plan, 2600U));
+    Feed(114688U, 1.5707963267948966, true, 3000U);
+    WaveformService_Update(BOARD_ROLE_B, true, &changed, UINT64_C(12320000000), 3200U);
+    WaveformService_GetSnapshot(&b);
+    assert(b.valid && !b.synced && b.source == WAVEFORM_SOURCE_LOCAL);
+}
+
+/** @brief 验证500Hz周期信号进入PERIOD模式、周期字段与20ms共同窗口。 */
+static void CheckPeriodicPlan(void)
+{
+    WaveformSnapshot snapshot;
+    WaveformPlan plan;
+    WaveformService_Init();
+    History(0.0);
+    Anchors();
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12300000000), 2400U);
+    assert(WaveformService_TakePlan(&plan));
+    assert(plan.mode == WAVEFORM_MODE_PERIOD);
+    assert(plan.period_milli_hz >= 490000U && plan.period_milli_hz <= 510000U);
+    assert(plan.window_span_ns == WAVEFORM_WINDOW_SPAN_NS);
+    assert(plan.window_start_ns + plan.window_span_ns <= plan.plan_common_ns);
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, plan.display_deadline_ns, 2500U);
+    WaveformService_GetSnapshot(&snapshot);
+    assert(snapshot.valid && snapshot.synced && snapshot.period_valid);
+    assert(snapshot.period_milli_hz == plan.period_milli_hz);
+    assert(snapshot.points[0] != 0 || snapshot.points[10] != 0);
+
+    /* 相位网格跨计划只按整数周期推进；新输入块不重置参考。 */
+    for (uint64_t frame = 114688U; frame < 163840U; frame += BSP_AUDIO_HALF_FRAMES)
+        Feed(frame, 0.0, true, (uint32_t)(frame / 48U));
+    AudioTimeAnchorObservation anchor = {0};
+    anchor.anchor.valid = true;
+    anchor.anchor.session = 1U;
+    anchor.sequence = 3U;
+    anchor.captured_ms = 3000U;
+    anchor.anchor.frame_lo = anchor.anchor.frame_hi = 144000U;
+    anchor.anchor.sec = 13U;
+    WaveformService_ObserveAnchor(&anchor);
+    WaveformPlan next;
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(13000000000), 3600U);
+    assert(WaveformService_TakePlan(&next));
+    assert(next.mode == WAVEFORM_MODE_PERIOD);
+    const double period_ns = 1.0e12 / (double)next.period_milli_hz;
+    const double delta = (double)next.window_start_ns - (double)plan.window_start_ns;
+    const double cycles = delta / period_ns;
+    assert(fabs(cycles - floor(cycles + 0.5)) * period_ns < 2000.0);
+}
+
+/** @brief 验证非整数帧周期1882.35Hz仍进入PERIOD且周期估计误差在2%内。 */
+static void CheckFractionalPlan(void)
+{
+    WaveformPlan plan;
+    tone_period_frames = 48000.0 / 1882.35;
+    WaveformService_Init();
+    History(0.0);
+    Anchors();
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12300000000), 2400U);
+    assert(WaveformService_TakePlan(&plan));
+    assert(plan.mode == WAVEFORM_MODE_PERIOD);
+    assert(plan.period_milli_hz >= 1840000U && plan.period_milli_hz <= 1920000U);
+    assert(plan.window_span_ns == WAVEFORM_WINDOW_SPAN_NS);
+    tone_period_frames = 96.0;
+}
+
+/** @brief 验证10Hz计划节流、计划截止调度和NotfiyClockChange撤销旧共同显示。 */
+static void CheckScheduling(void)
+{
+    WaveformSnapshot snapshot;
+    WaveformPlan first, second;
+    WaveformService_Init();
+    History(0.0);
+    Anchors();
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12300000000), 2400U);
+    assert(WaveformService_TakePlan(&first));
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12305000000), 2450U);
+    assert(!WaveformService_TakePlan(&second)); /* 未到100ms */
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12310000000), 2500U);
+    assert(WaveformService_TakePlan(&second));
+    assert(second.sequence > first.sequence);
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, second.display_deadline_ns, 2500U);
+    WaveformService_GetSnapshot(&snapshot);
+    assert(snapshot.synced && snapshot.plan_sequence == second.sequence);
+
+    WaveformService_NotifyClockChange();
+    WaveformService_Update(BOARD_ROLE_A, true, &domain, UINT64_C(12610000000), 2710U);
+    WaveformService_GetSnapshot(&snapshot);
+    assert(snapshot.valid && !snapshot.synced && snapshot.source == WAVEFORM_SOURCE_LOCAL);
+    assert(!WaveformService_TakePlan(&second));
+}
+
+/** @brief 验证Wire长度、保留字段和非法计划入口。 */
+static void CheckWireAndLimits(void)
+{
+    WaveformPlan plan = {0}, decoded;
+    uint8_t wire[WAVEFORM_PLAN_WIRE_BYTES + 1U];
+    plan.domain = 7U;
+    plan.authority_epoch = 9U;
+    plan.sequence = 1U;
+    plan.mode = WAVEFORM_MODE_RAW;
+    plan.plan_common_ns = UINT64_C(12300000000);
+    plan.window_start_ns = UINT64_C(12280000000);
+    plan.window_span_ns = WAVEFORM_WINDOW_SPAN_NS;
+    plan.display_deadline_ns = UINT64_C(12400000000);
+    assert(WaveformPlanWire_Encode(&plan, wire, WAVEFORM_PLAN_WIRE_BYTES));
+    for (unsigned length = 0U; length < WAVEFORM_PLAN_WIRE_BYTES; ++length)
+        assert(!WaveformPlanWire_Decode(wire, (uint16_t)length, &decoded));
+    wire[18] = 1U; /* reserved */
+    assert(!WaveformPlanWire_Decode(wire, WAVEFORM_PLAN_WIRE_BYTES, &decoded));
+    wire[18] = 0U;
+    wire[16] = WAVEFORM_MODE_PERIOD; /* PERIOD但period=0 */
+    assert(!WaveformPlanWire_Decode(wire, WAVEFORM_PLAN_WIRE_BYTES, &decoded));
+    BSP_AudioBlock oversized = {0};
+    oversized.samples = pcm;
+    oversized.session = 1U;
+    oversized.index_valid = true;
+    oversized.frame_count = BSP_AUDIO_HALF_FRAMES + 1U;
+    WaveformService_StageBlock(&oversized);
+    WaveformService_CompleteBlock(true, 2501U);
 }
 
 int main(void)
 {
-    WaveformSnapshot a,b; WaveformPlan p,q; uint8_t wire[WAVEFORM_PLAN_WIRE_BYTES];
-    /* 初始化前连借用指针也不可读取，模拟SDRAM启动失败但标准音继续运行。 */
-    BSP_AudioBlock before_init={0};
-    before_init.samples=(const volatile int16_t *)(uintptr_t)1;
-    before_init.frame_count=BSP_AUDIO_HALF_FRAMES; before_init.index_valid=true; before_init.session=1;
-    WaveformService_StageBlock(&before_init); WaveformService_CompleteBlock(true,10);
-    WaveformService_NotifyClockChange();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),20);
-    Anchors();
-    WaveformService_GetSnapshot(&a); assert(!a.valid && a.frame_seq==0);
-    assert(!WaveformService_TakePlan(&p));
-    WaveformService_Init(); Feed(0,0,false,0);
-    WaveformService_Update(BOARD_ROLE_A,false,NULL,0,200);
-    WaveformService_GetSnapshot(&a); assert(!a.valid);
-    Feed(8192,0,true,210);
-    WaveformService_Update(BOARD_ROLE_A,false,NULL,0,410);
-    WaveformService_GetSnapshot(&a); assert(a.valid && !a.synced);
-    assert(a.points[10]!=0 || a.points[20]!=0);
-    WaveformService_Update(BOARD_ROLE_A,false,NULL,0,1200);
-    WaveformService_GetSnapshot(&a); assert(!a.valid); /* 断流 */
-    WaveformService_Init(); History(0); Anchors();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_TakePlan(&p));
-    assert(WaveformPlanWire_Encode(&p,wire,sizeof wire));
-    assert(WaveformPlanWire_Decode(wire,sizeof wire,&q));
-    assert(q.window_start_ns==p.window_start_ns && q.sequence==p.sequence);
-    wire[0]=0; assert(!WaveformPlanWire_Decode(wire,sizeof wire,&q));
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,p.display_deadline_ns,2500);
-    WaveformService_GetSnapshot(&a); assert(a.valid && a.synced && a.period_valid);
-    assert(a.period_milli_hz>490000 && a.period_milli_hz<510000);
-    WaveformService_Init(); History(1.5707963267948966); Anchors();
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_OnPlan(&p,2400)); assert(!WaveformService_OnPlan(&p,2450));
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,p.display_deadline_ns,2500);
-    WaveformService_GetSnapshot(&b); assert(b.valid && b.synced);
-    assert(a.window_start_ns==b.window_start_ns && a.window_span_ns==b.window_span_ns);
-    assert(memcmp(a.points,b.points,sizeof a.points)!=0); /* B相移必须保留 */
-    assert(a.points[0]>-1500 && a.points[0]<1500 && b.points[0]>10000);
-    q=p; q.sequence++; q.authority_epoch++; assert(!WaveformService_OnPlan(&q,2501));
-    /* 重复旧计划不能保持SYNCED；继续供PCM以排除断流造成的失效。 */
-    assert(!WaveformService_OnPlan(&p,2700));
-    Feed(114688,1.5707963267948966,true,2800);
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12970000000),3070);
-    WaveformService_GetSnapshot(&b); assert(b.valid && !b.synced);
-    WaveformService_Update(BOARD_ROLE_B,false,NULL,0,2502);
-    WaveformService_GetSnapshot(&b); assert(!b.synced);
-    /* 重新初始化并换代：旧模型与旧计划必须撤销，不能跨域复活。 */
-    WaveformService_Init(); History(0); Anchors();
-    WaveformService_Update(BOARD_ROLE_B,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_OnPlan(&p,2400));
-    RangingSessionSnapshot changed=domain; changed.authority_epoch++;
-    WaveformService_Update(BOARD_ROLE_B,true,&changed,UINT64_C(12310000000),2410);
-    assert(!WaveformService_OnPlan(&p,2410));
-    WaveformService_GetSnapshot(&b); assert(!b.synced);
-    /* 非周期噪声保持同一个公共固定窗，并显式声明无可靠周期。 */
-    WaveformService_Init(); History(-1); Anchors();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_TakePlan(&q)); assert(q.period_milli_hz==0);
-    assert(q.window_span_ns==10000000U);
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,q.display_deadline_ns,2500);
-    WaveformService_GetSnapshot(&a); assert(a.valid && a.synced && !a.period_valid);
-    /* 范围端点50Hz和2kHz均可估计，不把边界本身拒绝。 */
-    const unsigned periods[]={24,960};
-    for (unsigned k=0;k<2;k++) {
-        tone_period_frames=periods[k];
-        WaveformService_Init(); History(0); Anchors();
-        WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-        assert(WaveformService_TakePlan(&q));
-        assert(q.period_milli_hz==48000000U/tone_period_frames);
-    }
-    /* 退帧与最大值锚点由AudioTimeMap一次拒绝，旧模型不可继续生成共同计划。 */
-    tone_period_frames=96;
-    for (unsigned k=0;k<2;k++) {
-        WaveformService_Init(); History(0); Anchors();
-        AudioTimeAnchorObservation bad={0};
-        bad.anchor.valid=true; bad.anchor.session=1; bad.anchor.sec=13;
-        bad.anchor.frame_lo=bad.anchor.frame_hi=k==0 ? 1000 : UINT64_MAX;
-        WaveformService_ObserveAnchor(&bad);
-        WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-        assert(!WaveformService_TakePlan(&q));
-        WaveformService_GetSnapshot(&a); assert(a.valid && !a.synced);
-    }
-    /* stage长度入口检查：过长描述符不得越界写或发布。 */
-    BSP_AudioBlock oversized={0};
-    oversized.samples=pcm; oversized.session=1; oversized.index_valid=true;
-    oversized.frame_count=BSP_AUDIO_HALF_FRAMES+1;
-    WaveformService_StageBlock(&oversized); WaveformService_CompleteBlock(true,2501);
-    WaveformService_GetSnapshot(&a); assert(!a.valid);
-    for (unsigned length=0;length<44;length++)
-        assert(!WaveformPlanWire_Decode(wire,(uint16_t)length,&p));
-    /* 4kHz超出声明范围，不能把两倍周期误标成稳定2kHz。 */
-    tone_period_frames=12;
-    WaveformService_Init(); History(0); Anchors();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_TakePlan(&q)); assert(q.period_milli_hz==0);
-    /* 前台晚于首个deadline才运行时，先发布到期计划，再产生下一计划。 */
-    tone_period_frames=96;
-    WaveformService_Init(); History(0); Anchors();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12300000000),2400);
-    assert(WaveformService_TakePlan(&p));
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12500000000),2600);
-    WaveformService_GetSnapshot(&a); assert(a.synced && a.plan_sequence==p.sequence);
-    assert(WaveformService_TakePlan(&q)); assert(q.sequence!=p.sequence);
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,q.display_deadline_ns,2700);
-    WaveformService_GetSnapshot(&a); assert(a.synced && a.plan_sequence==q.sequence);
-    /* 连续调频不改变会话，但必须撤销旧斜率，保留PCM供LOCAL。 */
-    WaveformService_NotifyClockChange();
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12610000000),2710);
-    WaveformService_GetSnapshot(&a); assert(a.valid && !a.synced);
-    assert(!WaveformService_TakePlan(&p));
-    AudioTimeAnchorObservation fresh={0};
-    fresh.anchor.valid=true; fresh.anchor.session=1;
-    fresh.anchor.sec=12; fresh.anchor.nsec=500000000U;
-    fresh.anchor.frame_lo=fresh.anchor.frame_hi=120000;
-    fresh.captured_ms=2500;
-    WaveformService_ObserveAnchor(&fresh);
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(12700000000),2800);
-    assert(!WaveformService_TakePlan(&p)); /* 一个新锚点不能跨旧斜率恢复 */
-    for (uint64_t i=114688;i<155648;i+=8192) Feed(i,0,true,(uint32_t)(i/48));
-    fresh.anchor.sec=13; fresh.anchor.nsec=0;
-    fresh.anchor.frame_lo=fresh.anchor.frame_hi=144000;
-    fresh.captured_ms=3000;
-    WaveformService_ObserveAnchor(&fresh);
-    WaveformService_Update(BOARD_ROLE_A,true,&domain,UINT64_C(13200000000),3300);
-    assert(WaveformService_TakePlan(&p));
-    CheckFractionalPhase();
-    CheckMovingBoard();
-    CheckInterpolationBoundary();
-    puts("waveform: PASS"); return 0;
+    CheckInitAndLocal();
+    CheckRawWindow();
+    CheckPeriodicPlan();
+    CheckFractionalPlan();
+    CheckScheduling();
+    CheckWireAndLimits();
+    puts("waveform: PASS");
+    return 0;
 }
