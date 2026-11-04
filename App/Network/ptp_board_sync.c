@@ -18,6 +18,7 @@
 #define GUARD_MS 6000U
 #define PERIOD_MS 250U
 #define TTL_MS 1000U
+#define CANDIDATE_TTL_MS 200U /* 小于250ms同步周期：丢FollowUp后由下一帧Sync替换 */
 #define RETRY_MS 1000U
 #define NS_PER_SEC UINT64_C(1000000000)
 typedef enum { IDLE, WAIT_FU, SEND_REQ, WAIT_TX, WAIT_RESP } BState;
@@ -65,6 +66,27 @@ static uint64_t Ns(BSP_PtpTime t) { return (uint64_t)t.seconds*NS_PER_SEC+t.nano
 static bool Valid(BSP_PtpTime t) { return t.nanoseconds<1000000000U; }
 /** @brief 检查序号是否在16位向前半空间。 @param n 新序号。 @param old 已收水位。 @return 严格较新为true。 */
 static bool Newer(uint16_t n,uint16_t old) { uint16_t d=(uint16_t)(n-old);return d!=0U&&d<32768U; }
+/**
+ * @brief 输出一条PTP收发/候选事件，用于关联A发送与B等待Follow_Up的时序。
+ * @param event 固定短事件名，不能为NULL。
+ * @param seq 当前消息/SYNC序号。
+ * @param cand_seq B候选SYNC序号；A不使用填0。
+ * @param rx_valid B事件消息是否取得RX硬件戳。
+ * @param now 读取的本机毫秒。
+ * @param extra A的FollowUp相对Sync延迟毫秒，或候选年龄；无额外值填0。
+ * @return 无返回值。
+ * @note 只读诊断输出，不改变状态机；正常每250ms一对，串口开销小于1KB/s。
+ */
+static void TraceEvent(const char *event,uint16_t seq,uint16_t cand_seq,bool rx_valid,uint32_t now,uint32_t extra)
+{
+    if(emit==NULL||event==NULL) { return; }
+    char line[192];
+    int n=snprintf(line,sizeof(line),
+        "$PTP_EVENT,ROLE=%c,EV=%s,NOW_MS=%" PRIu32 ",SEQ=%u,CAND_SEQ=%u,STATE=%u,RX=%u,EXTRA=%" PRIu32 "\r\n",
+        board.role==BOARD_ROLE_A?'A':'B',event,now,(unsigned)seq,(unsigned)cand_seq,
+        (unsigned)candidate.state,rx_valid?1U:0U,extra);
+    if(n>0&&(size_t)n<sizeof(line)) { emit(line,n); }
+}
 /** @brief 判断启动/重新获取静默是否结束。 @param now 当前毫秒。 @return 允许交换为true。 */
 static bool GuardDone(uint32_t now) { return (uint32_t)(now-guard_start_ms)>=GUARD_MS; }
 /** @brief 清除跨时钟修订不可用的CPU状态。 @return 无返回值。 @note 不复位任何序号水位。 */
@@ -76,7 +98,11 @@ static void ResetPeer(uint32_t now)
 /** @brief 清理过期候选。 @param now HAL毫秒。 @return 无返回值。 */
 static void Expire(uint32_t now)
 {
-    if(candidate.state!=IDLE&&(uint32_t)(now-candidate.created_ms)>=TTL_MS) { candidate.state=IDLE;++stats.expired;++stats.candidate_expired; }
+    if(candidate.state!=IDLE&&(uint32_t)(now-candidate.created_ms)>=CANDIDATE_TTL_MS)
+    {
+        TraceEvent("CAND_EXPIRE",candidate.sync_sequence,0U,false,now,(uint32_t)(now-candidate.created_ms));
+        candidate.state=IDLE;++stats.expired;++stats.candidate_expired;
+    }
     if((sync_tx.waiting||sync_tx.ready)&&(uint32_t)(now-sync_tx.created_ms)>=TTL_MS) { sync_tx.waiting=sync_tx.ready=false;++stats.expired; }
     if(response.ready&&(uint32_t)(now-response.created_ms)>=TTL_MS) { response.ready=false;++stats.expired; }
     if(have_output&&(uint32_t)(now-output_ms)>=TTL_MS) { have_output=false;++stats.expired; }
@@ -211,6 +237,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,const ip_a
     if(board.role==BOARD_ROLE_A)
     {
         if(m.type!=PTP_WIRE_DELAY_REQ) { ++stats.invalid;return; }
+        TraceEvent("RX_REQ",m.sequence,response.sequence,rx_valid,now,0U);
         if(have_peer_sequence&&!Newer(m.sequence,peer_sequence)) { ++stats.sequence;return; }
         if(!rx_valid) { ++stats.missing;return; }
         if(response.ready) { ++stats.sequence;return; }
@@ -219,6 +246,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,const ip_a
     }
     if(m.type==PTP_WIRE_SYNC)
     {
+        TraceEvent("RX_SYNC",m.sequence,candidate.sync_sequence,rx_valid,now,0U);
         if(candidate.state!=IDLE||have_output) { ++stats.sequence;++stats.sync_busy;return; }
         if(have_peer_sequence&&!Newer(m.sequence,peer_sequence)) { ++stats.sequence;++stats.sync_old;return; }
         if(!rx_valid) { ++stats.missing;return; }
@@ -227,6 +255,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,const ip_a
     }
     if(m.type==PTP_WIRE_FOLLOW_UP)
     {
+        TraceEvent("RX_FU",m.sequence,candidate.sync_sequence,rx_valid,now,0U);
         if(candidate.state!=WAIT_FU||candidate.sync_sequence!=m.sequence) { ++stats.sequence;++stats.fu_mismatch;return; }
         if(have_master_time&&m.timestamp_ns<=last_master_ns) { ++stats.invalid;ResetPeer(now);return; }
         last_master_ns=m.timestamp_ns;have_master_time=true;
@@ -328,16 +357,20 @@ void PtpBoardSync_Process(uint32_t now)
         {
             last_send_ms=now;sync_tx.sequence=++tx_sequence;sync_tx.created_ms=now;sync_tx.waiting=true;
             PtpWireMessage m=Message(PTP_WIRE_SYNC,sync_tx.sequence);
+            TraceEvent("TX_SYNC",sync_tx.sequence,0U,false,now,0U);
             if(Send(&m)!=ERR_OK) { sync_tx.waiting=sync_tx.ready=false; }
         }
         if(sync_tx.ready)
         {
-            PtpWireMessage m=Message(PTP_WIRE_FOLLOW_UP,sync_tx.sequence);m.timestamp_ns=sync_tx.ns;sync_tx.ready=false;(void)Send(&m);
+            PtpWireMessage m=Message(PTP_WIRE_FOLLOW_UP,sync_tx.sequence);m.timestamp_ns=sync_tx.ns;
+            TraceEvent("TX_FU",sync_tx.sequence,0U,false,now,(uint32_t)(now-sync_tx.created_ms));
+            sync_tx.ready=false;(void)Send(&m);
         }
     }
     else if(candidate.state==SEND_REQ)
     {
         candidate.delay_sequence=++tx_sequence;candidate.state=WAIT_TX;PtpWireMessage m=Message(PTP_WIRE_DELAY_REQ,candidate.delay_sequence);
+        TraceEvent("TX_REQ",candidate.delay_sequence,0U,false,now,0U);
         if(Send(&m)!=ERR_OK) { candidate.state=IDLE; }
     }
     LogStats(now);
