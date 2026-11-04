@@ -12,6 +12,8 @@
 #include "UI/waveform_service.h"
 /** @brief 前台独占击掌权威状态，与标准音缓存分离；不与DMA共享。 */
 static ClapRanging clap_ranging __attribute__((section(".ItcmState"),aligned(8)));
+/** @brief 五秒诊断窗内波形前台更新最大耗时，单位ms，不参与调度。 */
+static uint32_t wave_update_max_ms;
 /** @brief 只读复制击掌展示，不推进时间。@param out 非NULL调用方存储。@return 无返回值。 */
 void App_GetClapSnapshot(ClapRangingSnapshot *out){ClapRanging_GetSnapshot(&clap_ranging,out);}
 #endif
@@ -481,8 +483,11 @@ static void RefreshRanging(uint32_t now_ms)
 #ifdef SBCG_USE_ADVANCED_UI
     ClapRanging_Update(&clap_ranging,profile->role,context.domain_valid && stream_ok && clock_ok,
         &session,clock_ok?common_ns:0U,now_ms,&temperature,&calibration);
+    const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
     WaveformService_Update(profile->role,context.domain_valid && stream_ok && clock_ok,
         &session,clock_ok?common_ns:0U,now_ms);
+    const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
+    if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
 #endif
 }
 
@@ -1516,11 +1521,15 @@ void App_Process(void)
         WaveformService_GetSnapshot(&wave_ui);
         length = snprintf(line, sizeof(line),
             "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%lu"
-            ",SEQ=%" PRIu32 ",STATE=%u\r\n",
+            ",SEQ=%" PRIu32 ",STATE=%u,CAND_MHZ=%" PRIu32 ",AGE_MS=%" PRIu32
+            ",CONF=%u,WHY=%u,WORK_MS=%" PRIu32 "\r\n",
             wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
             wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
-            (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state);
+            (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state,
+            wave_ui.candidate_milli_hz, wave_ui.period_age_ms,
+            (unsigned)wave_ui.confirmation_count, (unsigned)wave_ui.reason,wave_update_max_ms);
         if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+        wave_update_max_ms=0U;
 #endif
     }
 #endif

@@ -211,6 +211,11 @@ int main(){
  touchgfx::LCD::check_clip=false;
  ++wave.frame_seq;wave.synced=true;wave.source=WAVEFORM_SOURCE_COMMON;wave.period_valid=true;wave.period_milli_hz=1000000;
  view.handleTickEvent();assert(view.lineIs(0,"SYNC / COMMON WINDOW"));assert(view.wavePaints()==paints_wave+1);
+ // A stale COMMON source does not confer synchronization after its lease expires.
+ ++wave.frame_seq;wave.synced=false;view.handleTickEvent();
+ assert(view.lineIs(0,"LOCAL / UNSYNCED"));
+ ++wave.frame_seq;wave.synced=true;view.handleTickEvent();
+ assert(view.lineIs(0,"SYNC / COMMON WINDOW"));
  // A weak real PCM signal must remain visible; one-PCM noise must not gain full height.
  for(int i=0;i<960;++i)wave.points[i]=(i%2)?100:-200;
  ++wave.frame_seq;view.handleTickEvent();
