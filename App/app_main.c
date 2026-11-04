@@ -1515,11 +1515,11 @@ void App_Process(void)
         WaveformSnapshot wave_ui;
         WaveformService_GetSnapshot(&wave_ui);
         length = snprintf(line, sizeof(line),
-            "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%" PRIu64
+            "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%lu"
             ",SEQ=%" PRIu32 ",STATE=%u\r\n",
             wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
             wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
-            wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state);
+            (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state);
         if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
 #endif
     }
