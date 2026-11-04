@@ -114,6 +114,8 @@ int main(void)
     assert(!PtpBoardSync_TakeExchange(&e,&captured));Deliver(PTP_WIRE_DELAY_RESP,1,UINT64_C(10000000400));assert(!PtpBoardSync_TakeExchange(&e,&captured));
     puts("PASS B: natural A/B quartet copied once, independent DelayReq sequence, replay ignored");
     Reset(BOARD_ROLE_B,0);Ready();Deliver(PTP_WIRE_FOLLOW_UP,1,100);Deliver(PTP_WIRE_SYNC,1,0);Deliver(PTP_WIRE_FOLLOW_UP,2,100);assert(!sends);now+=1000;PtpBoardSync_Process(now);Deliver(PTP_WIRE_FOLLOW_UP,1,100);assert(!sends&&!PtpBoardSync_TakeExchange(&e,&captured));
+    /* 丢FollowUp后候选只等200ms，下一帧Sync(250ms)必须替换旧候选而非被BUSY拒绝。 */
+    Reset(BOARD_ROLE_B,0);Ready();Deliver(PTP_WIRE_SYNC,1,0);assert(!sends);now+=250U;Deliver(PTP_WIRE_SYNC,2,0);Deliver(PTP_WIRE_FOLLOW_UP,2,UINT64_C(10000000100));PtpBoardSync_Process(now);assert(sends==1);PtpWireMessage req2;assert(PtpWire_Decode(sent[0],sizes[0],&req2)==PTP_WIRE_OK&&req2.type==PTP_WIRE_DELAY_REQ);
     Reset(BOARD_ROLE_B,UINT32_MAX-3000U);Ready();BComplete(65535);assert(PtpBoardSync_TakeExchange(&e,&captured));BComplete(0);assert(PtpBoardSync_TakeExchange(&e,&captured));
     puts("PASS timeout/wrap: out-of-order FU and mismatched sequence rejected, HAL tick and PTP sequence wrap supported");
     Reset(BOARD_ROLE_B,0);Ready();rx_result=BSP_PTP_NOT_READY;Deliver(PTP_WIRE_SYNC,1,0);Deliver(PTP_WIRE_FOLLOW_UP,1,100);PtpBoardSync_Process(now);assert(!sends);
