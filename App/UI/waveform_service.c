@@ -434,7 +434,7 @@ static bool RenderLocal(void)
 /**
  * @brief A生成固定20ms共同窗口计划；窗口结束在历史延迟之后，刷新10Hz。
  * @return 无返回值。
- * @note 本阶段只发RAW模式；周期检测/相位参考在第二阶段接入，窗口长度不变。
+ * @note 固定20ms窗口；A锁相后按整数周期网格生成PERIOD，否则RAW；B只跟随共同窗口。
  */
 static void MakePlan(void)
 {
