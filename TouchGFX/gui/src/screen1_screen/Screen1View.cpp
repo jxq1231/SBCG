@@ -387,7 +387,7 @@ void Screen1View::refreshWaveform()
     waveform.refresh();
     const auto& wave = waveform.snapshot();
     UpdateText(pageLines[0],pageLineBuffers[0],!wave.valid?"NO DATA / NO AUDIO":
-        wave.source==WAVEFORM_SOURCE_COMMON?"SYNC / COMMON WINDOW":"LOCAL / UNSYNCED");
+        wave.synced && wave.source==WAVEFORM_SOURCE_COMMON?"SYNC / COMMON WINDOW":"LOCAL / UNSYNCED");
     char text[64];
     if (wave.valid && wave.period_valid)
         std::snprintf(text,sizeof text,"PERIOD %lu.%03lu HZ / %lu MS",

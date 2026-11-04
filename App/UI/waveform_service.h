@@ -1,9 +1,10 @@
 /**
  * @file waveform_service.h
- * @brief 真实PCM历史波形、共同20ms窗口计划及有界界面快照。
- * @details 第一阶段固定20ms窗口、10Hz计划；A指定共同窗口，B严格采用该窗，
+ * @brief 真实PCM历史波形、RAW/PERIOD共同窗口及有界界面快照。
+ * @details RAW使用20ms窗口、PERIOD使用有界约3周期窗口，均为10Hz计划；A指定共同窗口，B严格采用该窗，
  *          两板分别用本地AudioTimeMap把绝对时间窗映射到自己的DMA帧。
- *          未同步或无计划时仍显示本板最近20ms原始PCM（LOCAL），无数据时置无效。
+ *          未同步或无计划时显示本板最近一段原始PCM（LOCAL）；已知共同周期时
+ *          沿用该周期约3周期窗口，否则回退20ms，无数据时置无效。
  * @note Init仅在SDRAM成功准备后调用；未Init时处理入口不读写外部数组。
  *       所有接口串行前台调用，不访问外设或保留DMA指针；不修改原始PCM。
  */
@@ -18,10 +19,20 @@
 #define WAVEFORM_PLAN_WIRE_BYTES 56U
 /** @brief CPU历史环长度；20ms窗口、350ms历史延迟和B本地回退均在此环内。 */
 #define WAVEFORM_RING_FRAMES 32768U
-/** @brief 第一阶段固定显示窗口；接口保留为参数，后续环境模式可用100ms。 */
+/** @brief RAW固定显示窗口；PERIOD模式按约3个周期缩短窗口以观察相位。 */
 #define WAVEFORM_WINDOW_SPAN_NS UINT64_C(20000000)
+/** @brief PERIOD显示保留的周期数；窗口跨度限制在1ms..RAW窗口之间。 */
+#define WAVEFORM_PERIOD_DISPLAY_CYCLES 3U
+/** @brief PERIOD窗口最小跨度，避免高频时点数量过少。 */
+#define WAVEFORM_PERIOD_SPAN_MIN_NS UINT64_C(1000000)
 /** @brief 计划生成周期；LCD刷新不得改变音频采样节拍。 */
 #define WAVEFORM_REFRESH_MS 100U
+/** @brief 周期候选至少间隔200ms，三次一致才发布；最后可靠周期证据只保留600ms。 */
+#define WAVEFORM_PERIOD_REFRESH_MS 200U
+#define WAVEFORM_PERIOD_HOLD_MS 600U
+#define WAVEFORM_PERIOD_CONFIRMATIONS 3U
+/** @brief LOCAL横轴缓存期限；实测B失去共同时间5.145s，取8s覆盖一次拖板瞬态，纯显示不参与测量。 */
+#define WAVEFORM_LOCAL_PERIOD_HOLD_MS 8000U
 /** @brief 计划模式：RAW为固定共同窗口，PERIOD为A一次性相位参考网格。 */
 #define WAVEFORM_MODE_RAW 0U
 #define WAVEFORM_MODE_PERIOD 1U
@@ -29,6 +40,24 @@
 #define WAVEFORM_SOURCE_NONE 0U
 #define WAVEFORM_SOURCE_COMMON 1U
 #define WAVEFORM_SOURCE_LOCAL 2U
+
+/** @brief 最近一次前台资格/周期原因；仅诊断数值，不编码进WVP2，也不代表实机同步验收。 */
+typedef enum {
+    WAVEFORM_REASON_NONE = 0,
+    WAVEFORM_REASON_ACQUIRING = 1,
+    WAVEFORM_REASON_PERIOD_LOCKED = 2,
+    WAVEFORM_REASON_PERIOD_HELD = 3,
+    WAVEFORM_REASON_PERIOD_EXPIRED = 4,
+    WAVEFORM_REASON_CLOCK_MODEL = 5,
+    WAVEFORM_REASON_PLAN_LATE = 6,
+    WAVEFORM_REASON_HISTORY = 7,
+    WAVEFORM_REASON_PLAN_TIMEOUT = 8,
+    WAVEFORM_REASON_MODEL_STALE = 9,
+    WAVEFORM_REASON_STREAM = 10,
+    WAVEFORM_REASON_CONTEXT = 11,
+    WAVEFORM_REASON_PLAN_REJECTED = 12,
+    WAVEFORM_REASON_RAW = 13
+} WaveformReason;
 
 /**
  * @brief 共同计划CPU副本；时间均为PTP共同域纳秒，序号按32位回绕比较。
@@ -52,7 +81,7 @@ typedef struct {
 /**
  * @brief 界面副本；points为原始PCM16，不做滤波/平滑/插值/相位补偿。
  * @note valid=false时禁止绘制旧数据；source区分共同窗口与本地回退；
- *       point_count为本次实际帧数（约959/960，随本板帧率变化）。
+ *       point_count为本次实际帧数，随窗口跨度及本板帧率变化（RAW名义960，1kHz PERIOD约144）。
  */
 typedef struct {
     bool valid;
@@ -67,6 +96,14 @@ typedef struct {
     uint64_t window_start_ns;
     uint64_t window_span_ns;
     int16_t points[WAVEFORM_POINT_COUNT];
+    /** @brief 当前A候选频率；B只报告所收A计划，绝不本地过零。 */
+    uint32_t candidate_milli_hz;
+    /** @brief 周期证据年龄(ms)；A从可靠PCM检测起算，B从收到PERIOD计划起算；无证据为UINT32_MAX。 */
+    uint32_t period_age_ms;
+    /** @brief A已连续确认次数(0..3)；B不进行本地确认。 */
+    uint8_t confirmation_count;
+    /** @brief WaveformReason数值；用于说明回退、保持或拒绝原因。 */
+    uint8_t reason;
 } WaveformSnapshot;
 
 /** @brief SDRAM就绪后清元数据；不读取NOLOAD数组。 @return 无返回值。 */

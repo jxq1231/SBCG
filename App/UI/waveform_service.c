@@ -1,10 +1,10 @@
 /**
  * @file waveform_service.c
  * @brief 复制已验证PCM到CPU历史环，按共同PTP窗口生成两板原始波形快照。
- * @details 第一阶段固定20ms窗口、10Hz计划；A用AudioTimeMap从共同时间反算本板
- *          DMA帧，B用同一绝对窗口和自己的AudioTimeMap取本地帧。无计划、失域或
- *          未收敛时显示本板最近20ms原始PCM（LOCAL），不画人工零线，不做插值、
- *          滤波、平滑或独立相位补偿；时间轴可用但真实传播相位差保留。
+ * @details RAW模式固定20ms窗口、10Hz计划；PERIOD模式按约3个周期缩短窗口以观察
+ *          两板相位。A用AudioTimeMap从共同时间反算本板DMA帧，B用同一绝对窗口和
+ *          自己的AudioTimeMap取本地帧。无计划、失域或未收敛时显示本板最近20ms
+ *          原始PCM（LOCAL），不画人工零线，不做插值、滤波、平滑或独立相位补偿。
  * @note .WaveformState为CPU独占SDRAM NOLOAD；Init先清元数据，数组写后才读。
  *       所有入口前台串行调用，Stage只在借用期间访问DMA块，不保存指针。
  */
@@ -15,6 +15,8 @@
 #define REFRESH_MS WAVEFORM_REFRESH_MS
 #define STREAM_TIMEOUT_MS 650U
 #define PLAN_TIMEOUT_MS 650U
+/** @brief B允许计划在deadline之后到达的余量；A主循环偶发百余毫秒时避免退回LOCAL。 */
+#define PLAN_LATE_NS UINT64_C(250000000)
 #define HISTORY_DELAY_NS UINT64_C(350000000)
 #define DISPLAY_LEAD_NS UINT64_C(100000000)
 #define MODEL_HOLD_NS UINT64_C(1500000000)
@@ -24,13 +26,17 @@
 #define PERIOD_MAX_LAG 480U
 #define PERIOD_SCRATCH_FRAMES (PERIOD_WINDOW_FRAMES + PERIOD_MAX_LAG)
 #define PERIOD_MIN_RMS_PCM 50.0f
-#define PERIOD_REFRESH_MS 200U
+#define PERIOD_REFRESH_MS WAVEFORM_PERIOD_REFRESH_MS
+#define PERIOD_CONFIRM_RELATIVE 0.005
+#define PERIOD_ERROR_LIMIT 0.08f
+#define PERIOD_NEAR_BEST 0.02f
 
 /** @brief 仅CPU访问的大数组；DMA从不写此区，因而无需增加缓存维护。 */
 typedef struct {
     int16_t ring[WAVEFORM_RING_FRAMES];
     int16_t stage[BSP_AUDIO_HALF_FRAMES];
     int16_t period[PERIOD_SCRATCH_FRAMES];
+    float period_error[PERIOD_MAX_LAG + 2U];
 } WaveformStorage;
 #if defined(__GNUC__)
 static WaveformStorage storage __attribute__((section(".WaveformState"), aligned(32)));
@@ -43,14 +49,19 @@ _Static_assert(sizeof(WaveformStorage) < 128U * 1024U, "waveform SDRAM budget");
 static struct {
     bool initialized, staged, have_ring, healthy, model_valid, have_left;
     bool pending, outgoing, have_sequence, have_refresh;
-    bool phase_valid;
+    bool phase_valid, have_period_check, have_period_evidence;
     BoardRole role;
     uint32_t stage_session, stage_count, session, last_block_ms, refresh_ms;
     uint32_t sequence, received_sequence, plan_ms, anchor_ms, period_ms;
+    uint32_t now_ms, period_good_ms, local_period_ms;
+    uint8_t confirmation_count, reason;
     uint64_t stage_first, first_frame, end_frame, common_ns;
     RangingSessionSnapshot domain;
     AudioTimeMapAnchor left, right;
     double model_frame, model_ns, frames_per_ns, phase_origin_ns, phase_period_ns;
+    /** 最近一次共同PERIOD计划的周期；B本地回退时沿用，使LOCAL与SYNC同样显示约3个周期。 */
+    double local_period_ns;
+    double candidate_period_ns, candidate_first_ns, candidate_middle_ns;
     WaveformPlan plan;
     WaveformSnapshot snapshot;
 } state;
@@ -69,6 +80,13 @@ static void ClearHistory(void)
     state.have_ring = false;
     state.pending = false;
     state.outgoing = false;
+    state.phase_valid = false;
+    state.have_period_check = false;
+    state.have_period_evidence = false;
+    state.confirmation_count = 0U;
+    state.candidate_period_ns = 0.0;
+    state.local_period_ns = 0.0;
+    state.reason = WAVEFORM_REASON_STREAM;
     Invalidate();
 }
 
@@ -89,6 +107,11 @@ void WaveformService_NotifyClockChange(void)
     state.outgoing = false;
     state.have_refresh = false;
     state.phase_valid = false;
+    state.have_period_check = false;
+    state.have_period_evidence = false;
+    state.confirmation_count = 0U;
+    state.candidate_period_ns = 0.0;
+    state.reason = WAVEFORM_REASON_CLOCK_MODEL;
     if (state.snapshot.synced) Invalidate();
 }
 
@@ -197,7 +220,8 @@ static uint64_t RoundFrame(double value)
 /** @brief 将周期窗口及最大滞后邻域线性复制到CPU副本。 @param start 窗口起点零基帧。 @return 完整落在环内true。 */
 static bool LoadPeriodWindow(uint64_t start)
 {
-    if (start + PERIOD_SCRATCH_FRAMES > state.end_frame) return false;
+    if (start < state.first_frame || start > state.end_frame ||
+        state.end_frame - start < PERIOD_SCRATCH_FRAMES) return false;
     uint32_t index = (uint32_t)(start % WAVEFORM_RING_FRAMES);
     for (uint32_t i = 0U; i < PERIOD_SCRATCH_FRAMES; ++i) {
         storage.period[i] = storage.ring[index];
@@ -259,13 +283,6 @@ static double ZeroCrossPeriod(void)
     double mean = (last - first) / (double)cycles;
     if (mean < 7.75 || mean > (double)PERIOD_MAX_LAG) return 0.0;
     if (cycles >= 2U && (max_interval > mean * 1.50 || min_interval < mean * 0.67)) return 0.0;
-    /* 弱信号漏过零会得到2/4倍均值；若更短候选同样高度重复，则取基频。 */
-    for (uint32_t divisor = 4U; divisor >= 2U; --divisor) {
-        const double shorter = mean / (double)divisor;
-        if (shorter < 7.75) continue;
-        const uint32_t lag = (uint32_t)(shorter + 0.5);
-        if (lag >= PERIOD_MIN_LAG && PeriodError(lag) <= 0.12f) { mean = shorter; break; }
-    }
     return mean;
 }
 
@@ -273,84 +290,152 @@ static double ZeroCrossPeriod(void)
  * @brief A从2048帧历史检测基频；范围约8..480帧（100Hz..5kHz）。
  * @param start 窗口起点零基帧。
  * @return 8..480帧的分数周期；静音/不稳定/越界时0。
- * @note 先过零估计，低频或过零不足才用自相关；自相关取最小滞后且误差接近最优。
+ * @note 一次差分搜索保留各滞后误差，选择接近最优的最短局部谷，防止2/4/5倍误周期。
+ *       过零只细化已获差分证据的同一基周期；抛物线拟合仅作用于周期元数据，不插值PCM。
  */
 static double FindPeriod(uint64_t start)
 {
     if (!LoadPeriodWindow(start) || !PeriodWindowHasSignal()) return 0.0;
+    /* 干净周期只验证过零提议及2/3/4/5分频候选，不新增常态全滞后扫描。 */
     const double crossing_period = ZeroCrossPeriod();
-    if (crossing_period > 0.0) return crossing_period;
+    if (crossing_period > 0.0) {
+        float errors[6] = {2.0f, 2.0f, 2.0f, 2.0f, 2.0f, 2.0f};
+        float crossing_best = 2.0f;
+        for (uint32_t divisor = 1U; divisor <= 5U; ++divisor) {
+            const double proposal = crossing_period / (double)divisor;
+            if (proposal < 7.75) continue;
+            const uint32_t lag = (uint32_t)(proposal + 0.5);
+            if (lag < PERIOD_MIN_LAG || lag > PERIOD_MAX_LAG) continue;
+            const float at = PeriodError(lag);
+            if (at <= PeriodError(lag - 1U) && at <= PeriodError(lag + 1U)) {
+                errors[divisor] = at;
+                if (at < crossing_best) crossing_best = at;
+            }
+        }
+        const float crossing_limit = crossing_best + PERIOD_NEAR_BEST < PERIOD_ERROR_LIMIT ?
+            crossing_best + PERIOD_NEAR_BEST : PERIOD_ERROR_LIMIT;
+        for (uint32_t divisor = 5U; divisor >= 1U; --divisor)
+            if (errors[divisor] <= crossing_limit) return crossing_period / (double)divisor;
+    }
     float best = 2.0f;
-    uint32_t best_lag = 0U;
-    for (uint32_t lag = PERIOD_MIN_LAG; lag <= PERIOD_MAX_LAG; ++lag) {
-        const float error = PeriodError(lag);
-        if (error < best) { best = error; best_lag = lag; }
+    for (uint32_t lag = PERIOD_MIN_LAG - 1U; lag <= PERIOD_MAX_LAG + 1U; ++lag) {
+        storage.period_error[lag] = PeriodError(lag);
+        if (lag >= PERIOD_MIN_LAG && lag <= PERIOD_MAX_LAG &&
+            storage.period_error[lag] < best) best = storage.period_error[lag];
     }
-    if (best_lag == 0U || best > 0.08f) return 0.0;
-    double period = (double)best_lag;
-    if (best_lag >= 3U && best_lag < PERIOD_MAX_LAG) {
-        const float before = PeriodError(best_lag - 1U);
-        const float at = PeriodError(best_lag);
-        const float after = PeriodError(best_lag + 1U);
-        float left, middle, right;
-        double centre = (double)best_lag;
-        if (after < before) {
-            left = at; middle = after; right = PeriodError(best_lag + 2U); centre += 1.0;
-        } else {
-            left = before; middle = at; right = after;
-        }
-        const float denominator = left - 2.0f * middle + right;
-        if (denominator > 1.0e-6f) {
-            const double offset = 0.5 * (double)(left - right) / (double)denominator;
-            if (offset >= -0.5 && offset <= 0.5) period = centre + offset;
-        }
+    if (best > PERIOD_ERROR_LIMIT) return 0.0;
+    const float limit = best + PERIOD_NEAR_BEST < PERIOD_ERROR_LIMIT ?
+        best + PERIOD_NEAR_BEST : PERIOD_ERROR_LIMIT;
+    uint32_t lag;
+    for (lag = PERIOD_MIN_LAG; lag <= PERIOD_MAX_LAG; ++lag) {
+        const float at = storage.period_error[lag];
+        if (at <= limit && at <= storage.period_error[lag - 1U] &&
+            at <= storage.period_error[lag + 1U]) break;
     }
-    return period >= 7.75 ? period : 0.0;
+    if (lag > PERIOD_MAX_LAG) return 0.0;
+    double period = (double)lag;
+    const float left = storage.period_error[lag - 1U], at = storage.period_error[lag];
+    const float right = storage.period_error[lag + 1U];
+    const float denominator = left - 2.0f * at + right;
+    if (denominator > 1.0e-6f) {
+        const double offset = 0.5 * (double)(left - right) / (double)denominator;
+        if (offset >= -0.5 && offset <= 0.5) period += offset;
+    }
+    if (crossing_period >= period * (1.0 - PERIOD_CONFIRM_RELATIVE) &&
+        crossing_period <= period * (1.0 + PERIOD_CONFIRM_RELATIVE) &&
+        storage.period_error[(uint32_t)(crossing_period + 0.5)] <= limit)
+        period = crossing_period;
+    return period >= 7.75 && period <= (double)PERIOD_MAX_LAG ? period : 0.0;
+}
+
+/** @brief 仅过期已确认周期；等待、失败和发送计划都不能延长最后可靠PCM证据。 @return 无返回值。 */
+static void ExpirePeriod(void)
+{
+    if (state.phase_valid && (uint32_t)(state.now_ms - state.period_good_ms) >= WAVEFORM_PERIOD_HOLD_MS) {
+        state.phase_valid = false;
+        state.reason = WAVEFORM_REASON_PERIOD_EXPIRED;
+        if (state.snapshot.period_valid) Invalidate();
+    }
 }
 
 /**
  * @brief 以200ms节流更新A的周期/相位参考；锁定后不随A每次移动重调。
  * @return 无返回值。
- * @note B不运行此函数，只消费A的共同窗口；检测失败回退固定时间窗RAW。
+ * @note B不运行此函数。三个相隔200ms、彼此0.5%内的候选才建立/修订周期；
+ *       短暂失败只保持最后可靠证据600ms。修订沿旧时间网格连续衔接，不跟随A新过零点。
  */
 static void UpdatePeriod(void)
 {
     if (!state.model_valid) { state.phase_valid = false; return; }
-    if (state.period_ms != 0U && (uint32_t)(state.refresh_ms - state.period_ms) < PERIOD_REFRESH_MS)
-        return;
+    if (state.have_period_check && (uint32_t)(state.now_ms - state.period_ms) < PERIOD_REFRESH_MS) {
+        ExpirePeriod(); return;
+    }
+    state.have_period_check = true;
     state.period_ms = state.refresh_ms;
-    if (state.common_ns <= HISTORY_DELAY_NS) { state.phase_valid = false; return; }
+    if (state.common_ns <= HISTORY_DELAY_NS) { ExpirePeriod(); return; }
     const uint64_t start_ns = state.common_ns - HISTORY_DELAY_NS;
-    if (start_ns < state.domain.source_floor_ns) { state.phase_valid = false; return; }
+    if (start_ns < state.domain.source_floor_ns) { ExpirePeriod(); return; }
     const double first = FrameAt(start_ns);
     if (first < 0.0 || first + (double)PERIOD_SCRATCH_FRAMES >= (double)state.end_frame) {
-        state.phase_valid = false;
-        return;
+        ExpirePeriod(); return;
     }
     const double period = FindPeriod(RoundFrame(first));
     if (period <= 0.0) {
-        state.phase_valid = false;
+        state.confirmation_count = 0U;
+        state.candidate_period_ns = 0.0;
+        state.reason = state.phase_valid ? WAVEFORM_REASON_PERIOD_HELD : WAVEFORM_REASON_RAW;
+        ExpirePeriod();
         return;
     }
     const double period_ns = period / state.frames_per_ns;
-    const bool relock = !state.phase_valid || state.phase_period_ns <= 0.0 ||
-        period_ns > state.phase_period_ns * 1.02 || period_ns < state.phase_period_ns * 0.98;
-    if (relock) {
-        state.phase_valid = false;
-        const uint64_t start_frame = RoundFrame(first);
-        const uint32_t limit = (uint32_t)period + 2U;
-        for (uint32_t i = 0U; i <= limit; ++i) {
-            const double left = Sample(start_frame + i), right = Sample(start_frame + i + 1U);
-            if (left <= 0.0 && right > 0.0) {
-                const double crossing = (double)(start_frame + i) - left / (right - left);
-                state.phase_origin_ns = (double)start_ns +
-                    (crossing - first) / state.frames_per_ns;
-                state.phase_period_ns = period_ns;
-                state.phase_valid = true;
-                break;
+    if (state.confirmation_count >= WAVEFORM_PERIOD_CONFIRMATIONS ||
+        state.confirmation_count == 0U ||
+        period_ns < state.candidate_first_ns * (1.0 - PERIOD_CONFIRM_RELATIVE) ||
+        period_ns > state.candidate_first_ns * (1.0 + PERIOD_CONFIRM_RELATIVE)) {
+        state.candidate_first_ns = period_ns;
+        state.confirmation_count = 1U;
+    } else {
+        state.confirmation_count++;
+        if (state.confirmation_count == 2U) state.candidate_middle_ns = period_ns;
+    }
+    state.candidate_period_ns = period_ns;
+    if (state.phase_valid && period_ns >= state.phase_period_ns * (1.0 - PERIOD_CONFIRM_RELATIVE) &&
+        period_ns <= state.phase_period_ns * (1.0 + PERIOD_CONFIRM_RELATIVE)) {
+        state.period_good_ms = state.now_ms;
+        state.reason = WAVEFORM_REASON_PERIOD_LOCKED;
+    } else state.reason = state.phase_valid ? WAVEFORM_REASON_PERIOD_HELD : WAVEFORM_REASON_ACQUIRING;
+    if (state.confirmation_count == WAVEFORM_PERIOD_CONFIRMATIONS) {
+        /* 三候选取中值只决定横轴周期元数据，不修改或平滑任何PCM样点。 */
+        double a = state.candidate_first_ns, b = state.candidate_middle_ns;
+        if (a > b) { const double swap = a; a = b; b = swap; }
+        if (b > period_ns) b = period_ns;
+        const double confirmed_ns = a > b ? a : b;
+        if (state.phase_valid) {
+            /* 锚定旧网格上靠近当前历史窗的一点，避免长基线换周期导致相位跳变。 */
+            const double steps = (double)(int64_t)(((double)start_ns - state.phase_origin_ns) / state.phase_period_ns);
+            state.phase_origin_ns += steps * state.phase_period_ns;
+        } else {
+            /* 首次使用A过零；无过零但差分重复性可信时使用该共同历史时刻为参考。 */
+            state.phase_origin_ns = (double)start_ns;
+            const uint64_t start_frame = RoundFrame(first);
+            const uint32_t limit = (uint32_t)period + 2U;
+            for (uint32_t i = 0U; i <= limit; ++i) {
+                const double left = Sample(start_frame + i), right = Sample(start_frame + i + 1U);
+                if (left <= 0.0 && right > 0.0) {
+                    const double crossing = (double)(start_frame + i) - left / (right - left);
+                    state.phase_origin_ns = (double)start_ns +
+                        (crossing - first) / state.frames_per_ns;
+                    break;
+                }
             }
         }
+        state.phase_period_ns = confirmed_ns;
+        state.phase_valid = true;
+        state.have_period_evidence = true;
+        state.period_good_ms = state.now_ms;
+        state.reason = WAVEFORM_REASON_PERIOD_LOCKED;
     }
+    ExpirePeriod();
 }
 
 /**
@@ -408,17 +493,32 @@ static bool RenderCommon(const WaveformPlan *plan)
 /**
  * @brief 显示本板最近一段原始PCM，作为未同步或无计划时的LOCAL回退。
  * @return 历史环至少有一帧时true。
- * @note 窗口优先按AudioTimeMap的20ms帧数取；模型无效时取960帧名义值。
+ * @note 已知共同PERIOD周期时沿用该周期取约3周期窗口；否则按20ms取，模型无效时取960帧名义值。
  */
 static bool RenderLocal(void)
 {
     if (!state.have_ring || state.end_frame <= state.first_frame) return false;
-    uint32_t span = WAVEFORM_POINT_COUNT;
-    if (state.model_valid && state.frames_per_ns > 0.0) {
-        const double exact = (double)WAVEFORM_WINDOW_SPAN_NS * state.frames_per_ns;
-        if (exact >= 2.0 && exact <= (double)WAVEFORM_POINT_COUNT)
-            span = (uint32_t)(exact + 0.5);
+    WaveformPlan local_plan;
+    memset(&local_plan, 0, sizeof local_plan);
+    uint64_t span_ns = WAVEFORM_WINDOW_SPAN_NS;
+    if (state.local_period_ns > 0.0 &&
+        (uint32_t)(state.now_ms - state.local_period_ms) < WAVEFORM_LOCAL_PERIOD_HOLD_MS) {
+        double desired_ns = state.local_period_ns * (double)WAVEFORM_PERIOD_DISPLAY_CYCLES;
+        if (desired_ns < (double)WAVEFORM_PERIOD_SPAN_MIN_NS)
+            desired_ns = (double)WAVEFORM_PERIOD_SPAN_MIN_NS;
+        if (desired_ns > (double)WAVEFORM_WINDOW_SPAN_NS)
+            desired_ns = (double)WAVEFORM_WINDOW_SPAN_NS;
+        span_ns = (uint64_t)(desired_ns + 0.5);
+        local_plan.mode = WAVEFORM_MODE_PERIOD;
+        local_plan.period_milli_hz = (uint32_t)(1.0e12 / state.local_period_ns + 0.5);
     }
+    local_plan.window_span_ns = span_ns;
+    const double frames_per_ns = state.model_valid && state.frames_per_ns > 0.0 ?
+        state.frames_per_ns : 48000.0 / 1.0e9;
+    uint32_t span = WAVEFORM_POINT_COUNT;
+    const double exact = (double)span_ns * frames_per_ns;
+    if (exact >= 2.0 && exact <= (double)WAVEFORM_POINT_COUNT)
+        span = (uint32_t)(exact + 0.5);
     if (span < 2U) span = 2U;
     if (state.end_frame <= state.first_frame + (uint64_t)span) span =
         (uint32_t)(state.end_frame - state.first_frame);
@@ -427,30 +527,41 @@ static bool RenderLocal(void)
     if (first < state.first_frame) first = state.first_frame;
     const uint32_t count = (uint32_t)(state.end_frame - first);
     RenderPcm(first, count > WAVEFORM_POINT_COUNT ? WAVEFORM_POINT_COUNT : count,
-        NULL, WAVEFORM_SOURCE_LOCAL);
+        &local_plan, WAVEFORM_SOURCE_LOCAL);
     return true;
 }
 
+/** @brief 保存有限期LOCAL横轴尺度；仅PERIOD更新，RAW不清除已有横轴。 @param plan 非NULL已接受计划。 @return 无返回值。
+ * @note B失域时沿用最近一次PERIOD约3周期窗口；只有从未取得周期或超过LOCAL期限才回退20ms。 */
+static void RememberLocalPeriod(const WaveformPlan *plan)
+{
+    if (plan->mode != WAVEFORM_MODE_PERIOD || plan->period_milli_hz == 0U) return;
+    state.local_period_ns = 1.0e12 / (double)plan->period_milli_hz;
+    state.local_period_ms = state.role == BOARD_ROLE_A ? state.period_good_ms : state.now_ms;
+}
+
 /**
- * @brief A生成固定20ms共同窗口计划；窗口结束在历史延迟之后，刷新10Hz。
+ * @brief A生成RAW20ms或约3周期共同窗口计划；窗口结束在历史延迟之后，刷新10Hz。
  * @return 无返回值。
- * @note 固定20ms窗口；A锁相后按整数周期网格生成PERIOD，否则RAW；B只跟随共同窗口。
+ * @note A锁相后按整数周期网格生成PERIOD，否则RAW；B只跟随共同窗口。
  */
 static void MakePlan(void)
 {
     if (!state.model_valid || state.common_ns == 0U) return;
     if (state.common_ns <= HISTORY_DELAY_NS + WAVEFORM_WINDOW_SPAN_NS) return;
     UpdatePeriod();
+    uint64_t span_ns = WAVEFORM_WINDOW_SPAN_NS;
+    if (state.phase_valid && state.phase_period_ns > 0.0) {
+        double desired_ns = state.phase_period_ns * (double)WAVEFORM_PERIOD_DISPLAY_CYCLES;
+        if (desired_ns < (double)WAVEFORM_PERIOD_SPAN_MIN_NS)
+            desired_ns = (double)WAVEFORM_PERIOD_SPAN_MIN_NS;
+        if (desired_ns > (double)WAVEFORM_WINDOW_SPAN_NS)
+            desired_ns = (double)WAVEFORM_WINDOW_SPAN_NS;
+        span_ns = (uint64_t)(desired_ns + 0.5);
+    }
     const uint64_t window_end_ns = state.common_ns - HISTORY_DELAY_NS;
-    const uint64_t window_start_ns = window_end_ns - WAVEFORM_WINDOW_SPAN_NS;
+    const uint64_t window_start_ns = window_end_ns - span_ns;
     if (window_start_ns < state.domain.source_floor_ns) return;
-    const double first = FrameAt(window_start_ns);
-    const double last = FrameAt(window_end_ns);
-    if (last <= first || first < 0.0) return;
-    const uint64_t first_frame = RoundFrame(first);
-    const uint64_t last_frame = RoundFrame(last);
-    if (first_frame < state.first_frame || last_frame > state.end_frame || last_frame <= first_frame)
-        return;
     WaveformPlan plan;
     memset(&plan, 0, sizeof plan);
     plan.domain = state.domain.domain;
@@ -458,7 +569,7 @@ static void MakePlan(void)
     plan.sequence = ++state.sequence;
     plan.mode = WAVEFORM_MODE_RAW;
     plan.plan_common_ns = state.common_ns;
-    plan.window_start_ns = window_start_ns;
+    plan.window_start_ns = window_end_ns - WAVEFORM_WINDOW_SPAN_NS;
     plan.window_span_ns = WAVEFORM_WINDOW_SPAN_NS;
     plan.display_deadline_ns = state.common_ns + DISPLAY_LEAD_NS;
     if (state.phase_valid && state.phase_period_ns > 0.0) {
@@ -468,20 +579,34 @@ static void MakePlan(void)
         while (state.phase_origin_ns + steps * state.phase_period_ns >
                (double)window_start_ns + 0.5)
             steps -= 1.0;
-        const double grid_ns = state.phase_origin_ns + steps * state.phase_period_ns;
-        const double grid_end_ns = grid_ns + (double)WAVEFORM_WINDOW_SPAN_NS;
-        const double grid_first = FrameAt((uint64_t)(grid_ns + 0.5));
-        const double grid_last = FrameAt((uint64_t)(grid_end_ns + 0.5));
-        if (grid_ns >= (double)state.domain.source_floor_ns &&
-            grid_end_ns <= (double)window_end_ns && grid_first >= 0.0 &&
+        double grid_ns = state.phase_origin_ns + steps * state.phase_period_ns;
+        uint64_t grid_start_ns = (uint64_t)(grid_ns + 0.5);
+        /* WVP2发送整数ns；取整使窗末超前时只退一周期，避免混用浮点边界。 */
+        if (grid_start_ns + span_ns > window_end_ns) {
+            grid_ns -= state.phase_period_ns;
+            grid_start_ns = (uint64_t)(grid_ns + 0.5);
+        }
+        const double grid_first = FrameAt(grid_start_ns);
+        const double grid_last = FrameAt(grid_start_ns + span_ns);
+        if (grid_start_ns >= state.domain.source_floor_ns &&
+            grid_start_ns + span_ns <= window_end_ns && grid_first >= 0.0 &&
             grid_last > grid_first &&
             RoundFrame(grid_first) >= state.first_frame &&
             RoundFrame(grid_last) <= state.end_frame) {
-            plan.window_start_ns = (uint64_t)(grid_ns + 0.5);
+            plan.window_start_ns = grid_start_ns;
+            plan.window_span_ns = span_ns;
             plan.mode = WAVEFORM_MODE_PERIOD;
             plan.period_milli_hz = (uint32_t)(1.0e12 / state.phase_period_ns + 0.5);
         }
     }
+    const double first = FrameAt(plan.window_start_ns);
+    const double last = FrameAt(plan.window_start_ns + plan.window_span_ns);
+    if (plan.window_start_ns < state.domain.source_floor_ns || first < 0.0 || last <= first ||
+        RoundFrame(first) < state.first_frame || RoundFrame(last) > state.end_frame) {
+        state.reason = WAVEFORM_REASON_HISTORY;
+        return;
+    }
+    RememberLocalPeriod(&plan);
     state.plan = plan;
     state.pending = true;
     state.outgoing = true;
@@ -493,19 +618,28 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
                             uint64_t common_ns, uint32_t now_ms)
 {
     if (!state.initialized) return;
+    state.now_ms = now_ms;
     const bool qualified = healthy && session != NULL && session->established &&
         session->domain != 0U && session->authority_epoch != 0U && common_ns != 0U;
     const bool was_healthy = state.healthy;
     const bool domain_changed = qualified && state.domain.domain != 0U &&
         (state.domain.domain != session->domain ||
          state.domain.authority_epoch != session->authority_epoch || common_ns < state.common_ns);
-    const bool changed = state.role != role || qualified != state.healthy ||
+    const bool qualification_changed = state.role != role || qualified != state.healthy ||
         (qualified && (state.domain.domain != session->domain ||
          state.domain.authority_epoch != session->authority_epoch || common_ns < state.common_ns));
+    const bool hard_context = state.role != role || (session != NULL && state.domain.domain != 0U &&
+        (state.domain.domain != session->domain ||
+         (session->authority_epoch != 0U && state.domain.authority_epoch != session->authority_epoch))) ||
+        (qualified && common_ns < state.common_ns);
+    const bool changed = qualification_changed || hard_context;
     state.role = role;
     state.healthy = qualified;
     state.common_ns = common_ns;
     if (session != NULL) state.domain = *session;
+    /* LOCAL横轴缓存独立于共同时间资格：失域后仍保留最近有效显示周期，
+     * 由RenderLocal按WAVEFORM_LOCAL_PERIOD_HOLD_MS自行过期，避免数秒
+     * 同步瞬态把1kHz原始PCM回退成20ms约20个周期。 */
     if (changed) {
         state.pending = false;
         state.outgoing = false;
@@ -513,6 +647,11 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
         state.have_refresh = false;
         state.phase_valid = false;
         state.period_ms = 0U;
+        state.have_period_check = false;
+        state.have_period_evidence = false;
+        state.confirmation_count = 0U;
+        state.candidate_period_ns = 0.0;
+        state.reason = WAVEFORM_REASON_CONTEXT;
         /* 首次取得资格或上电后的第一次Update不得丢弃已经扇出的两个锚点；
          * 只有失去资格，或已有资格时换域/共同时间倒退才撤旧模型。 */
         if (!qualified || (was_healthy && domain_changed)) {
@@ -527,20 +666,36 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
     }
     const bool model_fresh = state.model_valid &&
         (uint32_t)(now_ms - state.anchor_ms) <= (uint32_t)(MODEL_HOLD_NS / 1000000U);
+    if (state.pending && (!qualified || !model_fresh ||
+        (uint32_t)(now_ms - state.plan_ms) > PLAN_TIMEOUT_MS)) {
+        state.pending = false;
+        state.outgoing = false;
+        state.have_refresh = false;
+        state.reason = !model_fresh ? WAVEFORM_REASON_MODEL_STALE : WAVEFORM_REASON_PLAN_TIMEOUT;
+        if (state.snapshot.synced) Invalidate();
+    }
     if (state.pending && qualified && model_fresh &&
         common_ns >= state.plan.display_deadline_ns) {
         const bool rendered = (uint32_t)(now_ms - state.plan_ms) <= PLAN_TIMEOUT_MS &&
             RenderCommon(&state.plan);
         state.pending = false;
-        if (!rendered && state.snapshot.synced) Invalidate();
+        if (!rendered) {
+            state.reason = WAVEFORM_REASON_HISTORY;
+            state.have_refresh = false;
+            if (state.snapshot.synced) Invalidate();
+        }
     }
-    if (state.snapshot.synced && (uint32_t)(now_ms - state.plan_ms) > PLAN_TIMEOUT_MS)
-        state.snapshot.synced = false;
+    if (state.snapshot.synced && (!qualified || !model_fresh ||
+        (uint32_t)(now_ms - state.plan_ms) > PLAN_TIMEOUT_MS)) {
+        state.reason = !model_fresh ? WAVEFORM_REASON_MODEL_STALE : WAVEFORM_REASON_PLAN_TIMEOUT;
+        Invalidate();
+        state.have_refresh = false;
+    }
     if (state.have_refresh && (uint32_t)(now_ms - state.refresh_ms) < REFRESH_MS) return;
     state.have_refresh = true;
     state.refresh_ms = now_ms;
     if (role == BOARD_ROLE_A && qualified && model_fresh) MakePlan();
-    const bool waiting_common = state.pending ||
+    const bool waiting_common = (state.pending && qualified && model_fresh) ||
         (qualified && model_fresh && state.snapshot.synced &&
          (uint32_t)(now_ms - state.plan_ms) <= PLAN_TIMEOUT_MS);
     if (!waiting_common || !state.snapshot.valid) (void)RenderLocal();
@@ -549,7 +704,14 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
 /** @brief 获取CPU副本，不授予PCM指针。 @param out 可NULL输出。 @return 无返回值。 */
 void WaveformService_GetSnapshot(WaveformSnapshot *out)
 {
-    if (out != NULL) *out = state.snapshot;
+    if (out == NULL) return;
+    *out = state.snapshot;
+    out->candidate_milli_hz = state.candidate_period_ns > 0.0 ?
+        (uint32_t)(1.0e12 / state.candidate_period_ns + 0.5) : 0U;
+    out->period_age_ms = state.have_period_evidence ? (uint32_t)(state.now_ms - state.period_good_ms) :
+        (state.local_period_ns > 0.0 ? (uint32_t)(state.now_ms - state.local_period_ms) : UINT32_MAX);
+    out->confirmation_count = state.confirmation_count;
+    out->reason = state.reason;
 }
 
 /** @brief 取待发计划一次。 @param out 非NULL调用方输出。 @return 有计划true。 */
@@ -577,16 +739,27 @@ static bool ValidPlan(const WaveformPlan *plan)
     return plan->period_milli_hz >= 100000U && plan->period_milli_hz <= 6000000U;
 }
 
-/** @brief B接收域和新序号均匹配的计划，重复包不修改寿命。 @param plan 只读副本。 @param now_ms 接收毫秒。 @return 接受新计划true。 */
+/** @brief B接收域和新序号均匹配的计划；允许计划在A主循环紧张时略晚到达。 */
 bool WaveformService_OnPlan(const WaveformPlan *plan, uint32_t now_ms)
 {
     if (plan == NULL || state.role != BOARD_ROLE_B || !state.healthy ||
         plan->domain != state.domain.domain || plan->authority_epoch != state.domain.authority_epoch ||
         plan->window_start_ns < state.domain.source_floor_ns ||
-        plan->display_deadline_ns <= state.common_ns ||
-        plan->display_deadline_ns - state.common_ns > DISPLAY_LEAD_NS + UINT64_C(100000000) ||
-        (state.have_sequence && (int32_t)(plan->sequence - state.received_sequence) <= 0)) return false;
+        plan->display_deadline_ns > state.common_ns + DISPLAY_LEAD_NS + UINT64_C(100000000) ||
+        (state.have_sequence && (int32_t)(plan->sequence - state.received_sequence) <= 0)) {
+        state.reason = WAVEFORM_REASON_PLAN_REJECTED;
+        return false;
+    }
+    if (plan->display_deadline_ns <= state.common_ns &&
+        state.common_ns - plan->display_deadline_ns >= PLAN_LATE_NS) {
+        state.reason = WAVEFORM_REASON_PLAN_LATE;
+        return false;
+    }
+    state.now_ms = now_ms;
     state.plan = *plan;
+    RememberLocalPeriod(plan);
+    state.candidate_period_ns = state.local_period_ns;
+    state.reason = plan->mode == WAVEFORM_MODE_PERIOD ? WAVEFORM_REASON_PERIOD_LOCKED : WAVEFORM_REASON_RAW;
     state.pending = true;
     state.have_sequence = true;
     state.received_sequence = plan->sequence;
