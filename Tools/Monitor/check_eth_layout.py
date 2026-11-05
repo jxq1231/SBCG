@@ -70,8 +70,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preset", choices=("Debug", "Release"), default="Debug")
     parser.add_argument("--elf", type=Path)
+    parser.add_argument("--min-stack-bytes", type=int, default=0,
+                        help="Require at least this many bytes between _sstack and _estack")
     parser.add_argument("--ioc", type=Path, default=ROOT / "SBCG.ioc")
     args = parser.parse_args()
+    if args.min_stack_bytes < 0:
+        parser.error("--min-stack-bytes must be nonnegative")
     elf = args.elf or ROOT / "build" / args.preset / "SBCG.elf"
     try:
         fields = dict(line.split("=", 1) for line in
@@ -126,6 +130,8 @@ def main():
         expected_stack_top = 0x20048000 if has_lwip else SRAM2_START
         check(stack_top == expected_stack_top and stack_bottom < stack_top,
               f"MSP range below reserved network memory: 0x{stack_bottom:08X}..0x{stack_top:08X}")
+        check(stack_top - stack_bottom >= args.min_stack_bytes,
+              f"MSP reserve >= {args.min_stack_bytes} bytes (actual {stack_top - stack_bottom})")
         check(symbols["_end"][0] <= stack_bottom and symbols["_ebss"][0] <= stack_bottom,
               "static data and newlib heap start below reserved MSP stack")
         reserved = {".TxDecripSection", ".RxDecripSection"}

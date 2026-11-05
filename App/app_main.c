@@ -8,6 +8,9 @@
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
 #include "app_main.h"
+#ifdef SBCG_STACK_DIAGNOSTIC
+#include "BSP/bsp_stack_diag.h"
+#endif
 #ifdef SBCG_USE_ADVANCED_UI
 #include "Network/clap_wire.h"
 #include "UI/waveform_service.h"
@@ -564,6 +567,10 @@ static bool ModeWavePlannerAllowed(void)
  */
 static void RefreshRanging(uint32_t now_ms)
 {
+#ifdef SBCG_STACK_DIAGNOSTIC
+    /* 此入口也会从A板结果回调和UDP接收路径进入，采样当前调用深度。 */
+    BSP_StackDiag_Observe();
+#endif
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL)return;
     TimeDomainSnapshot domain;TimeDomain_Get(&domain);
@@ -1719,8 +1726,43 @@ static void LoopHistogramReport(uint32_t now_ms)
 }
 #endif
 
+#ifdef SBCG_STACK_DIAGNOSTIC
+/**
+ * @brief   每5秒将MSP涂色水位、最低采样和哨兵状态写入日志队列。
+ * @param   now_ms 本机毫秒计数，支持常规回绕。
+ * @return  无返回值。
+ * @note    单独保留格式化栈帧，诊断日志沿用前台队列和DHT保护。
+ */
+static __attribute__((noinline)) void ReportStack(uint32_t now_ms)
+{
+    static uint32_t last_report_ms;
+    if ((uint32_t)(now_ms - last_report_ms) < 5000U) { return; }
+    last_report_ms = now_ms;
+
+    BSP_StackDiagSnapshot stack;
+    if (!BSP_StackDiag_Read(&stack))
+    {
+        static const char error[] = "$STACK,ERROR=PAINT_RANGE\r\n";
+        SendLine(error, (int)(sizeof error - 1U));
+        return;
+    }
+
+    const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+    const char role = profile == NULL ? '?' : (profile->role == BOARD_ROLE_A ? 'A' : 'B');
+    char line[144];
+    const int length = snprintf(line, sizeof line,
+        "$STACK,ROLE=%c,RESERVE_B=%" PRIu32 ",HWM_B=%" PRIu32 ",MIN_MSP=%08" PRIX32
+        ",LIMIT=%08" PRIX32 ",GUARD=%u\r\n", role, stack.reserve_bytes,
+        stack.painted_used_bytes, stack.min_msp, stack.limit, stack.guard_ok ? 1U : 0U);
+    SendLine(line, length);
+}
+#endif
+
 void App_Process(void)
 {
+#ifdef SBCG_STACK_DIAGNOSTIC
+    BSP_StackDiag_Observe();
+#endif
 #ifdef SBCG_USE_BOARD_IDENTITY
     /* 未知UID时LwIP尚未初始化；只保留BOOT/角色诊断，不触碰网卡或其它业务。 */
     if (!app_identity_configured) { return; }
@@ -1953,6 +1995,12 @@ void App_Process(void)
         max_loop_other_ms = loop_ms > known ? loop_ms - known : 0U;
     }
     LoopHistogramRecord(loop_ms);
+#ifdef SBCG_STACK_DIAGNOSTIC
+    if (!TemperatureService_IsStartLowActive())
+    {
+        ReportStack(BSP_Console_GetTickMs());
+    }
+#endif
 #if defined(SBCG_USE_AUDIO)
     /* 每5秒输出低频率A3分解：最大循环的OTHER/Flush与AudioCapture内部最大轮。 */
     if ((uint32_t)(BSP_Console_GetTickMs() - last_profile_ms) >= 5000U) {

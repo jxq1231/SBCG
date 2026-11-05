@@ -24,6 +24,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
+#ifdef SBCG_STACK_DIAGNOSTIC
+#include "BSP/bsp_stack_diag.h"
+#endif
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
 #include "BSP/bsp_reset.h"
 #endif
@@ -95,6 +98,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+#ifdef SBCG_STACK_DIAGNOSTIC
+  /* 在HAL启动中断前涂写MSP预留区，跳过当前main栈帧。 */
+  BSP_StackDiag_Paint();
+#endif
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
   /* 在HAL/时钟初始化前保存并清除累计复位状态，不改变时钟或引脚配置。 */
   BSP_Reset_Capture();

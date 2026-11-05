@@ -1,10 +1,10 @@
 /* User-owned extension of the unchanged CubeMX memory/section definitions. */
 INCLUDE STM32F746xx_FLASH.ld
 
-/* UART RX can interrupt snprintf/network processing. Debug HAL's IRQ frame
-   alone uses ~240 bytes; reserve 4 KiB for foreground + nested IRQ frames.
-   Override only in this user-owned wrapper, never the CubeMX base script. */
-_Min_Stack_Size = 0x1000;
+/* The diagnostic image adds 4 KiB below MSP, reducing the newlib heap.
+   Keep the CubeMX base script and the fixed network regions independent. */
+PROVIDE(__sbcg_stack_diagnostic = 0);
+_Min_Stack_Size = __sbcg_stack_diagnostic ? 0x2000 : 0x1000;
 
 /* CMake defines this only for the generated LwIP configuration. Keep legacy
    PHY-only snapshots buildable with their original stack location. */
@@ -66,6 +66,8 @@ ASSERT(!__sbcg_has_lwip || SIZEOF(.RxPoolSection) > 0,
        "LwIP RX pool must be placed in reserved SRAM2")
 ASSERT(ADDR(.RxPoolSection) + SIZEOF(.RxPoolSection) <= ORIGIN(RAM) + LENGTH(RAM),
        "LwIP RX pool exceeds SRAM2")
+ASSERT((_sstack % 8) == 0 && (_estack % 8) == 0,
+       "MSP reserve must have aligned bounds")
 ASSERT(_ebss <= _sstack && _edata <= _sstack && _end + _Min_Heap_Size <= _sstack,
        "Static data or minimum heap overlaps reserved MSP/ETH memory")
 ASSERT(ADDR(._user_heap_stack) + SIZEOF(._user_heap_stack) <= _estack,
