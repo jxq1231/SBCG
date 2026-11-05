@@ -1677,18 +1677,6 @@ static void SoundNoticeDrain(uint32_t now_ms)
  * 调度顺序：温度服务先更新当前DATA状态，后续模块据此门控，末尾最多排空一行日志。
  * 调用关系：由main的while(1)反复调用；各服务自行节流，不代表固定频率任务。
  */
-/**
- * @brief   推进一轮前台处理、周期状态输出及延后日志发送。
- * @return  无返回值（void）。
- * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
- *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
- *          DHT低态仍逐轮将最新域资格复制给UDP层；模式控制收包只暂存，前台处理延后至允许时。
- *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
- *          WAVE全滞后搜索在网络及测距处理后每轮只推进一批，避免回调重复计算。
- *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
- *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
- *          PROFILE2分段计时仅随CHIRP诊断启用；其他构建不读取或更新该诊断状态。
- */
 #ifdef SBCG_USE_CHIRP
 /** @brief 将一轮前台耗时计入固定毫秒桶并记录窗口最大值。 @param ms 本轮前台耗时毫秒。 @return 无返回值。 */
 static void LoopHistogramRecord(uint32_t ms)
@@ -1758,6 +1746,70 @@ static __attribute__((noinline)) void ReportStack(uint32_t now_ms)
 }
 #endif
 
+#if defined(SBCG_USE_CHIRP) && defined(SBCG_USE_AUDIO)
+/**
+ * @brief 输出到期的主循环、音频及波形诊断快照。
+ * @return 无返回值。
+ * @note 仅由App_Process每5秒在原日志位置调用。保持独立栈帧，
+ *       避免常驻前台在进入网络回调时仍预留波形PCM快照空间。
+ */
+static __attribute__((noinline)) void ReportLoopProfile(void)
+{
+    AudioCaptureProfile audio_profile;
+    AudioCapture_GetProfile(&audio_profile);
+    char line[256];
+    int length = snprintf(line, sizeof(line),
+        "$PROFILE,LOOP_MS=%" PRIu32 ",AUDIO_MS=%" PRIu32 ",UI_MS=%" PRIu32
+        ",OTHER_MS=%" PRIu32 ",FLUSH_MS=%" PRIu32 "\r\n",
+        max_loop_ms, max_loop_audio_ms, max_loop_ui_ms, max_loop_other_ms,
+        max_loop_flush_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    length = snprintf(line, sizeof(line),
+        "$PROFILE2,LWIP_MS=%" PRIu32 ",TEMP_MS=%" PRIu32 ",SND_MS=%" PRIu32 "\r\n",
+        prof_lwip_max_ms, prof_temp_max_ms, prof_sound_max_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    prof_lwip_max_ms = prof_temp_max_ms = prof_sound_max_ms = 0U;
+    LoopHistogramReport(BSP_Console_GetTickMs());
+    length = snprintf(line, sizeof(line),
+        "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
+        ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32
+        ",CH_PROC_MS=%" PRIu32 ",IO_MS=%" PRIu32 ",LOG_MS=%" PRIu32
+        ",OTHER_MS=%" PRIu32 "\r\n", audio_profile.total_ms, audio_profile.stats_ms,
+        audio_profile.sound_stage_ms, audio_profile.sound_process_ms,
+        audio_profile.chirp_stage_ms, audio_profile.chirp_complete_ms,
+        audio_profile.chirp_process_ms, audio_profile.io_ms, audio_profile.log_ms,
+        audio_profile.other_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+#ifdef SBCG_USE_ADVANCED_UI
+    WaveformSnapshot wave_ui;
+    WaveformService_GetSnapshot(&wave_ui);
+    length = snprintf(line, sizeof(line),
+        "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%lu"
+        ",SEQ=%" PRIu32 ",STATE=%u,CAND_MHZ=%" PRIu32 ",AGE_MS=%" PRIu32
+        ",CONF=%u,WHY=%u,WORK_MS=%" PRIu32 "\r\n",
+        wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
+        wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
+        (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state,
+        wave_ui.candidate_milli_hz, wave_ui.period_age_ms,
+        (unsigned)wave_ui.confirmation_count, (unsigned)wave_ui.reason,wave_update_max_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    wave_update_max_ms=0U;
+#endif
+}
+#endif
+
+/**
+ * @brief   推进一轮前台处理、周期状态输出及延后日志发送。
+ * @return  无返回值（void）。
+ * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
+ *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
+ *          DHT低态仍逐轮将最新域资格复制给UDP层；模式控制收包只暂存，前台处理延后至允许时。
+ *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
+ *          WAVE全滞后搜索在网络及测距处理后每轮只推进一批，避免回调重复计算。
+ *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
+ *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
+ *          PROFILE2分段计时仅随CHIRP诊断启用；其他构建不读取或更新该诊断状态。
+ */
 void App_Process(void)
 {
 #ifdef SBCG_STACK_DIAGNOSTIC
@@ -2005,46 +2057,7 @@ void App_Process(void)
     /* 每5秒输出低频率A3分解：最大循环的OTHER/Flush与AudioCapture内部最大轮。 */
     if ((uint32_t)(BSP_Console_GetTickMs() - last_profile_ms) >= 5000U) {
         last_profile_ms = BSP_Console_GetTickMs();
-        AudioCaptureProfile audio_profile;
-        AudioCapture_GetProfile(&audio_profile);
-        char line[256];
-        int length = snprintf(line, sizeof(line),
-            "$PROFILE,LOOP_MS=%" PRIu32 ",AUDIO_MS=%" PRIu32 ",UI_MS=%" PRIu32
-            ",OTHER_MS=%" PRIu32 ",FLUSH_MS=%" PRIu32 "\r\n",
-            max_loop_ms, max_loop_audio_ms, max_loop_ui_ms, max_loop_other_ms,
-            max_loop_flush_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-        length = snprintf(line, sizeof(line),
-            "$PROFILE2,LWIP_MS=%" PRIu32 ",TEMP_MS=%" PRIu32 ",SND_MS=%" PRIu32 "\r\n",
-            prof_lwip_max_ms, prof_temp_max_ms, prof_sound_max_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-        prof_lwip_max_ms = prof_temp_max_ms = prof_sound_max_ms = 0U;
-        LoopHistogramReport(BSP_Console_GetTickMs());
-        length = snprintf(line, sizeof(line),
-            "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
-            ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32
-            ",CH_PROC_MS=%" PRIu32 ",IO_MS=%" PRIu32 ",LOG_MS=%" PRIu32
-            ",OTHER_MS=%" PRIu32 "\r\n", audio_profile.total_ms, audio_profile.stats_ms,
-            audio_profile.sound_stage_ms, audio_profile.sound_process_ms,
-            audio_profile.chirp_stage_ms, audio_profile.chirp_complete_ms,
-            audio_profile.chirp_process_ms, audio_profile.io_ms, audio_profile.log_ms,
-            audio_profile.other_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-#ifdef SBCG_USE_ADVANCED_UI
-        WaveformSnapshot wave_ui;
-        WaveformService_GetSnapshot(&wave_ui);
-        length = snprintf(line, sizeof(line),
-            "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%lu"
-            ",SEQ=%" PRIu32 ",STATE=%u,CAND_MHZ=%" PRIu32 ",AGE_MS=%" PRIu32
-            ",CONF=%u,WHY=%u,WORK_MS=%" PRIu32 "\r\n",
-            wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
-            wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
-            (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state,
-            wave_ui.candidate_milli_hz, wave_ui.period_age_ms,
-            (unsigned)wave_ui.confirmation_count, (unsigned)wave_ui.reason,wave_update_max_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-        wave_update_max_ms=0U;
-#endif
+        ReportLoopProfile();
     }
 #endif
 #endif
