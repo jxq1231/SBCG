@@ -77,6 +77,10 @@ protected:
     void refreshClap();
     /** @brief 可见时刷新波形CPU快照及共同窗状态。@return 无返回值。 */
     void refreshWaveform();
+    /** @brief 刷新本地页/请求模式/生效模式的顶部两行状态。@return 无返回值。 */
+    void refreshMode();
+    /** @brief 当前本地页对应的生效模式是否已激活。@param page 本地页面。@return 已激活或未登记代次为true。 */
+    bool pageModeActive(Page page) const;
     uint32_t lastGeneration;
     bool haveGeneration;
     Page activePage;

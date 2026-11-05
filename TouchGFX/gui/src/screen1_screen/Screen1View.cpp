@@ -19,7 +19,7 @@ extern "C" {
 }
 
 /** @brief 组员信息；Verdana字体无中文字形，姓名使用拼音以保证可显示。 */
-static const char kGroupMembers[] = "SBCG PROJECT TEAM";
+static const char kGroupMembers[] = "23211181 JIN XUANQI / 22211151 LU JINPENG";
 
 /** @brief 清空尚未接收的CPU波形副本。@return 构造无返回值。 */
 WaveformWidget::WaveformWidget() : frame{}, haveFrame(false) {}
@@ -115,6 +115,33 @@ static void UpdateText(touchgfx::TextAreaWithOneWildcard& widget,
     }
 }
 
+#ifdef SBCG_USE_MODE_OBSERVATION
+/** @brief 本地页面索引到请求模式的映射；未知索引返回MODE_NONE。 @param page 页面索引0..3。 @return 模式枚举。 */
+static ModeKind ModeForPageIndex(uint8_t page)
+{
+    switch (page)
+    {
+    case 0: return MODE_RANGE;
+    case 1: return MODE_CLAP;
+    case 2: return MODE_WAVE;
+    case 3: return MODE_CALIBRATION;
+    default: return MODE_NONE;
+    }
+}
+/** @brief 模式短标签，用于顶部只读状态行。 @param mode 模式枚举。 @return 静态短字符串。 */
+static const char* ModeShortName(ModeKind mode)
+{
+    switch (mode)
+    {
+    case MODE_RANGE: return "RNG";
+    case MODE_CLAP: return "CLP";
+    case MODE_WAVE: return "WAV";
+    case MODE_CALIBRATION: return "CAL";
+    default: return "--";
+    }
+}
+#endif
+
 /** @brief 初始化本视图的数据版本门控；尚未读取业务。@return 无返回值。 */
 Screen1View::Screen1View() : lastGeneration(0), haveGeneration(false),
     activePage(RANGE), pressedControl(-1), confirmation(CALIBRATION_ACTION_NONE),
@@ -131,7 +158,7 @@ void Screen1View::configureNavigation()
     const auto white = touchgfx::Color::getColorFromRGB(232, 240, 248);
     const auto accent = touchgfx::Color::getColorFromRGB(45, 212, 191);
     // 组员信息固定显示在顶部状态行下沿，不占用各页面板区域。
-    roleText.setPosition(110, 8, 180, 24);
+    roleText.setPosition(110, 8, 200, 24);
     header.setPosition(319, 6, 150, 20);
     groupLine.setPosition(110, 33, 358, 12);
     groupLine.setTypedText(touchgfx::TypedText(T_T_DETAILTEXT));
@@ -261,6 +288,7 @@ void Screen1View::showPage(Page page)
     if(page == CLAP) { refreshClap(); }
     if(page == WAVE) { refreshWaveform(); }
     refreshNavigation();
+    refreshMode();
     invalidate();
 }
 
@@ -311,7 +339,20 @@ void Screen1View::handleClickEvent(const touchgfx::ClickEvent& event)
         if (event.getType() == touchgfx::ClickEvent::RELEASED && touch.sample_valid && selected>=0)
         {
             if(selected<PAGE_COUNT && selected==navigationAt(event.getX(),event.getY()))
+            {
                 showPage(static_cast<Page>(selected));
+#ifdef SBCG_USE_MODE_OBSERVATION
+                /* 只允许A的有效导航提出一次模式请求；B只改变本地页面。 */
+                ModeSnapshot mode;
+                App_GetModeSnapshot(&mode);
+                if(mode.role==BOARD_ROLE_A)
+                {
+                    const ModeKind target=ModeForPageIndex(static_cast<uint8_t>(activePage));
+                    if(target!=MODE_NONE)(void)App_ModeRequest(target);
+                }
+                refreshMode();
+#endif
+            }
             else if(selected>=PAGE_COUNT && selected-PAGE_COUNT==settingAt(event.getX(),event.getY()))
                 selectSetting(static_cast<uint8_t>(selected-PAGE_COUNT));
         }
@@ -352,6 +393,7 @@ void Screen1View::handleTickEvent()
 {
     Screen1ViewBase::handleTickEvent();
     refreshStatus();
+    refreshMode();
     if(activePage==SETUP)refreshCalibration();
     if(activePage==CLAP)refreshClap();
     if(activePage==WAVE)refreshWaveform();
@@ -360,6 +402,15 @@ void Screen1View::handleTickEvent()
 /** @brief 读取独立击掌结果；撤值后立即移除旧数字。@return 无返回值，RANGE控件不受影响。 */
 void Screen1View::refreshClap()
 {
+    if (!pageModeActive(CLAP))
+    {
+        UpdateText(pageLines[0], pageLineBuffers[0], "MODE NOT ACTIVE");
+        UpdateText(pageLines[1], pageLineBuffers[1], "REQUEST CLAP FROM A");
+        UpdateText(pageLines[2], pageLineBuffers[2], "--");
+        UpdateText(pageLines[3], pageLineBuffers[3], "WAITING FOR MODE HANDSHAKE");
+        UpdateText(pageLines[4], pageLineBuffers[4], "NO OLD RESULT SHOWN");
+        return;
+    }
     ClapRangingSnapshot clap;
     App_GetClapSnapshot(&clap);
     char text[64];
@@ -384,6 +435,14 @@ void Screen1View::refreshClap()
 /** @brief 可见时取CPU波形并显示实际窗口和同步资格，未同步仍画本地原始PCM。@return 无返回值。 */
 void Screen1View::refreshWaveform()
 {
+    if (!pageModeActive(WAVE))
+    {
+        waveform.setVisible(false);
+        UpdateText(pageLines[0], pageLineBuffers[0], "MODE NOT ACTIVE");
+        UpdateText(pageLines[1], pageLineBuffers[1], "REQUEST WAVE FROM A");
+        return;
+    }
+    waveform.setVisible(true);
     waveform.refresh();
     const auto& wave = waveform.snapshot();
     UpdateText(pageLines[0],pageLineBuffers[0],!wave.valid?"NO DATA / NO AUDIO":
@@ -441,6 +500,12 @@ void Screen1View::refreshCalibration()
     const char* labels[3]={"CALIBRATE",control.calibration.enabled?"DISABLE":"ENABLE","CLEAR"};
     settingEnabled[0]=control.authority && control.sample_available;
     settingEnabled[1]=settingEnabled[2]=control.authority && control.calibration.calibrated;
+    const bool mode_active = pageModeActive(SETUP);
+    if (confirmation != CALIBRATION_ACTION_NONE && control.authority && !mode_active)
+    {
+        confirmation = CALIBRATION_ACTION_NONE;
+        requestRejected = false;
+    }
     if(confirmation!=CALIBRATION_ACTION_NONE)
     {
         labels[0]="CONFIRM";labels[1]="CANCEL";labels[2]="--";
@@ -484,6 +549,11 @@ void Screen1View::refreshCalibration()
     case CALIBRATION_CONTROL_OUT_OF_RANGE:feedback="LAST: OFFSET OUT OF RANGE";break;
     default:break;
     }
+    if (!mode_active && control.authority)
+    {
+        settingEnabled[0] = settingEnabled[1] = settingEnabled[2] = false;
+        feedback = "MODE WAIT: REQUEST SETUP";
+    }
     std::snprintf(lines[3],sizeof lines[3],"%s",feedback);
     for(uint8_t i=0;i<4U;++i)
     {
@@ -509,21 +579,92 @@ void Screen1View::refreshStatus()
 {
     UI_StatusText text;
     uint32_t generation;
-    if (!UI_TouchGFX_GetText(&text, &generation) ||
-        (haveGeneration && generation == lastGeneration)) { return; }
-    UpdateText(roleText, roleTextBuffer, text.role);
-    UpdateText(distanceText, distanceTextBuffer, text.distance);
-    UpdateText(directionText, directionTextBuffer, text.direction);
-    UpdateText(qualityText, qualityTextBuffer, text.quality);
-    UpdateText(syncText, syncTextBuffer, text.sync);
-    UpdateText(offsetText, offsetTextBuffer, text.offset);
-    UpdateText(networkText, networkTextBuffer, text.network);
-    UpdateText(sourceText, sourceTextBuffer, text.temperature_source);
-    UpdateText(temperatureText, temperatureTextBuffer, text.temperature);
-    UpdateText(speedText, speedTextBuffer, text.speed);
-    UpdateText(audioText, audioTextBuffer, text.audio);
-    UpdateText(detailText, detailTextBuffer, text.audio_detail);
-    UpdateText(eventsText, eventsTextBuffer, text.counts);
-    lastGeneration = generation;
-    haveGeneration = true;
+    if (!UI_TouchGFX_GetText(&text, &generation)) { return; }
+    if (!haveGeneration || generation != lastGeneration)
+    {
+        UpdateText(roleText, roleTextBuffer, text.role);
+        UpdateText(distanceText, distanceTextBuffer, text.distance);
+        UpdateText(directionText, directionTextBuffer, text.direction);
+        UpdateText(qualityText, qualityTextBuffer, text.quality);
+        UpdateText(syncText, syncTextBuffer, text.sync);
+        UpdateText(offsetText, offsetTextBuffer, text.offset);
+        UpdateText(networkText, networkTextBuffer, text.network);
+        UpdateText(sourceText, sourceTextBuffer, text.temperature_source);
+        UpdateText(temperatureText, temperatureTextBuffer, text.temperature);
+        UpdateText(speedText, speedTextBuffer, text.speed);
+        UpdateText(audioText, audioTextBuffer, text.audio);
+        UpdateText(detailText, detailTextBuffer, text.audio_detail);
+        UpdateText(eventsText, eventsTextBuffer, text.counts);
+        lastGeneration = generation;
+        haveGeneration = true;
+    }
+    if (activePage == RANGE)
+    {
+        /* 本地页不等于生效模式时不显示旧距离，只提示等待/当前生效模式。 */
+        if (pageModeActive(RANGE))
+        {
+            waiting.setVisible(false);
+            UpdateText(distanceText, distanceTextBuffer, text.distance);
+            UpdateText(directionText, directionTextBuffer, text.direction);
+            UpdateText(qualityText, qualityTextBuffer, text.quality);
+        }
+        else
+        {
+            waiting.setVisible(true);
+            UpdateText(distanceText, distanceTextBuffer, "-- M");
+            UpdateText(directionText, directionTextBuffer, "SIDE --");
+            UpdateText(qualityText, qualityTextBuffer, "QUALITY --");
+        }
+    }
+}
+
+/**
+ * @brief 刷新顶部两行：本地页/A请求模式/生效模式。
+ * @return 无返回值；只在模式快照或页面变化时失效对应文本。
+ * @note 未登记启动代次时仍显示本地页，不伪造生效模式。
+ */
+void Screen1View::refreshMode()
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    App_GetModeSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U) { return; }
+    char text[24];
+    const bool pending = mode.requested != MODE_NONE && mode.requested != mode.effective;
+    if (mode.role == BOARD_ROLE_A)
+    {
+        std::snprintf(text, sizeof text, "A RQ:%s%s EF:%s",
+            ModeShortName(mode.requested), pending ? "+" : "",
+            ModeShortName(mode.effective));
+    }
+    else
+    {
+        std::snprintf(text, sizeof text, "B VW:%s EF:%s",
+            ModeShortName(ModeForPageIndex(static_cast<uint8_t>(activePage))),
+            ModeShortName(mode.effective));
+    }
+    UpdateText(roleText, roleTextBuffer, text);
+#else
+    (void)0;
+#endif
+}
+
+/**
+ * @brief 判断本地页面对应的生效模式是否已激活。
+ * @param page 本地页面枚举。
+ * @return 未登记代次恒true；登记后要求ACTIVE且生效模式与页面一致。
+ */
+bool Screen1View::pageModeActive(Page page) const
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    App_GetModeSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U) { return true; }
+    if (mode.state != MODE_ACTIVE) { return false; }
+    const ModeKind target = ModeForPageIndex(static_cast<uint8_t>(page));
+    return target != MODE_NONE && mode.effective == target;
+#else
+    (void)page;
+    return true;
+#endif
 }

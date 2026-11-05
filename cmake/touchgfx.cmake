@@ -73,6 +73,8 @@ foreach(_target IN ITEMS ${CMAKE_PROJECT_NAME} TouchGFX)
     set_property(TARGET ${_target} PROPERTY CXX_STANDARD 17)
     set_property(TARGET ${_target} PROPERTY CXX_STANDARD_REQUIRED ON)
 endforeach()
+# 用户View与App共用模式观测接口：GUI库目标也需同一编译开关，否则模式状态行被条件编译掉。
+target_compile_definitions(TouchGFX PRIVATE SBCG_USE_MODE_OBSERVATION=1)
 # Both generated target CPP and Designer frontend CPP consume App interfaces.
 target_include_directories(stm32cubemx INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/App")
 

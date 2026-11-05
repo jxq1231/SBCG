@@ -95,6 +95,9 @@ int touchgfx::LCD::trace_min=32767,touchgfx::LCD::trace_max=-32768;
 static WaveformSnapshot wave{};static ClapRangingSnapshot clap{};
 static unsigned wave_reads=0;
 extern "C" void App_GetClapSnapshot(ClapRangingSnapshot*out){*out=clap;}
+static ModeSnapshot mode_state{};static unsigned mode_requests=0;static ModeKind mode_last=MODE_NONE;
+extern "C" void App_GetModeSnapshot(ModeSnapshot*out){*out=mode_state;}
+extern "C" bool App_ModeRequest(ModeKind mode){++mode_requests;mode_last=mode;mode_state.requested=mode;return true;}
 extern "C" void WaveformService_GetSnapshot(WaveformSnapshot*out){*out=wave;++wave_reads;}
 static UI_StatusText page{}; static uint32_t generation=1; static bool available=false;
 static bool touch_valid=true;
@@ -126,6 +129,7 @@ void dump(int page){
  for(int i=0;i<4;++i){dumpWidget(page,"navTile",navigationTiles[i]);dumpWidget(page,"navLabel",navigationLabels[i],navigationLabels[i].font,navigationLabels[i].text);}
 }
 bool titleIs(const char*t){return equals(pageTitleBuffer,t);}
+
 bool lineIs(int i,const char*t){return equals(pageLineBuffers[i],t);}
 unsigned wavePaints()const{return waveform.invalidations;}
 void drawWave(touchgfx::Rect area){waveform.draw(area);}
@@ -133,6 +137,8 @@ unsigned settingInvalidations()const{unsigned n=0;for(int i=0;i<3;++i)n+=setting
 };
 static void tap(Screen1View&v,int x,int y){v.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,x,y));v.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,x,y));}
 int main(){
+ mode_state.role=BOARD_ROLE_A;mode_state.state=MODE_ACTIVE;mode_state.requested=MODE_RANGE;
+ mode_state.effective=MODE_RANGE;mode_state.a_boot=0U;mode_state.b_boot=0U;mode_state.mode_seq=0U;
  InspectView view; view.setupScreen(); assert(view.roleText.invalidations==0);
  available=true; std::strcpy(page.role,"BOARD A");std::strcpy(page.distance,"-- M");
  std::strcpy(page.direction,"SIDE --");std::strcpy(page.quality,"QUALITY --");
@@ -153,11 +159,15 @@ int main(){
  assert(view.distanceText.invalidations==1);
  available=false;++generation;view.handleTickEvent();assert(view.roleText.invalidations==2);
  view.tearDownScreen();
+ // Enable mode tracking for page-request tests; STATUS text stays for zero boots.
+ mode_state.a_boot=1U;mode_state.b_boot=2U;mode_state.mode_seq=1U;
  // Navigation must act on release; entering another page hides the ranging widgets.
  view.setupScreen();
+ mode_state.requested=MODE_CLAP;mode_state.effective=MODE_CLAP;mode_requests=0U;
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,180,250));
  assert(view.measurePanel.isVisible());
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,180,250));
+ assert(mode_requests==1U && mode_last==MODE_CLAP);
  assert(!view.measurePanel.isVisible());
  assert(view.titleIs("CLAP RANGING"));
  assert(view.lineIs(0,"WAIT / NO CLAP"));
@@ -196,12 +206,14 @@ int main(){
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,195));
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,195));
  assert(!view.measurePanel.isVisible());
+ mode_state.requested=MODE_RANGE;mode_state.effective=MODE_RANGE;
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,60,250));
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,60,250));
  assert(view.measurePanel.isVisible());assert(equals(view.distanceTextBuffer,"0.325 M"));
  // Hidden WAVE never polls or invalidates; re-entering fetches the latest CPU frame.
  const unsigned hidden_reads=wave_reads;
  for(int i=0;i<20;++i)view.handleTickEvent();assert(wave_reads==hidden_reads);
+ mode_state.requested=MODE_WAVE;mode_state.effective=MODE_WAVE;
  wave.valid=true;wave.frame_seq=1;wave.point_count=960;wave.window_span_ns=20000000;wave.source=WAVEFORM_SOURCE_LOCAL;
  for(int i=0;i<960;++i)wave.points[i]=(i%2)?32767:-32768;
  tap(view,300,250);assert(view.lineIs(0,"LOCAL / UNSYNCED"));
@@ -230,8 +242,10 @@ int main(){
  assert(touchgfx::LCD::trace_max-touchgfx::LCD::trace_min<=1);
  ++wave.frame_seq;wave.valid=false;view.handleTickEvent();assert(view.lineIs(0,"NO DATA / NO AUDIO"));
  touchgfx::LCD::fills=0;view.drawWave(touchgfx::Rect(0,0,432,78));assert(touchgfx::LCD::fills==3);
+ mode_state.requested=MODE_RANGE;mode_state.effective=MODE_RANGE;
  tap(view,60,250);++wave.frame_seq;wave.valid=true;wave.synced=false;wave.source=WAVEFORM_SOURCE_LOCAL;wave.period_valid=false;
  const unsigned hidden_paints=view.wavePaints();view.handleTickEvent();assert(view.wavePaints()==hidden_paints);
+ mode_state.requested=MODE_WAVE;mode_state.effective=MODE_WAVE;
  tap(view,300,250);assert(view.lineIs(0,"LOCAL / UNSYNCED"));assert(view.wavePaints()==hidden_paints+1);
  tap(view,60,250);
  // Gaps/outside navigation do not activate a page.
@@ -251,6 +265,7 @@ int main(){
  // A capture requires confirmation, preserves the displayed sample key, and cancels on navigation.
  calibration.authority=true;calibration.sample_available=true;
  calibration.sample={490,20,30,7,2,1000000000U};
+ mode_state.role=BOARD_ROLE_A;mode_state.requested=MODE_CALIBRATION;mode_state.effective=MODE_CALIBRATION;
  view.handleTickEvent();
  tap(view,220,202);tap(view,370,202);assert(calibration_requests==0); // no saved coefficients
  tap(view,70,202);assert(calibration_requests==0);
@@ -295,6 +310,27 @@ int main(){
  const unsigned paints=view.settingInvalidations();
  for(int i=0;i<20;++i)view.handleTickEvent();
  assert(view.settingInvalidations()==paints); // unchanged settings must not force VSYNC redraws
+ // Phase 5: B only browses; A sends one request per valid release; pending never shows stale data.
+ mode_state.role=BOARD_ROLE_B;mode_state.requested=MODE_RANGE;mode_state.effective=MODE_RANGE;mode_requests=0;
+ tap(view,300,250);
+ assert(mode_requests==0U && view.titleIs("MICROPHONE WAVEFORM"));
+ assert(view.lineIs(0,"MODE NOT ACTIVE"));
+ assert(equals(view.roleTextBuffer,"B VW:WAV EF:RNG"));
+ mode_state.role=BOARD_ROLE_A;mode_requests=0;
+ tap(view,300,250);assert(mode_requests==1U && mode_last==MODE_WAVE);
+ mode_state.requested=MODE_WAVE;mode_state.effective=MODE_RANGE;view.handleTickEvent();
+ assert(equals(view.roleTextBuffer,"A RQ:WAV+ EF:RNG"));
+ assert(view.lineIs(0,"MODE NOT ACTIVE"));
+ mode_state.effective=MODE_WAVE;view.handleTickEvent();
+ assert(equals(view.roleTextBuffer,"A RQ:WAV EF:WAV"));
+ mode_state.requested=MODE_RANGE;mode_state.effective=MODE_RANGE;mode_requests=0;
+ tap(view,180,250);tap(view,60,250);tap(view,180,250);
+ assert(mode_requests==3U && mode_last==MODE_CLAP && view.titleIs("CLAP RANGING"));
+ assert(equals(view.roleTextBuffer,"A RQ:CLP+ EF:RNG"));
+ assert(view.lineIs(0,"MODE NOT ACTIVE"));
+ mode_state.requested=MODE_CLAP;mode_state.effective=MODE_CLAP;view.handleTickEvent();
+ assert(equals(view.roleTextBuffer,"A RQ:CLP EF:CLP"));
+ assert(view.lineIs(0,"HELD / LAST CLAP"));
 }
 '''
 dump_calls=[]
@@ -303,7 +339,7 @@ for kind,name in re.findall(r'touchgfx::(Box|TextArea|TextAreaWithOneWildcard) (
     dump_calls.append(f'dumpWidget(page,"{name}",{name}{args});')
 test.write_text(test_source.replace('// DUMP_WIDGETS','\n'.join(dump_calls)),encoding='utf-8')
 exe = out / 'view.exe'
-subprocess.run([shutil.which('g++'), '-std=c++17', '-Wall', '-Wextra', '-Werror',
+subprocess.run([shutil.which('g++'), '-std=c++17', '-Wall', '-Wextra', '-Werror', '-DSBCG_USE_MODE_OBSERVATION=1',
                 '-I', str(out/'include'), '-I', str(root/'TouchGFX/gui/include'),
                 '-I', str(root/'App'), str(test),
                 str(root/'TouchGFX/gui/src/screen1_screen/Screen1View.cpp'),
