@@ -39,7 +39,7 @@ if(_sbcg_audio_mode)
             target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_MODE_TEST_CONTROL=1)
         endif()
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-            App/Mode/mode_service.c App/Network/mode_wire.c
+            App/Mode/mode_service.c App/Network/mode_wire.c App/Network/business_wire.c
             App/BSP/boot_counter_record.c App/BSP/bsp_boot_counter.c App/BSP/bsp_flash_ram.c
             App/Detector/sound_event_time.c App/Detector/standard_sequence.c App/Detector/event_classifier.c App/Sync/time_domain.c
             App/Measure/sound_pair.c App/Measure/waveform_tdoa.c App/Measure/measurement_result.c App/Measure/measurement_gate.c App/Measure/ranging_tracker.c App/Measure/result_exchange_state.c App/Calibration/calibration.c

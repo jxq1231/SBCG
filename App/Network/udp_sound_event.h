@@ -100,6 +100,46 @@ bool UDPSoundEvent_SendRangingSession(uint32_t now_ms,const RangingSessionMessag
 typedef void (*UDPSoundEvent_ModeControlSink)(const ModeControlMessage *message);
 
 /**
+ * @brief MDB1业务闸门上下文；由应用在前台查询模式状态后填写。
+ * @note configured=false表示未登记启动代次，保持阶段一原始未封装收发作为兼容路径；
+ *       configured=true时受保护报文必须封装且世代匹配，禁止原始旧包写入业务状态。
+ */
+typedef struct
+{
+    bool configured;
+    bool allowed;
+    BoardRole role;
+    uint64_t a_boot;
+    uint64_t b_boot;
+    uint64_t mode_seq;
+} UDPSoundEvent_BusinessContext;
+
+/**
+ * @brief 业务闸门上下文提供者；前台网络回调与发送路径同步调用。
+ * @param out 非NULL输出，仅本次调用有效；返回false表示业务闸门未启用。
+ * @return 已登记启动代次并填好上下文为true。
+ */
+typedef bool (*UDPSoundEvent_BusinessContextProvider)(UDPSoundEvent_BusinessContext *out);
+
+/** @brief 安装业务闸门上下文提供者；NULL恢复阶段一未封装兼容路径。 @param provider 可NULL。 @return 无返回值。 */
+void UDPSoundEvent_SetBusinessContextProvider(UDPSoundEvent_BusinessContextProvider provider);
+
+/** @brief MDB1业务通道计数，用于周期性诊断输出。 */
+typedef struct
+{
+    uint32_t tx_ok;
+    uint32_t tx_blocked;
+    uint32_t tx_err;
+    uint32_t rx_ok;
+    uint32_t rx_blocked;
+    uint32_t rx_unwrapped;
+    uint32_t rx_bad;
+} UDPSoundEvent_BusinessCounters;
+
+/** @brief 复制MDB1业务计数；NULL参数不操作。 @param out 调用方输出。 @return 无返回值。 */
+void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out);
+
+/**
  * @brief 设置MDP1前台接收消费者。
  * @param sink 可为NULL，NULL表示不交付，非NULL须在注册期间保持有效。
  * @return 无返回值。

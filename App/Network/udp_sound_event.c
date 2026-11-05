@@ -12,6 +12,7 @@
 #include "Detector/sound_event_timing.h"
 #include "Measure/waveform_tdoa.h"
 #include "sound_event_wire.h"
+#include "business_wire.h"
 #include "measurement_wire.h"
 #include "temperature_wire.h"
 #include "udp_config.h"
@@ -39,6 +40,9 @@ static UDPSoundEvent_RangingSessionSink ranging_session_sink;
 #ifdef SBCG_USE_MODE_OBSERVATION
 static UDPSoundEvent_ModeControlSink mode_control_sink;
 #endif
+static UDPSoundEvent_BusinessContextProvider business_provider;
+static uint32_t business_tx_ok, business_tx_blocked, business_tx_err;
+static uint32_t business_rx_ok, business_rx_blocked, business_rx_unwrapped, business_rx_bad;
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 /* 配对状态只由前台CPU访问，放ITCM避免挤占已满的DTCM/RAM；无DMA/IRQ。 */
@@ -91,6 +95,67 @@ static bool LocalSide(SoundEventSide *side)
     if(local_profile.role==BOARD_ROLE_A){*side=SOUND_SIDE_A;return true;}
     if(local_profile.role==BOARD_ROLE_B){*side=SOUND_SIDE_B;return true;}
     return false;
+}
+
+/** @brief 发送结果：成功、模式闸门拒绝或网络/编码错误。 */
+typedef enum
+{
+    BUSINESS_SEND_OK = 0,
+    BUSINESS_SEND_BLOCKED,
+    BUSINESS_SEND_ERROR
+} BusinessSendStatus;
+
+/** @brief 读取模式业务闸门上下文；未安装提供者或未登记启动代次返回false，保持未封装兼容路径。 */
+static bool BusinessContext(UDPSoundEvent_BusinessContext *out)
+{
+    return business_provider!=NULL && out!=NULL && business_provider(out) && out->configured;
+}
+
+/**
+ * @brief   按当前闸门发送受保护业务载荷：未登记时原样发送，登记后代次匹配时封装MDB1。
+ * @param   inner 非NULL只读内层报文，仅本次借用。
+ * @param   inner_length 内层字节数，1..BUSINESS_WIRE_MAX_INNER。
+ * @return  成功/模式拒绝/错误三类结果；模式拒绝与网络错误分别计数。
+ * @note    调用方仍负责角色、链路和编码前置检查；本函数不复用内层以外的报文状态。
+ */
+static BusinessSendStatus SendBusinessPayload(const uint8_t *inner,uint16_t inner_length)
+{
+    if(inner==NULL || inner_length==0U || inner_length>BUSINESS_WIRE_MAX_INNER)
+    {Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
+    UDPSoundEvent_BusinessContext context;
+    const bool gated=BusinessContext(&context);
+    uint16_t total=inner_length;
+    uint8_t header[BUSINESS_WIRE_HEADER_BYTES];
+    if(gated)
+    {
+        if(!context.allowed)
+        {Increment(&business_tx_blocked);return BUSINESS_SEND_BLOCKED;}
+        const BusinessWireMessage message={
+            .role=local_profile.role,.inner_length=inner_length,
+            .a_boot=context.a_boot,.b_boot=context.b_boot,
+            .mode_seq=context.mode_seq,.inner=inner};
+        if(!BusinessWire_EncodeHeader(&message,header))
+        {Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
+        total=(uint16_t)(BUSINESS_WIRE_HEADER_BYTES+inner_length);
+    }
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,total,PBUF_RAM);
+    if(packet==NULL){Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
+    err_t err;
+    if(gated)
+    {
+        err=pbuf_take(packet,header,sizeof header);
+        if(err==ERR_OK)
+            err=pbuf_take_at(packet,inner,inner_length,BUSINESS_WIRE_HEADER_BYTES);
+    }
+    else
+    {
+        err=pbuf_take(packet,inner,inner_length);
+    }
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
+    Increment(&business_tx_ok);
+    return BUSINESS_SEND_OK;
 }
 
 /* ==================== 跨板波形片段与时差精化 ==================== */
@@ -256,13 +321,10 @@ static bool SendWaveform(const SoundEventRecord *event)
     {data[12U+i]=(uint8_t)(start_ns>>(8U*(7U-i)));}
     data[20]=(uint8_t)(WAVE_WINDOW_FRAMES>>8U);data[21]=(uint8_t)WAVE_WINDOW_FRAMES;
     data[22]=0U;data[23]=0U;
-    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
-    if(packet==NULL){Increment(&wave_tx_err);return false;}
-    err_t err=pbuf_take(packet,data,sizeof data);
-    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
-    pbuf_free(packet);
-    if(err!=ERR_OK){Increment(&wave_tx_err);return false;}
-    Increment(&wave_tx_ok);return true;
+    const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
+    if(sent==BUSINESS_SEND_OK){Increment(&wave_tx_ok);return true;}
+    if(sent==BUSINESS_SEND_ERROR){Increment(&wave_tx_err);}
+    return false;
 }
 /** @brief 收到对端波形包后保存；返回true表示已按A侧身份接受并存储。 */
 static bool AcceptRemoteWaveform(const uint8_t *data,size_t length)
@@ -339,6 +401,161 @@ static bool HasMagic(const struct pbuf *packet,const char *magic)
     return pbuf_copy_partial(packet,prefix,sizeof prefix,0)==sizeof prefix &&
         memcmp(prefix,magic,sizeof prefix)==0;
 }
+/** @brief 判断长度是否属于SEV2四个版本。 @param length 载荷字节数。 @return 属于SEV2为true。 */
+static bool IsSoundEventLength(uint16_t length)
+{
+    return length==SOUND_EVENT_WIRE_V1_BYTES || length==SOUND_EVENT_WIRE_V2_BYTES ||
+        length==SOUND_EVENT_WIRE_V3_BYTES || length==SOUND_EVENT_WIRE_BYTES;
+}
+/** @brief MDB1内层受保护类型。 */
+typedef enum
+{
+    BUSINESS_INNER_NONE = 0,
+    BUSINESS_INNER_SEV2,
+    BUSINESS_INNER_WFR1,
+    BUSINESS_INNER_RST2,
+    BUSINESS_INNER_RAK2
+} BusinessInnerKind;
+/** @brief 按内层长度和magic识别受保护类型。 @param data 内层首地址。 @param length 内层字节数。 @return 类型。 */
+static BusinessInnerKind BusinessInner(const uint8_t *data,uint16_t length)
+{
+    if(data==NULL)return BUSINESS_INNER_NONE;
+    if(length==RANGING_STATUS_WIRE_BYTES && memcmp(data,"RST2",4U)==0)
+        return BUSINESS_INNER_RST2;
+    if(length==RANGING_STATUS_ACK_BYTES && memcmp(data,"RAK2",4U)==0)
+        return BUSINESS_INNER_RAK2;
+    if(length==(uint16_t)(WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES) &&
+       memcmp(data,"WFR1",4U)==0)return BUSINESS_INNER_WFR1;
+    if(IsSoundEventLength(length) && memcmp(data,"SEVT",4U)==0)
+        return BUSINESS_INNER_SEV2;
+    return BUSINESS_INNER_NONE;
+}
+/** @brief 受保护类型的接收方向资格；SEV2在解码后再按事件side校验。 @param kind 内层类型。 @return 本板接收该类型为true。 */
+static bool BusinessDirectionAllowed(BusinessInnerKind kind)
+{
+    switch(kind)
+    {
+    case BUSINESS_INNER_WFR1: return local_profile.role==BOARD_ROLE_A;
+    case BUSINESS_INNER_RST2: return local_profile.role==BOARD_ROLE_B;
+    case BUSINESS_INNER_RAK2: return local_profile.role==BOARD_ROLE_A;
+    case BUSINESS_INNER_SEV2: return true;
+    default: return false;
+    }
+}
+/** @brief 处理已解出的SEV2内层；与未封装路径共用同一解码、域和配对逻辑。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
+static void ProcessSoundEventPayload(const uint8_t *data,uint16_t length)
+{
+    if(!IsSoundEventLength(length)){Increment(&rx_bad);return;}
+    SoundEventRecord event;
+    if(SoundEventWire_Decode(data,length,&event)!=SOUND_EVENT_WIRE_OK)
+    {Increment(&rx_bad);return;}
+    SoundEventSide local;
+    if(!LocalSide(&local) || event.side==local)
+    {Increment(&rx_bad);return;}
+    if(current_time_domain==0U || event.time_domain!=current_time_domain)
+    {Increment(&rx_bad);return;}
+    const uint32_t now=read_tick!=NULL?read_tick():0U;
+    if(!SoundPair_Submit(&pair_manager,&event,now))
+    {Increment(&rx_bad);return;}
+    if(event_sink!=NULL){event_sink(&event);}
+    Increment(&rx_ok);
+}
+/** @brief 处理已解出的WFR1内层；A侧接收并存储对端窗口。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
+static void ProcessWaveformPayload(const uint8_t *data,uint16_t length)
+{
+    (void)AcceptRemoteWaveform(data,length);
+}
+/** @brief 处理已解出的RST2内层；仅B接收。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
+static void ProcessRangingStatusPayload(const uint8_t *data,uint16_t length)
+{
+    if(local_profile.role!=BOARD_ROLE_B)
+    {Increment(&rx_bad);Increment(&result_rx_bad);return;}
+    RangingStatusMessage status;
+    if(RangingStatusWire_Decode(data,length,&status)!=RANGING_STATUS_WIRE_OK)
+    {Increment(&rx_bad);Increment(&result_rx_bad);return;}
+    if(ranging_status_sink!=NULL){ranging_status_sink(&status);}
+    Increment(&rx_ok);Increment(&result_rx_ok);
+}
+/** @brief 处理已解出的RAK2内层；仅A接收。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
+static void ProcessRangingAckPayload(const uint8_t *data,uint16_t length)
+{
+    if(local_profile.role!=BOARD_ROLE_A)
+    {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
+    RangingStatusAck ack;
+    if(RangingStatusAck_Decode(data,length,&ack)!=RANGING_STATUS_WIRE_OK)
+    {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
+    if(ranging_ack_sink!=NULL){ranging_ack_sink(&ack);}
+    Increment(&rx_ok);Increment(&ack_rx_ok);
+}
+/**
+ * @brief   解封MDB1并只把白名单内层交给对应业务处理。
+ * @param   packet 本次接收所有权，函数内释放。
+ * @param   context 非NULL已校验业务闸门上下文。
+ * @return  无返回值；角色/世代/模式/类型不合格的报文只计数，不写业务状态。
+ * @note    内层缓冲按类型固定大小复制，避免为每种报文新增全局缓冲。
+ */
+static void HandleBusinessPacket(struct pbuf *packet,
+                                 const UDPSoundEvent_BusinessContext *context)
+{
+    uint8_t header[BUSINESS_WIRE_HEADER_BYTES];
+    if(pbuf_copy_partial(packet,header,sizeof header,0)!=sizeof header)
+    {Increment(&business_rx_bad);Increment(&rx_bad);pbuf_free(packet);return;}
+    BusinessWireMessage message;
+    if(!BusinessWire_DecodeHeader(header,sizeof header,&message) ||
+       packet->tot_len!=(uint16_t)(BUSINESS_WIRE_HEADER_BYTES+message.inner_length) ||
+       message.role==local_profile.role || !context->allowed ||
+       message.a_boot!=context->a_boot || message.b_boot!=context->b_boot ||
+       message.mode_seq!=context->mode_seq)
+    {Increment(&business_rx_blocked);Increment(&rx_bad);pbuf_free(packet);return;}
+    uint8_t magic[4];
+    if(pbuf_copy_partial(packet,magic,sizeof magic,BUSINESS_WIRE_HEADER_BYTES)!=sizeof magic)
+    {Increment(&business_rx_bad);Increment(&rx_bad);pbuf_free(packet);return;}
+    const uint16_t inner=message.inner_length;
+    const BusinessInnerKind kind=BusinessInner(magic,inner);
+    if(!BusinessDirectionAllowed(kind))
+    {Increment(&business_rx_blocked);Increment(&rx_bad);pbuf_free(packet);return;}
+    if(kind==BUSINESS_INNER_SEV2)
+    {
+        uint8_t data[SOUND_EVENT_WIRE_BYTES];
+        const bool copied=pbuf_copy_partial(packet,data,inner,BUSINESS_WIRE_HEADER_BYTES)==inner;
+        pbuf_free(packet);
+        if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
+        ProcessSoundEventPayload(data,inner);
+        Increment(&business_rx_ok);
+        return;
+    }
+    if(kind==BUSINESS_INNER_WFR1)
+    {
+        uint8_t data[WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES];
+        const bool copied=pbuf_copy_partial(packet,data,inner,BUSINESS_WIRE_HEADER_BYTES)==inner;
+        pbuf_free(packet);
+        if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
+        ProcessWaveformPayload(data,inner);
+        Increment(&business_rx_ok);
+        return;
+    }
+    if(kind==BUSINESS_INNER_RST2)
+    {
+        uint8_t data[RANGING_STATUS_WIRE_BYTES];
+        const bool copied=pbuf_copy_partial(packet,data,inner,BUSINESS_WIRE_HEADER_BYTES)==inner;
+        pbuf_free(packet);
+        if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
+        ProcessRangingStatusPayload(data,inner);
+        Increment(&business_rx_ok);
+        return;
+    }
+    if(kind==BUSINESS_INNER_RAK2)
+    {
+        uint8_t data[RANGING_STATUS_ACK_BYTES];
+        const bool copied=pbuf_copy_partial(packet,data,inner,BUSINESS_WIRE_HEADER_BYTES)==inner;
+        pbuf_free(packet);
+        if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
+        ProcessRangingAckPayload(data,inner);
+        Increment(&business_rx_ok);
+        return;
+    }
+    Increment(&business_rx_bad);Increment(&rx_bad);pbuf_free(packet);
+}
 /**
  * @brief 接收回调：验证来源、协议及声音事件当前有效域后交给前台消费者。
  * @param arg 未使用的LwIP用户参数。
@@ -371,6 +588,30 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         return;
     }
 #endif
+    /* MDB1业务闸门：登记启动代次后，受保护报文必须封装且世代匹配；
+       未封装旧包一律不进入配对、波形或权威状态消费。 */
+    UDPSoundEvent_BusinessContext business_context;
+    const bool business_gated=BusinessContext(&business_context);
+    if(business_gated && packet->tot_len>=BUSINESS_WIRE_HEADER_BYTES &&
+       HasMagic(packet,"MDB1"))
+    {
+        HandleBusinessPacket(packet,&business_context);
+        return;
+    }
+    if(business_gated)
+    {
+        const uint16_t raw_length=packet->tot_len;
+        const bool protected_raw=
+            (raw_length==RANGING_STATUS_WIRE_BYTES && HasMagic(packet,"RST2")) ||
+            (raw_length==RANGING_STATUS_ACK_BYTES && HasMagic(packet,"RAK2")) ||
+            (raw_length==(uint16_t)(WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES) &&
+             HasMagic(packet,WAVE_MAGIC)) ||
+            (IsSoundEventLength(raw_length) && HasMagic(packet,"SEVT"));
+        if(protected_raw)
+        {
+            Increment(&business_rx_unwrapped);Increment(&rx_bad);pbuf_free(packet);return;
+        }
+    }
 #ifdef SBCG_USE_ADVANCED_UI
     if((packet->tot_len==80U && HasMagic(packet,"CLP1")) ||
        (packet->tot_len==24U && HasMagic(packet,"CLA1")) ||
@@ -391,7 +632,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         const bool copied=pbuf_copy_partial(packet,data,sizeof data,0)==sizeof data;
         pbuf_free(packet);
         if(!copied){Increment(&wave_rx_bad);return;}
-        (void)AcceptRemoteWaveform(data,sizeof data);
+        ProcessWaveformPayload(data,sizeof data);
         return;
     }
     if(packet->tot_len==TEMPERATURE_WIRE_BYTES)
@@ -463,14 +704,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         if(pbuf_copy_partial(packet,status_data,sizeof status_data,0)!=sizeof status_data)
         {Increment(&rx_bad);Increment(&result_rx_bad);pbuf_free(packet);return;}
         pbuf_free(packet);
-        if(local_profile.role!=BOARD_ROLE_B)
-        {Increment(&rx_bad);Increment(&result_rx_bad);return;}
-        RangingStatusMessage status;
-        if(RangingStatusWire_Decode(status_data,sizeof status_data,&status)!=
-           RANGING_STATUS_WIRE_OK)
-        {Increment(&rx_bad);Increment(&result_rx_bad);return;}
-        if(ranging_status_sink!=NULL){ranging_status_sink(&status);}
-        Increment(&rx_ok);Increment(&result_rx_ok);
+        ProcessRangingStatusPayload(status_data,sizeof status_data);
         return;
     }
     if(packet->tot_len==RANGING_STATUS_ACK_BYTES)
@@ -479,14 +713,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         if(pbuf_copy_partial(packet,ack_data,sizeof ack_data,0)!=sizeof ack_data)
         {Increment(&rx_bad);Increment(&ack_rx_bad);pbuf_free(packet);return;}
         pbuf_free(packet);
-        if(local_profile.role!=BOARD_ROLE_A)
-        {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
-        RangingStatusAck ack;
-        if(RangingStatusAck_Decode(ack_data,sizeof ack_data,&ack)!=
-           RANGING_STATUS_WIRE_OK)
-        {Increment(&rx_bad);Increment(&ack_rx_bad);return;}
-        if(ranging_ack_sink!=NULL){ranging_ack_sink(&ack);}
-        Increment(&rx_ok);Increment(&ack_rx_ok);
+        ProcessRangingAckPayload(ack_data,sizeof ack_data);
         return;
     }
     if(packet->tot_len==MEASUREMENT_WIRE_BYTES)
@@ -514,19 +741,7 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(pbuf_copy_partial(packet,data,wire_length,0)!=wire_length)
     {Increment(&rx_bad);pbuf_free(packet);return;}
     pbuf_free(packet);
-    SoundEventRecord event;
-    if(SoundEventWire_Decode(data,wire_length,&event)!=SOUND_EVENT_WIRE_OK)
-    {Increment(&rx_bad);return;}
-    SoundEventSide local;
-    if(!LocalSide(&local) || event.side==local)
-    {Increment(&rx_bad);return;}
-    if(current_time_domain==0U || event.time_domain!=current_time_domain)
-    {Increment(&rx_bad);return;}
-    const uint32_t now=read_tick!=NULL?read_tick():0U;
-    if(!SoundPair_Submit(&pair_manager,&event,now))
-    {Increment(&rx_bad);return;}
-    if(event_sink!=NULL){event_sink(&event);}
-    Increment(&rx_ok);
+    ProcessSoundEventPayload(data,wire_length);
 }
 /** @brief 在链路可用时重试绑定；1秒节流，失败不阻塞。 */
 static void TryBind(uint32_t now_ms)
@@ -608,6 +823,9 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
 #ifdef SBCG_USE_MODE_OBSERVATION
     mode_control_sink=NULL;
 #endif
+    business_provider=NULL;
+    business_tx_ok=business_tx_blocked=business_tx_err=0U;
+    business_rx_ok=business_rx_blocked=business_rx_unwrapped=business_rx_bad=0U;
     configured=true;return true;
 }
 /**
@@ -779,13 +997,10 @@ bool UDPSoundEvent_SendRangingStatus(uint32_t now_ms,const RangingStatusMessage 
     uint8_t data[RANGING_STATUS_WIRE_BYTES];
     if(RangingStatusWire_Encode(message,data,sizeof data)!=RANGING_STATUS_WIRE_OK)
     {Increment(&result_tx_err);return false;}
-    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
-    if(packet==NULL){Increment(&result_tx_err);return false;}
-    err_t err=pbuf_take(packet,data,sizeof data);
-    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
-    pbuf_free(packet);
-    if(err!=ERR_OK){Increment(&result_tx_err);return false;}
-    Increment(&result_tx_ok);return true;
+    const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
+    if(sent==BUSINESS_SEND_OK){Increment(&result_tx_ok);return true;}
+    if(sent==BUSINESS_SEND_ERROR){Increment(&result_tx_err);}
+    return false;
 }
 
 /** @brief B发送RAK2；仅B角色/已绑定/链路可用。 */
@@ -798,13 +1013,10 @@ bool UDPSoundEvent_SendRangingAck(uint32_t now_ms,const RangingStatusAck *ack)
     uint8_t data[RANGING_STATUS_ACK_BYTES];
     if(RangingStatusAck_Encode(ack,data,sizeof data)!=RANGING_STATUS_WIRE_OK)
     {Increment(&ack_tx_err);return false;}
-    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
-    if(packet==NULL){Increment(&ack_tx_err);return false;}
-    err_t err=pbuf_take(packet,data,sizeof data);
-    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
-    pbuf_free(packet);
-    if(err!=ERR_OK){Increment(&ack_tx_err);return false;}
-    Increment(&tx_ok);return true;
+    const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
+    if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);return true;}
+    if(sent==BUSINESS_SEND_ERROR){Increment(&ack_tx_err);}
+    return false;
 }
 
 /**
@@ -830,13 +1042,10 @@ bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
     uint8_t data[SOUND_EVENT_WIRE_BYTES];
     if(SoundEventWire_Encode(event,data,sizeof data)!=SOUND_EVENT_WIRE_OK)
     {Increment(&tx_err);return false;}
-    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
-    if(packet==NULL){Increment(&tx_err);return false;}
-    err_t err=pbuf_take(packet,data,sizeof data);
-    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
-    pbuf_free(packet);
-    if(err!=ERR_OK){Increment(&tx_err);return false;}
-    Increment(&tx_ok);return true;
+    const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
+    if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);return true;}
+    if(sent==BUSINESS_SEND_ERROR){Increment(&tx_err);}
+    return false;
 }
 /** @brief 安装MACK消费者；NULL不回调。 */
 void UDPSoundEvent_SetAckSink(UDPSoundEvent_AckSink sink)
@@ -960,6 +1169,15 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             ",ACK_RX=%" PRIu32 ",ACK_BAD=%" PRIu32 ",DIAG=1,LOCAL=1,SYNC=0\r\n",
             result_tx_ok,result_tx_err,result_rx_ok,result_rx_bad,
             ack_tx_ok,ack_rx_ok,ack_rx_bad));
+        UDPSoundEvent_BusinessContext business_context;
+        const bool business_gated=BusinessContext(&business_context);
+        emit(line,snprintf(line,sizeof line,
+            "$MDB1_STATE,GATE=%u,ALLOWED=%u,TX_OK=%" PRIu32 ",TX_BLOCK=%" PRIu32
+            ",TX_ERR=%" PRIu32 ",RX_OK=%" PRIu32 ",RX_BLOCK=%" PRIu32
+            ",RX_RAW=%" PRIu32 ",RX_BAD=%" PRIu32 "\r\n",
+            business_gated?1U:0U,(business_gated&&business_context.allowed)?1U:0U,
+            business_tx_ok,business_tx_blocked,business_tx_err,
+            business_rx_ok,business_rx_blocked,business_rx_unwrapped,business_rx_bad));
     }
 }
 /** @brief 复制统计；NULL参数不操作。 */
@@ -983,4 +1201,23 @@ void UDPSoundEvent_GetResultCounters(uint32_t *out_tx_ok,uint32_t *out_tx_err,
     if(out_tx_err!=NULL)*out_tx_err=result_tx_err;
     if(out_rx_ok!=NULL)*out_rx_ok=result_rx_ok;
     if(out_rx_bad!=NULL)*out_rx_bad=result_rx_bad;
+}
+
+/** @brief 安装业务闸门上下文提供者；NULL恢复未封装兼容路径。 */
+void UDPSoundEvent_SetBusinessContextProvider(UDPSoundEvent_BusinessContextProvider provider)
+{
+    business_provider=provider;
+}
+
+/** @brief 复制MDB1业务通道计数；NULL参数不操作。 */
+void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out)
+{
+    if(out==NULL)return;
+    out->tx_ok=business_tx_ok;
+    out->tx_blocked=business_tx_blocked;
+    out->tx_err=business_tx_err;
+    out->rx_ok=business_rx_ok;
+    out->rx_blocked=business_rx_blocked;
+    out->rx_unwrapped=business_rx_unwrapped;
+    out->rx_bad=business_rx_bad;
 }

@@ -221,6 +221,11 @@ def run_mode_tests():
         sa,sb=snap(a,b,'WAVE observation preserves legacy CHIRP')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
               'observing WAVE still runs real CHIRP pairing and publishes legacy RST2 on both boards')
+        mdb1_packets=[p for board in (a,b) for p in board.history
+                      if p['hex'].startswith('4d444231')]
+        check(bool(mdb1_packets) and all(len(bytes.fromhex(p['hex']))>=32+24
+              for p in mdb1_packets),
+              'active-mode business packets use MDB1 wrapper on the wire')
         a.cmd('CLASS 2');b.cmd('CLASS 2')
         a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
         for index in range(25):
@@ -316,6 +321,7 @@ def main():
          str(ROOT/'App/Calibration/calibration_control.c'),
          str(ROOT/'App/Network/udp_sound_event.c'),str(ROOT/'App/Network/ranging_session.c'),
          str(ROOT/'App/Network/mode_wire.c'),str(ROOT/'App/Mode/mode_service.c'),
+         str(ROOT/'App/Network/business_wire.c'),
          str(ROOT/'App/Network/domain_wire.c'),str(ROOT/'App/Network/measurement_wire.c'),
          str(ROOT/'App/Network/measurement_ack.c'),str(ROOT/'App/Network/ranging_status_wire.c'),
          str(ROOT/'App/Network/temperature_wire.c'),str(ROOT/'App/Network/sound_event_wire.c'),
@@ -330,7 +336,9 @@ def main():
     build=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
     if build.returncode: print(build.stdout+build.stderr); sys.exit(build.returncode)
 
-    a=Board('A',0,0);b=Board('B',0,0)
+    # 基线业务用例运行在未登记启动代次的兼容路径（阶段一语义），不启用MDB1闸门；
+    # 模式用例使用显式boot_id验证封装与世代隔离。
+    a=Board('A',0,0,boot_id=0);b=Board('B',0,0,boot_id=0)
     delta_ns=900_000
     def step(at,sequence=0,drop_acks=False,drop_clap_acks=False):
         a.cmd(f'STEP {at} {at*1_000_000} {sequence} {at*1_000_000}')

@@ -791,6 +791,34 @@ static void LoadBootGeneration(void)
     }
 }
 #endif
+
+/**
+ * @brief   为UDP业务层提供MDB1模式闸门上下文。
+ * @param   out 非NULL上下文输出，仅本次调用有效。
+ * @return  已登记本板启动代次为true；未登记返回false，保持阶段一未封装兼容路径。
+ * @note    前台同步调用且只读模式快照。当前要求已ACTIVE且双板代次/序号一致；
+ *          RANGE/CALIBRATION专属业务准入与其来源闸门在后续增量一起启用。
+ */
+static bool ProvideBusinessContext(UDPSoundEvent_BusinessContext *out)
+{
+    if (out == NULL)
+    {
+        return false;
+    }
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return false;
+    }
+    out->configured = true;
+    out->allowed = mode.state == MODE_ACTIVE;
+    out->role = mode.role;
+    out->a_boot = mode.a_boot;
+    out->b_boot = mode.b_boot;
+    out->mode_seq = mode.mode_seq;
+    return true;
+}
 #endif
 
 /** @brief 将观测决策枚举转成稳定短标签；未知值返回UNKNOWN。 */
@@ -1246,6 +1274,7 @@ void App_Init(void)
         UDPSoundEvent_SetRangingSessionSink(HandleRangingSession);
 #ifdef SBCG_USE_MODE_OBSERVATION
         UDPSoundEvent_SetModeControlSink(ModeService_OnControl);
+        UDPSoundEvent_SetBusinessContextProvider(ProvideBusinessContext);
 #endif
 #ifdef SBCG_USE_ADVANCED_UI
         UDPSoundEvent_SetAuxiliarySink(HandleAuxiliary);

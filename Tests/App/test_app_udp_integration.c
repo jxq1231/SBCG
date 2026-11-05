@@ -152,6 +152,10 @@ struct pbuf *pbuf_alloc(pbuf_layer layer,u16_t length,pbuf_type type)
 {(void)layer;(void)type;assert(length<=HOST_BYTES);memset(&tx_pbuf,0,sizeof tx_pbuf);tx_pbuf.payload=tx_payload;tx_pbuf.len=tx_pbuf.tot_len=length;return &tx_pbuf;}
 /** @brief 保存生产codec字节。 @param packet pbuf。 @param data 输入。 @param length 字节数。 @return ERR_OK。 */
 err_t pbuf_take(struct pbuf *packet,const void *data,u16_t length){assert(packet==&tx_pbuf && length<=packet->tot_len);memcpy(packet->payload,data,length);return ERR_OK;}
+/** @brief 在偏移处写入MDB1内层字节。 @param packet pbuf。 @param data 输入。 @param length 字节数。 @param offset 起点。 @return ERR_OK。 */
+err_t pbuf_take_at(struct pbuf *packet,const void *data,u16_t length,u16_t offset)
+{assert(packet==&tx_pbuf && (uint32_t)offset+length<=packet->tot_len);
+ memcpy((uint8_t*)packet->payload+offset,data,length);return ERR_OK;}
 /** @brief 静态pbuf所有权边界。 @param packet 已处理pbuf。 @return 1。 */
 u8_t pbuf_free(struct pbuf *packet){(void)packet;return 1U;}
 /** @brief 输出真实网络字节和失败尝试。 @param pcb PCB。 @param packet pbuf。 @param destination 对端。 @param port 端口。 @return 受控结果。 */
