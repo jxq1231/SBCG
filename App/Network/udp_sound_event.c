@@ -4,6 +4,7 @@
  * @details     按版本解码声音事件，校验来源、事件侧与有效域；为右锚发布保留3000ms配对预算。
  *              A侧使用两板窗口精化时差；证据失败明确拒绝，不以标称/旧齿距离出新数。
  *              撤域或换域清除旧配对候选，成功结果经纯核心计算距离/方向。
+ *              模式观测启用时，沿用固定对端和原PCB交付MDP1控制消息。
  * @note        只证明软件链路；不建立PTP同步、不把接收时刻当声音到达、不宣称物理精度。
  */
 #include "udp_sound_event.h"
@@ -35,6 +36,9 @@ static UDPSoundEvent_TemperatureSink temperature_sink;
 static UDPSoundEvent_RangingStatusSink ranging_status_sink;
 static UDPSoundEvent_RangingAckSink ranging_ack_sink;
 static UDPSoundEvent_RangingSessionSink ranging_session_sink;
+#ifdef SBCG_USE_MODE_OBSERVATION
+static UDPSoundEvent_ModeControlSink mode_control_sink;
+#endif
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 /* 配对状态只由前台CPU访问，放ITCM避免挤占已满的DTCM/RAM；无DMA/IRQ。 */
@@ -343,7 +347,7 @@ static bool HasMagic(const struct pbuf *packet,const char *magic)
  * @param source 本次调用有效的来源地址，NULL或非对端时丢弃。
  * @param source_port 来源端口，必须匹配板间固定端口。
  * @return 无返回值；DOMAIN握手不受声音事件域资格门控。
- * @note 仅NO_SYS网络轮询上下文，不在硬件IRQ中处理协议。
+ * @note 仅NO_SYS网络轮询上下文，不在硬件IRQ中处理协议。MDP1消费者仅本次借用解码副本。
  */
 static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
                     const ip_addr_t *source,u16_t source_port)
@@ -352,6 +356,21 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet==NULL)return;
     if(source==NULL || !ip_addr_cmp(source,&peer) || source_port!=UDP_SOUND_EVENT_BOARD_PORT)
     {Increment(&foreign);pbuf_free(packet);return;}
+#ifdef SBCG_USE_MODE_OBSERVATION
+    if(packet->tot_len==MODE_CONTROL_WIRE_BYTES && HasMagic(packet,"MDP1"))
+    {
+        uint8_t data[MODE_CONTROL_WIRE_BYTES];
+        const bool copied=pbuf_copy_partial(packet,data,sizeof data,0)==sizeof data;
+        pbuf_free(packet);
+        ModeControlMessage message;
+        if(!copied || !ModeControlWire_Decode(data,sizeof data,&message) ||
+           message.role==local_profile.role)
+        {Increment(&rx_bad);return;}
+        if(mode_control_sink!=NULL)mode_control_sink(&message);
+        Increment(&rx_ok);
+        return;
+    }
+#endif
 #ifdef SBCG_USE_ADVANCED_UI
     if((packet->tot_len==80U && HasMagic(packet,"CLP1")) ||
        (packet->tot_len==24U && HasMagic(packet,"CLA1")) ||
@@ -557,7 +576,7 @@ static void TryBind(uint32_t now_ms)
  * @param tick 非NULL毫秒读取函数，须在服务期间持续有效。
  * @param log 非NULL前台日志消费者，须在返回前消费或复制临时字节。
  * @return true为软件配置成功；false为参数或配对配置非法。
- * @note 释放已有PCB并复位统计；真正绑定在Process完成，不配置外设。
+ * @note 释放已有PCB并复位统计及MDP1消费者；真正绑定在Process完成，不配置外设。
  */
 bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
                         uint32_t (*tick)(void),UDPSoundEvent_Log log)
@@ -586,6 +605,9 @@ bool UDPSoundEvent_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     ack_tx_ok=ack_tx_err=ack_rx_ok=ack_rx_bad=0U;
     temperature_tx_ok=temperature_tx_err=temperature_rx_ok=temperature_rx_bad=0U;
     ranging_status_sink=NULL;ranging_ack_sink=NULL;ranging_session_sink=NULL;
+#ifdef SBCG_USE_MODE_OBSERVATION
+    mode_control_sink=NULL;
+#endif
     configured=true;return true;
 }
 /**
@@ -649,6 +671,43 @@ bool UDPSoundEvent_SendRangingSession(uint32_t now_ms,const RangingSessionMessag
     if(err!=ERR_OK){Increment(&tx_err);return false;}
     Increment(&tx_ok);return true;
 }
+#ifdef SBCG_USE_MODE_OBSERVATION
+/**
+ * @brief 安装MDP1消息的前台消费者，重复安装时替换旧消费者。
+ * @param sink 可为NULL，NULL表示不交付，非NULL须在注册期间保持有效。
+ * @return 无返回值。
+ * @note 消费者须在UDPSoundEvent_Init之后注册，只能在一次回调内借用消息。
+ */
+void UDPSoundEvent_SetModeControlSink(UDPSoundEvent_ModeControlSink sink)
+{
+    mode_control_sink=sink;
+}
+
+/**
+ * @brief 使用已绑定的5009 PCB发送MDP1，记录发送成功或失败。
+ * @param message 非NULL只读消息，仅本次借用，发送角色须与本板一致。
+ * @return 发送成功为true，字段或网络条件不满足及分配/发送失败为false。
+ * @note 仅前台调用，发送缓冲由本函数分配并释放，重试由上层定时。
+ */
+bool UDPSoundEvent_SendModeControl(const ModeControlMessage *message)
+{
+    uint8_t data[MODE_CONTROL_WIRE_BYTES];
+    if(!configured || service_pcb==NULL || message==NULL ||
+       message->role!=local_profile.role || !netif_is_link_up(&gnetif) ||
+       !ModeControlWire_Encode(message,data,sizeof data))
+    {Increment(&tx_err);return false;}
+
+    struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,sizeof data,PBUF_RAM);
+    if(packet==NULL){Increment(&tx_err);return false;}
+    err_t err=pbuf_take(packet,data,sizeof data);
+    if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
+    pbuf_free(packet);
+    if(err!=ERR_OK){Increment(&tx_err);return false;}
+    Increment(&tx_ok);
+    return true;
+}
+#endif
+
 /** @brief 安装对端事件消费者；NULL不回调。 */
 void UDPSoundEvent_SetEventSink(UDPSoundEvent_EventSink sink)
 {

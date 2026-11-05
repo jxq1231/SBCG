@@ -1,8 +1,8 @@
 /**
  * @file        test_app_udp_integration.c
  * @brief       双进程真实App/UDP/结果缓存/UI主机驱动。
- * @details     stdin提供受控时钟、检测器TOA、合成PCM、网络输入及标定控制请求；
- *              stdout记录生产报文、只读状态和标定保存/应用元数据。
+ * @details     stdin提供受控时钟、检测器TOA、合成PCM、网络输入、标定和模式观测请求；
+ *              stdout记录生产报文、只读状态、标定元数据和模式协商快照。
  * @note        只替换硬件/检测器/LwIP收发边界，不注入pair或结果，不访问实物。
  */
 #define main unused_app_main
@@ -231,6 +231,33 @@ static void RequestCalibration(const char *command)
  if(action==CALIBRATION_ACTION_CAPTURE)(void)MeasurementResult_GetCalibrationSample(&expected);
  assert(CalibrationControl_Request(action,action==CALIBRATION_ACTION_CAPTURE?&expected:NULL));
 }
+#ifdef SBCG_USE_MODE_OBSERVATION
+/**
+ * @brief 以单行JSON输出实际应用模式协商快照，供父进程断言。
+ * @return 无返回值。
+ * @note 前台命令读取快照，不推进握手、续约或旧业务。
+ */
+static void ModeSnapshotJson(void)
+{
+ ModeSnapshot mode={0};
+ App_GetModeSnapshot(&mode);
+ (void)printf("{\"type\":\"mode\",\"role\":%u,\"requested\":%u,\"effective\":%u,\"state\":%u"
+  ",\"a_boot\":%" PRIu64 ",\"b_boot\":%" PRIu64 ",\"mode_seq\":%" PRIu64
+  ",\"attempts\":%" PRIu32 ",\"reason\":%u}\n",
+  (unsigned)mode.role,(unsigned)mode.requested,(unsigned)mode.effective,(unsigned)mode.state,
+  (uint64_t)mode.a_boot,(uint64_t)mode.b_boot,(uint64_t)mode.mode_seq,(uint32_t)mode.attempts,(unsigned)mode.reason);
+}
+
+/**
+ * @brief 输出真实应用对模式控制命令的接纳结果。
+ * @param accepted 应用是否接纳本次模式请求或启动代次。
+ * @return 无返回值。
+ */
+static void ModeReplyJson(bool accepted)
+{
+ (void)printf("{\"type\":\"mode_reply\",\"accepted\":%u}\n",accepted?1U:0U);
+}
+#endif
 /** @brief 排队十六进制网络输入。 @param hex 完整十六进制串。 @return 无返回值。 */
 static void Queue(const char *hex)
 {const size_t length=strcspn(hex,"\r\n ");assert(length%2U==0U && length/2U<=HOST_BYTES && queue_count<HOST_QUEUE);
@@ -251,20 +278,29 @@ static void CaptureEvent(uint64_t frame)
  UDPSoundEvent_OnCapture(&slice);
 }
 /**
- * @brief 执行一个板角色的受控前台命令，包括真实标定控制请求。
- * @param argc 参数数，应为4。
- * @param argv 角色、启动毫秒、共同时间；仅进程启动时读取，不保留外部指针。
+ * @brief 执行一个板角色的受控前台命令，包括标定和模式观测。
+ * @param argc 参数数，通常为4，启用模式观测时为5。
+ * @param argv 角色、启动毫秒、共同时间纳秒及可选启动代次；仅启动时读取，不保留指针。
  * @return 正常退出为0，未知命令或断言失败时非零。
- * @note STEP才推进App；CAL仅排队，下一轮RefreshRanging刷新健康后消费。
+ * @note STEP才推进App；CAL仅排队，模式命令由真实应用接口校验角色和代次。
  */
 int main(int argc,char **argv)
 {
- assert(argc==4 && (argv[1][0]=='A' || argv[1][0]=='B'));
+#ifdef SBCG_USE_MODE_OBSERVATION
+ assert(argc==5);
+#else
+ assert(argc==4);
+#endif
+ assert(argv[1][0]=='A' || argv[1][0]=='B');
  const uint32_t ids[2][3]={{0x001A002DU,0x30365105U,0x36363631U},{0x00380050U,0x35385104U,0x37313532U}};
  memcpy(info_uid,ids[argv[1][0]=='A'?0U:1U],sizeof info_uid);assert(BoardIdentity_Resolve(&BoardIdentity_DefaultMap,info_uid,&identity));
  IP_ADDR4(&peer_ip,identity.peer_ip[0],identity.peer_ip[1],identity.peer_ip[2],identity.peer_ip[3]);
  IP_ADDR4(&gnetif.ip_addr,identity.local_ip[0],identity.local_ip[1],identity.local_ip[2],identity.local_ip[3]);gnetif.flags=NETIF_FLAG_UP|NETIF_FLAG_LINK_UP;
  common_ns=(uint64_t)strtoull(argv[3],NULL,10);Reset((uint32_t)strtoul(argv[2],NULL,10),true);
+#ifdef SBCG_USE_MODE_OBSERVATION
+ const uint64_t boot_id=(uint64_t)strtoull(argv[4],NULL,10);
+ if(boot_id!=0U){assert(App_ModeSetBoot(boot_id));}
+#endif
  puts("{\"type\":\"done\"}");fflush(stdout);char command[4096];
  while(fgets(command,sizeof command,stdin)!=NULL){
   unsigned value=0U;uint32_t at=0U,seq=0U;uint64_t clock=0U,event_time=0U;
@@ -280,6 +316,12 @@ int main(int argc,char **argv)
    }
   }else if(strncmp(command,"RX ",3U)==0)Queue(command+3);
   else if(strncmp(command,"SNAP",4U)==0)Snapshot();
+#ifdef SBCG_USE_MODE_OBSERVATION
+  else if(strcmp(command,"MODE_SNAP\n")==0)ModeSnapshotJson();
+  else if(sscanf(command,"MODE_REQUEST %u",&value)==1)ModeReplyJson(App_ModeRequest((ModeKind)value));
+  else if(strncmp(command,"MODE_BOOT ",10U)==0)
+   ModeReplyJson(App_ModeSetBoot((uint64_t)strtoull(command+10,NULL,10)));
+#endif
   else if(sscanf(command,"SYNC %u",&value)==1)sync_faulted=value==0U;
   else if(sscanf(command,"CLOCK %u",&value)==1)clock_ok=value!=0U;
   else if(sscanf(command,"EPOCH %u",&value)==1)clock_epoch=value;

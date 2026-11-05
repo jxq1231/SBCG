@@ -1,6 +1,15 @@
+/**
+ * @file test_temperature_console.c
+ * @brief 使用模拟串口验证前台命令的组帧、节流和模式诊断入口。
+ * @details 分别编译普通版和诊断版，不访问硬件。
+ * @note 使用断言验证命令输出和交给应用的参数。
+ */
 #include "Console/temperature_console.h"
 #include "BSP/bsp_console.h"
 #include "Temperature/temperature_service.h"
+#ifdef SBCG_MODE_TEST_CONTROL
+#include "app_main.h"
+#endif
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +18,30 @@ static unsigned symbols[2048], rd, wr, sets, autos, logs;
 static char output[8192];
 static TemperatureSnapshot snapshot;
 static bool low, allow = true;
+
+#ifdef SBCG_MODE_TEST_CONTROL
+static uint64_t boot_id;
+static ModeKind requested_mode;
+static unsigned mode_reports;
+
+/** @brief 模拟应用一次性接受启动代次。@param boot 非零代次。@return 首次有效输入为真。 */
+bool App_ModeSetBoot(uint64_t boot)
+{
+    if (boot == 0U || boot_id != 0U) { return false; }
+    boot_id = boot;
+    return true;
+}
+
+/** @brief 记录请求参数。@param mode 诊断请求的模式。@return 已接收请求。 */
+bool App_ModeRequest(ModeKind mode)
+{
+    requested_mode = mode;
+    return true;
+}
+
+/** @brief 模拟输出模式快照。@return 无返回值，只递增次数。 */
+void App_ReportMode(void) { ++mode_reports; }
+#endif
 
 BSP_ConsoleRxResult BSP_Console_Read(uint8_t *out)
 {
@@ -53,6 +86,7 @@ static void clear(void) { output[0] = '\0'; logs = 0; }
 static void drain(uint32_t *tick)
 { while (rd != wr) { TemperatureConsole_Process(*tick); *tick += 100U; } }
 
+/** @brief 按虚拟毫秒时间驱动并验证普通和诊断命令。@return 全部断言成功时返回0。 */
 int main(void)
 {
     uint32_t tick = 0;
@@ -113,6 +147,26 @@ int main(void)
     for (unsigned i=0; i<64U; ++i) { feed("X"); }
     feed("\n"); drain(&tick);
     assert(strstr(output, "REASON=FRAME"));
+    clear();
+    feed("MODE BOOT 18446744073709551616\nMODE BOOT 0\nMODE BOOT +1\n");
+    drain(&tick);
+#ifdef SBCG_MODE_TEST_CONTROL
+    assert(boot_id == 0U && strstr(output, "NAME=MODE_BOOT,RESULT=ERROR,REASON=VALUE"));
+    clear(); low = true;
+    feed("MODE BOOT 18446744073709551615\n");
+    TemperatureConsole_Process(tick);
+    assert(boot_id == 0U && logs == 0U);
+    low = false; drain(&tick);
+    assert(boot_id == UINT64_MAX && strstr(output, "NAME=MODE_BOOT,RESULT=OK"));
+    clear(); feed("MODE BOOT 1\nMODE SET WAVE\nMODE?\n"); drain(&tick);
+    assert(boot_id == UINT64_MAX && strstr(output, "NAME=MODE_BOOT,RESULT=ERROR,REASON=UNAVAILABLE"));
+    assert(requested_mode == MODE_WAVE && strstr(output, "NAME=MODE_SET,RESULT=OK"));
+    assert(mode_reports == 1U);
+    clear(); feed("MODE SET NOT_A_MODE\n"); drain(&tick);
+    assert(requested_mode == MODE_WAVE && strstr(output, "NAME=MODE_SET,RESULT=ERROR,REASON=VALUE"));
+#else
+    assert(strstr(output, "NAME=INVALID,RESULT=ERROR,REASON=COMMAND"));
+#endif
     puts("PASS console: fragmentation, commands, limits, resync, rate/low guards");
     return 0;
 }

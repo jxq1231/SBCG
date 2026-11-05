@@ -1,4 +1,4 @@
-"""Real A/B processes: packet faults, stream recovery and calibration requests.
+"""Real A/B processes: packet faults, stream recovery, calibration and mode observation.
 
 Only HAL/audio/PTP and LwIP I/O are replaced. JSON done records delimit each
 command; the reader thread only writes to Queue, and the main thread owns the
@@ -15,13 +15,14 @@ CHECKS=0
 
 class Board:
     """One real application process with one completed command at a time."""
-    def __init__(self,role,start_ms,common_ns):
+    def __init__(self,role,start_ms,common_ns,boot_id=1,record_label=None):
         self.role=role
+        self.record_label=record_label or role
         self.messages=queue.Queue()
         self.packets=[]
         self.history=[]
         self.records=[]
-        self.proc=subprocess.Popen([str(EXE),role,str(start_ms),str(common_ns)],
+        self.proc=subprocess.Popen([str(EXE),role,str(start_ms),str(common_ns),str(boot_id)],
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
             text=True,encoding='utf-8')
         self.reader=threading.Thread(target=self._read,daemon=True)
@@ -47,7 +48,7 @@ class Board:
             if kind=='packet':
                 self.packets.append(item)
                 self.history.append(item)
-            elif kind=='snapshot':
+            elif kind in ('snapshot','mode','mode_reply'):
                 snapshot=item
             elif kind in ('error','eof'):
                 raise AssertionError(f'{self.role}: child failed: {item}')
@@ -67,11 +68,11 @@ class Board:
             self.proc.wait()
         self.reader.join(timeout=5)
         self.proc.stdout.close()
-        (OUT/f'native_{self.role}.jsonl').write_text(
+        (OUT/f'native_{self.record_label}.jsonl').write_text(
             ''.join(json.dumps(record)+'\n' for record in self.records),encoding='utf-8')
         assert self.proc.returncode==0, (self.role,self.proc.returncode)
 
-def drain(a,b,drop_acks=False,drop_clap_acks=False):
+def drain(a,b,drop_acks=False,drop_clap_acks=False,route=None):
     """Forward completed-command packets; failed sends never reach the peer."""
     for source,destination in ((a,b),(b,a)):
         pending,source.packets=source.packets,[]
@@ -82,7 +83,9 @@ def drain(a,b,drop_acks=False,drop_clap_acks=False):
                 continue
             if drop_clap_acks and packet['hex'].startswith('434c4131'):
                 continue
-            destination.cmd('RX '+packet['hex'])
+            forwarded=(packet['hex'],) if route is None else route(packet['hex'])
+            for payload in forwarded:
+                destination.cmd('RX '+payload)
 
 def snap(a,b,label):
     sa=a.cmd('SNAP');sb=b.cmd('SNAP')
@@ -112,6 +115,184 @@ def group_status_packets(packets):
         groups.setdefault(key,[]).append(packet)
     return groups
 
+def run_mode_tests():
+    """Run real MDP1 through the same receive callback as existing business packets."""
+    none,range_mode,clap,wave,calibration=0,1,2,3,4
+    startup,active=0,3
+    hello,prepare,ready,commit,committed,ping,pong=1,2,3,4,5,6,7
+    mode_magic='4d445031'
+    a=Board('A',0,0,boot_id=0,record_label='mode_A_initial')
+    b=Board('B',0,0,boot_id=0,record_label='mode_B_initial')
+    origins={'A':0,'B':0}
+    wall_ms=0
+
+    def step(route=None,sequence=0,partition=False):
+        nonlocal wall_ms
+        wall_ms+=50
+        common_ns=1_000_000_000+wall_ms*1_000_000
+        a.cmd(f'STEP {wall_ms-origins["A"]} {common_ns} {sequence} {common_ns}')
+        b.cmd(f'STEP {wall_ms-origins["B"]} {common_ns} {sequence} {common_ns+900_000}')
+        def forward(payload):
+            if partition:
+                return ()
+            if route is not None and payload.startswith(mode_magic):
+                return route(payload)
+            return (payload,)
+        drain(a,b,route=forward)
+
+    def observe():
+        return a.cmd('MODE_SNAP'),b.cmd('MODE_SNAP')
+
+    def key(snapshot):
+        return tuple(snapshot[field] for field in ('a_boot','b_boot','mode_seq'))
+
+    def converge(mode,a_boot,b_boot,after=0,route=None):
+        for _ in range(120):
+            step(route)
+            sa,sb=observe()
+            if (sa['state']==sb['state']==active and sa['effective']==sb['effective']==mode
+                    and key(sa)==key(sb) and key(sa)[:2]==(a_boot,b_boot) and sa['mode_seq']>after):
+                return key(sa)
+        raise AssertionError(f'mode {mode} did not converge: A={sa} B={sb}')
+
+    def mode_packets(board,operation,mode):
+        return [packet['hex'] for packet in board.history
+                if packet['hex'].startswith(mode_magic)
+                and bytes.fromhex(packet['hex'])[5:7]==bytes((operation,mode))]
+
+    def replay(source_packets,destination):
+        for payload in source_packets:
+            destination.cmd('RX '+payload)
+
+    try:
+        sa,sb=observe()
+        check(sa['role']==1 and sb['role']==2 and sa['state']==sb['state']==startup
+              and sa['effective']==sb['effective']==none,
+              'A/B UID roles stay separate and STARTUP has no mode without assigned boots')
+        check(a.cmd('MODE_BOOT 0')['accepted']==0,'zero boot ID is rejected')
+        check(a.cmd('MODE_BOOT 100')['accepted']==1 and b.cmd('MODE_BOOT 200')['accepted']==1,
+              'each process accepts one injected nonzero boot ID')
+        check(a.cmd('MODE_BOOT 101')['accepted']==0 and b.cmd('MODE_BOOT 200')['accepted']==0,
+              'the running boot ID cannot be replaced or registered twice')
+        check(b.cmd(f'MODE_REQUEST {clap}')['accepted']==0,
+              'B cannot request a mode change')
+        sa,sb=observe()
+        check(sa['requested']==range_mode and sa['effective']==sb['effective']==none,
+              'A requests RANGE at boot; neither board reports it effective without a handshake')
+
+        to_drop={prepare,ready,commit,committed}
+        def drop_first_handshake_attempt(payload):
+            op=bytes.fromhex(payload)[5]
+            if op in to_drop:
+                to_drop.remove(op)
+                return ()
+            return (payload,)
+
+        range_key=converge(range_mode,100,200,route=drop_first_handshake_attempt)
+        check(not to_drop and range_key[2]>0,
+              'default RANGE converges after dropping the first PREPARE, READY, COMMIT and COMMITTED')
+        old_prepare=mode_packets(a,prepare,range_mode)[-1]
+        old_commit=mode_packets(a,commit,range_mode)[-1]
+        old_ready=mode_packets(b,ready,range_mode)[-1]
+        old_committed=mode_packets(b,committed,range_mode)[-1]
+        old_hello=mode_packets(b,hello,none)[-1]
+        reordered=False
+        def reorder_and_duplicate(payload):
+            nonlocal reordered
+            op,mode=bytes.fromhex(payload)[5:7]
+            if not reordered and (op,mode)==(prepare,clap):
+                reordered=True
+                return payload,old_commit,old_prepare,payload
+            return (payload,)
+
+        check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A accepts the CLAP request')
+        clap_key=converge(clap,100,200,after=range_key[2],route=reorder_and_duplicate)
+        replay((old_ready,old_committed),a)
+        step()
+        sa,sb=observe()
+        check(reordered and key(sa)==key(sb)==clap_key and sa['effective']==sb['effective']==clap,
+              'old phases reordered around duplicate PREPARE cannot roll back confirmed CLAP')
+
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A accepts the WAVE request')
+        wave_key=converge(wave,100,200,after=clap_key[2])
+        check(wave_key[2]>clap_key[2],'both boards confirm WAVE with a new mode sequence')
+        for index in range(160):
+            step(sequence={39:1,79:2,119:3}.get(index,0))
+        sa,sb=snap(a,b,'WAVE observation preserves legacy CHIRP')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
+              'observing WAVE still runs real CHIRP pairing and publishes legacy RST2 on both boards')
+        a.cmd('CLASS 2');b.cmd('CLASS 2')
+        a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
+        for index in range(25):
+            step(sequence=4 if index==1 else 0)
+        sa,sb=snap(a,b,'WAVE observation preserves legacy CLAP')
+        check(sa['clap_has']==sb['clap_has']==1 and sa['clap_id']==sb['clap_id']!=0,
+              'observing WAVE still runs real CLAP pairing and CLP1/CLA1 exchange')
+        a.cmd('CLASS 1');b.cmd('CLASS 1')
+        a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
+
+        check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,'A accepts the CALIBRATION request')
+        cal_key=converge(calibration,100,200,after=wave_key[2])
+        check(a.cmd(f'MODE_REQUEST {range_mode}')['accepted']==1,'A accepts the return to RANGE')
+        range_key=converge(range_mode,100,200,after=cal_key[2])
+        check(range_key[2]>cal_key[2],'the second RANGE has a fresh mode sequence')
+        for _ in range(15):
+            step()
+
+        old_to_b=tuple(mode_packets(a,op,range_mode)[-1] for op in (prepare,commit,ping,pong))
+        old_to_a=tuple(mode_packets(b,op,range_mode)[-1] for op in (ready,committed,ping,pong))
+        for _ in range(60):
+            step(partition=True)
+        sa,sb=observe()
+        check(sa['effective']==sb['effective']==none and sa['state']!=active and sb['state']!=active,
+              'packet loss with carrier still up expires both leases')
+        replay(old_to_a,a);replay(old_to_b,b)
+        step(partition=True)
+        sa,sb=observe()
+        check(sa['effective']==sb['effective']==none,
+              'old confirmations and probes cannot renew an expired lease')
+        range_key=converge(range_mode,100,200,after=range_key[2])
+        check(range_key[2]>0,'restored delivery establishes a new mode sequence')
+
+        b.stop()
+        b=Board('B',0,1_000_000_000+wall_ms*1_000_000,boot_id=201,record_label='mode_B_restart')
+        origins['B']=wall_ms
+        replay(old_to_b,b);replay(old_to_a,a)
+        step()
+        check(b.cmd('MODE_SNAP')['effective']==none,
+              'B restart with a higher boot rejects retained A packets addressed to the old boot')
+        b_key=converge(range_mode,100,201,after=range_key[2])
+        replay((old_hello,),a)
+        step()
+        sa,sb=observe()
+        check(key(sa)==key(sb)==b_key and sa['effective']==sb['effective']==range_mode,
+              'both boards recover from B-only restart and reject an older B HELLO')
+
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A requests WAVE before A-only restart')
+        converge(wave,100,201,after=b_key[2])
+        old_a_boot_packets=tuple(mode_packets(a,op,wave)[-1] for op in (prepare,commit))
+        old_b_confirmations=tuple(mode_packets(b,op,wave)[-1] for op in (ready,committed))
+        a.stop()
+        a=Board('A',0,1_000_000_000+wall_ms*1_000_000,boot_id=101,record_label='mode_A_restart')
+        origins['A']=wall_ms
+        replay(old_b_confirmations,a)
+        step()
+        check(a.cmd('MODE_SNAP')['effective']==none,'A restart does not recover the old committed mode')
+        a_key=converge(range_mode,101,201)
+        replay(old_a_boot_packets,b)
+        step()
+        sa,sb=observe()
+        check(key(sa)==key(sb)==a_key and sa['effective']==sb['effective']==range_mode,
+              'A-only restart defaults to RANGE and an old A boot cannot restore WAVE')
+
+        control=[bytes.fromhex(packet['hex']) for board in (a,b) for packet in board.history
+                 if packet['hex'].startswith(mode_magic)]
+        check(control and all(len(data)==40 and data[4]==1 for data in control),
+              'mode observation uses separate fixed-size versioned MDP1 datagrams')
+    finally:
+        a.stop()
+        b.stop()
+
 def main():
     gcc=shutil.which('gcc')
     if gcc is None: print('gcc not found',file=sys.stderr); sys.exit(2)
@@ -121,7 +302,7 @@ def main():
          '-DSBCG_USE_AUDIO_ANCHOR=1','-DSBCG_USE_AUDIO_MAP=1',
          '-DSBCG_USE_SOUND_TIME=1','-DSBCG_USE_BOARD_SYNC=1','-DSBCG_USE_BOARD_IDENTITY=1',
          '-DSBCG_USE_CALIBRATION_CONTROL=1',
-         '-DSBCG_USE_ADVANCED_UI=1',
+         '-DSBCG_USE_ADVANCED_UI=1','-DSBCG_USE_MODE_OBSERVATION=1',
          '-I',str(ROOT), '-I',str(ROOT/'Tests/App'), '-I',str(ROOT/'App'), '-I',str(ROOT/'Tests/App/stubs'),
          '-I',str(ROOT/'Middlewares/Third_Party/LwIP/src/include'),
          '-I',str(ROOT/'Middlewares/Third_Party/LwIP/system'), '-I',str(ROOT/'LWIP/Target'),
@@ -134,6 +315,7 @@ def main():
          str(ROOT/'App/Calibration/calibration.c'),str(ROOT/'App/Sync/time_domain.c'),
          str(ROOT/'App/Calibration/calibration_control.c'),
          str(ROOT/'App/Network/udp_sound_event.c'),str(ROOT/'App/Network/ranging_session.c'),
+         str(ROOT/'App/Network/mode_wire.c'),str(ROOT/'App/Mode/mode_service.c'),
          str(ROOT/'App/Network/domain_wire.c'),str(ROOT/'App/Network/measurement_wire.c'),
          str(ROOT/'App/Network/measurement_ack.c'),str(ROOT/'App/Network/ranging_status_wire.c'),
          str(ROOT/'App/Network/temperature_wire.c'),str(ROOT/'App/Network/sound_event_wire.c'),
@@ -147,7 +329,6 @@ def main():
          '-o',str(EXE)]
     build=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
     if build.returncode: print(build.stdout+build.stderr); sys.exit(build.returncode)
-
 
     a=Board('A',0,0);b=Board('B',0,0)
     delta_ns=900_000
@@ -543,6 +724,9 @@ def main():
         a.stop();b.stop()
     print(f'RESULT PASS ({CHECKS} checks: {baseline_checks-1} preserved baseline + '
           f'{CHECKS-baseline_checks+1} advanced; native_A.jsonl/native_B.jsonl retained)')
+    before_mode=CHECKS
+    run_mode_tests()
+    print(f'MODE RESULT PASS ({CHECKS-before_mode} checks; native_mode_*.jsonl retained)')
 
 if __name__=='__main__':
     main()

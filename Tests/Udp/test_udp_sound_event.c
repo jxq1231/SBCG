@@ -3,6 +3,7 @@
  * @brief       在主机桩网络边界验证真实声音事件UDP服务与配对核心。
  * @details     覆盖右锚发布延迟、域撤销、等待边界、回绕、容量和歧义拒绝；
  *              成功配对提供确定PCM走真实相关，另测缺窗/低相关拒绝与1m/2m恢复。
+ *              模式观测构建另验证MDP1格式、双板角色和UDP端点限制。
  * @note        仅替换LwIP收发，不替换UDP服务或配对算法，不代表实物网络验收。
  */
 #include "Network/udp_sound_event.h"
@@ -533,6 +534,157 @@ static void TestWaveformEvidence(const BoardIdentityProfile *profile)
     puts("PASS waveform evidence: missing local/remote and low correlation reject; real NCC 1m/2m recover");
 }
 /** @brief 运行真实UDP集成场景；无参数，成功返回0，失败由断言终止。 */
+#ifdef SBCG_USE_MODE_OBSERVATION
+static const uint8_t mode_ready_wire[MODE_CONTROL_WIRE_BYTES]={
+    'M','D','P','1',1U,3U,2U,2U,
+    0x01U,0x23U,0x45U,0x67U,0x89U,0xabU,0xcdU,0xefU,
+    0x10U,0x32U,0x54U,0x76U,0x98U,0xbaU,0xdcU,0xfeU,
+    0,0,0,0,0,0,0,7U,0,0,0,0,0,0,0,0
+};
+static ModeControlMessage received_mode;
+static unsigned mode_count;
+
+/**
+ * @brief 保存MDP1接收回调副本并累计调用次数。
+ * @param message 非NULL只读消息，仅本次借用。
+ * @return 无返回值。
+ */
+static void ModeControlSink(const ModeControlMessage *message)
+{
+    received_mode=*message;
+    ++mode_count;
+}
+
+/**
+ * @brief 用独立字节向量验证大端布局及非法字段拒绝。
+ * @return 无返回值，失败时终止测试。
+ */
+static void TestModeControlWire(void)
+{
+    ModeControlMessage message;
+    assert(ModeControlWire_Decode(mode_ready_wire,sizeof mode_ready_wire,&message));
+    assert(message.op==MODE_CONTROL_READY && message.mode==MODE_CLAP &&
+           message.role==BOARD_ROLE_B && message.mode_seq==7U && message.probe_id==0U);
+    assert(message.a_boot==UINT64_C(0x0123456789abcdef) &&
+           message.b_boot==UINT64_C(0x1032547698badcfe));
+    uint8_t wire[MODE_CONTROL_WIRE_BYTES];
+    assert(ModeControlWire_Encode(&message,wire,sizeof wire));
+    assert(memcmp(wire,mode_ready_wire,sizeof wire)==0);
+    assert(!ModeControlWire_Decode(wire,sizeof wire-1U,&message));
+
+    const struct { uint8_t offset; uint8_t value; } invalid[]={
+        {0U,'X'},{4U,2U},{5U,0xffU},{6U,0U},{6U,5U},{7U,1U},{7U,0U},{31U,0U},{39U,1U}
+    };
+    for(size_t i=0U;i<sizeof invalid/sizeof invalid[0];++i)
+    {
+        memcpy(wire,mode_ready_wire,sizeof wire);
+        wire[invalid[i].offset]=invalid[i].value;
+        assert(!ModeControlWire_Decode(wire,sizeof wire,&message));
+        assert(message.op==MODE_CONTROL_READY && message.mode_seq==7U);
+    }
+
+    ModeControlMessage hello={
+        .op=MODE_CONTROL_HELLO,.mode=MODE_NONE,.role=BOARD_ROLE_B,.b_boot=3U
+    };
+    assert(ModeControlWire_Encode(&hello,wire,sizeof wire));
+    assert(ModeControlWire_Decode(wire,sizeof wire,&message) && message.a_boot==0U);
+    hello.b_boot=0U;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire) && wire[23]==3U);
+    hello.b_boot=3U;
+    hello.mode=MODE_RANGE;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire));
+    hello.mode=MODE_NONE;
+    hello.mode_seq=1U;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire));
+    hello.mode_seq=0U;
+    hello.probe_id=1U;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire));
+
+    ModeControlMessage ping={
+        .op=MODE_CONTROL_PING,.mode=MODE_WAVE,.role=BOARD_ROLE_A,
+        .a_boot=1U,.b_boot=3U,.mode_seq=4U,.probe_id=UINT64_MAX
+    };
+    assert(ModeControlWire_Encode(&ping,wire,sizeof wire));
+    assert(ModeControlWire_Decode(wire,sizeof wire,&message) && message.probe_id==UINT64_MAX);
+    ping.op=MODE_CONTROL_PONG;
+    ping.role=BOARD_ROLE_B;
+    assert(ModeControlWire_Encode(&ping,wire,sizeof wire));
+    ping.probe_id=0U;
+    assert(!ModeControlWire_Encode(&ping,wire,sizeof wire));
+    ping.probe_id=1U;
+    ping.a_boot=0U;
+    assert(!ModeControlWire_Encode(&ping,wire,sizeof wire));
+}
+
+/**
+ * @brief 检查真实UDP分派、端点拒绝、发送角色及pbuf归还。
+ * @param profile 非NULL只读A板身份，由测试入口提供，仅本次借用。
+ * @return 无返回值，失败时终止测试。
+ */
+static void TestModeControlTransport(const BoardIdentityProfile *profile)
+{
+    const ModeControlMessage prepare={
+        .op=MODE_CONTROL_PREPARE,.mode=MODE_CLAP,.role=BOARD_ROLE_A,
+        .a_boot=UINT64_C(0x0123456789abcdef),.b_boot=UINT64_C(0x1032547698badcfe),
+        .mode_seq=7U
+    };
+    assert(UDPSoundEvent_Init(0U,profile,Tick,Log));
+    UDPSoundEvent_SetModeControlSink(ModeControlSink);
+    assert(!UDPSoundEvent_SendModeControl(&prepare));
+    UDPSoundEvent_Process(0U);
+
+    const unsigned before_send=sends,before_alloc=allocs,before_free=frees;
+    assert(UDPSoundEvent_SendModeControl(&prepare));
+    assert(sends==before_send+1U && allocs==before_alloc+1U && frees==before_free+1U);
+    assert(fake_pbuf.tot_len==MODE_CONTROL_WIRE_BYTES);
+    uint8_t prepare_wire[MODE_CONTROL_WIRE_BYTES];
+    memcpy(prepare_wire,mode_ready_wire,sizeof prepare_wire);
+    prepare_wire[5]=2U;
+    prepare_wire[7]=1U;
+    assert(memcmp(sent,prepare_wire,sizeof prepare_wire)==0);
+
+    const unsigned before_rx_free=frees;
+    ReceiveBytes(mode_ready_wire,sizeof mode_ready_wire);
+    assert(mode_count==1U && received_mode.op==MODE_CONTROL_READY &&
+           received_mode.b_boot==prepare.b_boot && received_mode.mode_seq==7U);
+    ReceiveBytes(prepare_wire,sizeof prepare_wire); /* 自身角色报文 */
+    ReceiveBytes(mode_ready_wire,sizeof mode_ready_wire-1U); /* 长度不符 */
+    uint8_t malformed[MODE_CONTROL_WIRE_BYTES];
+    memcpy(malformed,mode_ready_wire,sizeof malformed);
+    malformed[4]=0U;
+    ReceiveBytes(malformed,sizeof malformed);
+    struct pbuf packet={0};
+    packet.payload=(void *)mode_ready_wire;
+    packet.tot_len=sizeof mode_ready_wire;
+    receive_cb(receive_arg,&fake_pcb,&packet,&peer_ip,5008U);
+    ip_addr_t unknown_ip;
+    IP_ADDR4(&unknown_ip,192,168,10,3);
+    receive_cb(receive_arg,&fake_pcb,&packet,&unknown_ip,5009U);
+
+    uint32_t rx_ok,rx_bad,foreign;
+    UDPSoundEvent_GetSnapshot(NULL,NULL,NULL,&rx_ok,&rx_bad,&foreign);
+    assert(rx_ok==1U && rx_bad==3U && foreign==2U);
+    assert(mode_count==1U && frees==before_rx_free+6U);
+    assert(!UDPSoundEvent_SendModeControl(&received_mode)); /* 对端角色 */
+    gnetif.flags=NETIF_FLAG_UP;
+    assert(!UDPSoundEvent_SendModeControl(&prepare));
+    gnetif.flags=NETIF_FLAG_UP|NETIF_FLAG_LINK_UP;
+    assert(sends==before_send+1U && allocs==before_alloc+1U);
+
+    BoardIdentityProfile board_b=*profile;
+    board_b.role=BOARD_ROLE_B;
+    assert(UDPSoundEvent_Init(0U,&board_b,Tick,Log));
+    UDPSoundEvent_Process(0U);
+    ReceiveBytes(prepare_wire,sizeof prepare_wire);
+    assert(mode_count==1U); /* 初始化清掉前一个消费者 */
+    UDPSoundEvent_SetModeControlSink(ModeControlSink);
+    ReceiveBytes(prepare_wire,sizeof prepare_wire);
+    assert(mode_count==2U && received_mode.op==MODE_CONTROL_PREPARE &&
+           received_mode.role==BOARD_ROLE_A);
+    assert(!UDPSoundEvent_SendModeControl(&prepare));
+}
+#endif
+
 int main(void)
 {
     BoardIdentityProfile profile;
@@ -606,6 +758,11 @@ int main(void)
     TestPairingLimits(&profile);
     TestWaveWindowCut();
     TestWaveformEvidence(&profile);
+#ifdef SBCG_USE_MODE_OBSERVATION
+    TestModeControlWire();
+    TestModeControlTransport(&profile);
+    puts("PASS MDP1: wire layout, malformed fields, roles, endpoint and pbuf handling");
+#endif
     puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;
 }

@@ -3,6 +3,7 @@
  * @brief       协调单板网络、时间观测、温度与音频服务的初始化和前台调度。
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
+ *              模式控制仅用于观察双板握手，与测距、拍掌和波形调度独立。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
@@ -671,6 +672,99 @@ static void FormatUnsigned64(uint64_t value,char *out)
     out[pos]='\0';
 }
 
+#ifdef SBCG_USE_MODE_OBSERVATION
+/**
+ * ==================== 模块：双板模式观测 ====================
+ * 作用：复用现有UDP端点同步模式并记录状态变化，仅供观测。
+ * 调度顺序：接收回调暂存报文，DHT允许且本轮音频归还与原业务处理后消费并发送。
+ * 调用关系：App_Init注册入口，App_Process推进，诊断命令可设置代次和A板请求。
+ */
+/* 稳定后每5秒输出一次快照，避免只能靠命令观察稳态租约。 */
+#define MODE_REPORT_PERIOD_MS 5000U
+static ModeSnapshot last_mode_report;
+static bool mode_reported;
+static uint32_t last_mode_report_ms;
+
+/** @brief 将本次启动代次交给模式状态机。@param boot 非零且跨启动递增。@return 接受为true。 */
+bool App_ModeSetBoot(uint64_t boot)
+{
+    return ModeService_SetBoot(boot);
+}
+
+/** @brief 提交A板诊断模式请求。@param mode 待请求模式。@return 状态机接收为true。 */
+bool App_ModeRequest(ModeKind mode)
+{
+    return ModeService_Request(mode);
+}
+
+/** @brief 读取模式观测快照。@param out 调用者输出，允许NULL。@return 无返回值。 */
+void App_GetModeSnapshot(ModeSnapshot *out)
+{
+    ModeService_GetSnapshot(out);
+}
+
+/**
+ * @brief 输出一条模式观测记录，不触发状态变化。
+ * @param mode 非NULL前台快照，仅本次调用读取。
+ * @return 无返回值。
+ * @note 复用无符号64位格式化，避免精简C库丢失启动代次的高位。
+ */
+static void LogModeSnapshot(const ModeSnapshot *mode)
+{
+    char a_boot[24], b_boot[24], mode_seq[24];
+    FormatUnsigned64(mode->a_boot, a_boot);
+    FormatUnsigned64(mode->b_boot, b_boot);
+    FormatUnsigned64(mode->mode_seq, mode_seq);
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length = snprintf(line, sizeof line,
+        "$MODE,ROLE=%c,REQUESTED=%u,EFFECTIVE=%u,STATE=%u,A_BOOT=%s,B_BOOT=%s,"
+        "SEQ=%s,REASON=%u,ATTEMPTS=%" PRIu32 "\r\n",
+        mode->role == BOARD_ROLE_A ? 'A' : 'B', (unsigned)mode->requested,
+        (unsigned)mode->effective, (unsigned)mode->state, a_boot, b_boot, mode_seq,
+        (unsigned)mode->reason, mode->attempts);
+    SendLine(line, length);
+}
+
+#ifdef SBCG_MODE_TEST_CONTROL
+/** @brief 响应前台MODE?命令，读取并记录当前状态。@return 无返回值。 */
+void App_ReportMode(void)
+{
+    ModeSnapshot snapshot;
+    App_GetModeSnapshot(&snapshot);
+    LogModeSnapshot(&snapshot);
+}
+#endif
+
+/**
+ * @brief 在DHT允许时消费模式报文并推进握手，变化或周期到期时输出诊断。
+ * @param now_ms 本地HAL毫秒，支持无符号回绕。
+ * @return 无返回值。
+ * @note 不使用PTP时间判断租约，不更改测距、音频或UI资格。本次启动代次登记前只输出首条；
+ *       登记后每MODE_REPORT_PERIOD_MS输出一次稳态快照，重发次数变化不单独产生日志。
+ */
+static void ServiceModeObservation(uint32_t now_ms)
+{
+    EthernetMonitorSnapshot network;
+    EthernetMonitor_GetSnapshot(now_ms, &network);
+    ModeService_Process(now_ms, network.valid && network.link_up, UDPSoundEvent_SendModeControl);
+    ModeSnapshot snapshot;
+    ModeService_GetSnapshot(&snapshot);
+    const bool booted = snapshot.a_boot != 0U || snapshot.b_boot != 0U;
+    const bool periodic = booted &&
+        (uint32_t)(now_ms - last_mode_report_ms) >= MODE_REPORT_PERIOD_MS;
+    if (!mode_reported || periodic || snapshot.state != last_mode_report.state ||
+        snapshot.reason != last_mode_report.reason || snapshot.requested != last_mode_report.requested ||
+        snapshot.effective != last_mode_report.effective || snapshot.a_boot != last_mode_report.a_boot ||
+        snapshot.b_boot != last_mode_report.b_boot || snapshot.mode_seq != last_mode_report.mode_seq)
+    {
+        mode_reported = true;
+        last_mode_report = snapshot;
+        last_mode_report_ms = now_ms;
+        LogModeSnapshot(&snapshot);
+    }
+}
+#endif
+
 /** @brief 将观测决策枚举转成稳定短标签；未知值返回UNKNOWN。 */
 static const char *RangeDecisionName(MeasurementDecision decision)
 {
@@ -952,6 +1046,11 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
 
 #endif
 
+/**
+ * @brief 完成应用资源初始化并在已识别的双板角色上注册模式观测。
+ * @return 无返回值。
+ * @note 仅启动调用。模式观测等待本次启动代次，不在此处推断代次。
+ */
 void App_Init(void)
 {
 #ifdef SBCG_USE_BOARD_SYNC
@@ -996,6 +1095,10 @@ void App_Init(void)
         memcmp(profile->uid_words, info.uid_words, sizeof info.uid_words) == 0;
     EmitBoardIdentity(app_identity_configured ? profile : NULL);
     if (!app_identity_configured) { return; }
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeService_Init(profile->role);
+    mode_reported = false;
+#endif
 #endif
 #ifdef SBCG_USE_SDRAM
     /* FMC/MPU已由main生成初始化。芯片上电等待在音频DMA启动前完成。 */
@@ -1110,6 +1213,9 @@ void App_Init(void)
         UDPSoundEvent_SetRangingStatusSink(PublishRemoteRangingStatus);
         UDPSoundEvent_SetRangingAckSink(HandleRangingAck);
         UDPSoundEvent_SetRangingSessionSink(HandleRangingSession);
+#ifdef SBCG_USE_MODE_OBSERVATION
+        UDPSoundEvent_SetModeControlSink(ModeService_OnControl);
+#endif
 #ifdef SBCG_USE_ADVANCED_UI
         UDPSoundEvent_SetAuxiliarySink(HandleAuxiliary);
 #endif
@@ -1261,7 +1367,7 @@ static void SoundNoticeDrain(uint32_t now_ms)
  * @return  无返回值（void）。
  * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
  *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
- *          DHT低态仍逐轮将最新域资格复制给UDP层；此标量同步不主动发送报文或读取音频。
+ *          DHT低态仍逐轮将最新域资格复制给UDP层；模式控制收包只暂存，前台处理延后至允许时。
  *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
  *          WAVE全滞后搜索在网络及测距处理后每轮只推进一批，避免回调重复计算。
  *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
@@ -1431,6 +1537,10 @@ void App_Process(void)
         WaveformService_ProcessPeriod();
         const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
         if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+#endif
+#ifdef SBCG_USE_MODE_OBSERVATION
+        /* UDP提交可能等待ETH发送，本轮音频块归还和原有业务处理后才推进观测。 */
+        ServiceModeObservation(BSP_Console_GetTickMs());
 #endif
 #endif
     }

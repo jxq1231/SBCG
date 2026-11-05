@@ -1,7 +1,8 @@
 /**
  * @file        udp_sound_event.h
  * @brief       两板声音事件UDP发布、接收与配对结果输出（仅NO_SYS前台）。
- * @details     使用固定36字节事件线协议，校验来源、事件侧和当前有效域；撤域或换域清旧队列。
+ * @details     按版本解码声音事件，校验来源、事件侧和当前有效域；撤域或换域清旧队列。
+ *              可选模式观测使用同一端口收发固定对端MDP1控制消息。
  * @note        事件时间必须是本地PTP模型时间；共同时间域由上层同步状态提供，调用方不得伪造。
  */
 #ifndef SBCG_UDP_SOUND_EVENT_H
@@ -16,6 +17,9 @@
 #include "Network/ranging_status_wire.h"
 #include "Network/ranging_session.h"
 #include "BSP/board_identity.h"
+#ifdef SBCG_USE_MODE_OBSERVATION
+#include "Network/mode_wire.h"
+#endif
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -90,6 +94,25 @@ typedef void (*UDPSoundEvent_RangingSessionSink)(const RangingSessionMessage *me
 void UDPSoundEvent_SetRangingSessionSink(UDPSoundEvent_RangingSessionSink sink);
 /** @brief 通过原5009端口发送RSC2；now_ms只作接口一致性，失败返回false。 */
 bool UDPSoundEvent_SendRangingSession(uint32_t now_ms,const RangingSessionMessage *message);
+
+#ifdef SBCG_USE_MODE_OBSERVATION
+/** @brief 固定对端MDP1消费者；只在前台接收回调内借用消息。 */
+typedef void (*UDPSoundEvent_ModeControlSink)(const ModeControlMessage *message);
+
+/**
+ * @brief 设置MDP1前台接收消费者。
+ * @param sink 可为NULL，NULL表示不交付，非NULL须在注册期间保持有效。
+ * @return 无返回值。
+ */
+void UDPSoundEvent_SetModeControlSink(UDPSoundEvent_ModeControlSink sink);
+
+/**
+ * @brief 通过原5009端口向固定对端发送本板的MDP1消息。
+ * @param message 非NULL只读消息，仅本次借用，发送角色须与本板一致。
+ * @return UDP发送成功为true，字段或网络条件不满足以及发送失败为false。
+ */
+bool UDPSoundEvent_SendModeControl(const ModeControlMessage *message);
+#endif
 
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,
