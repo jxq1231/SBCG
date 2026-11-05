@@ -65,6 +65,8 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block);
  *       尚未验证的候选不计为有效候选。
  */
 bool SoundDetectorService_Complete(bool accepted);
+/** @brief 模式切换后丢弃分类历史与候选；须先归还PCM。 @return 无返回值。 */
+void SoundDetectorService_DiscardPending(void);
 /**
  * @brief 在归还后检查采集健康，清理过期队列并限速输出。
  * @param now_ms 当前HAL毫秒计数。

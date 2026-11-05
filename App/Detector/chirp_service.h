@@ -78,6 +78,8 @@ bool ChirpService_Stage(uint32_t now_ms,const BSP_AudioBlock *block);
  * @note 不再访问DMA/描述符；失败丢弃未发布的旧候选与搜索。
  */
 bool ChirpService_Complete(bool accepted);
+/** @brief 模式切换后丢弃搜索与捕获历史；须先归还PCM。 @return 无返回值。 */
+void ChirpService_DiscardPending(void);
 /**
  * @brief 在已归还数据上推进一次预算内扫描/搜索，并最多发送一行。
  * @param now_ms 最新HAL毫秒，处理流健康、候选有效期和日志节流。

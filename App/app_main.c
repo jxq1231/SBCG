@@ -3,7 +3,7 @@
  * @brief       协调单板网络、时间观测、温度与音频服务的初始化和前台调度。
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
- *              模式控制仅用于观察双板握手，与测距、拍掌和波形调度独立。
+ *              双板模式握手管理声音事件采样边界与测距、拍掌和波形准入。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
@@ -956,6 +956,8 @@ static void ServiceModeObservation(uint32_t now_ms)
 
 /** @brief 上一次模式闸门是否允许测距业务；仅在本板已登记代次时有效。 */
 static bool mode_business_ranging_active;
+static ModeSnapshot mode_sound_generation;
+static AudioCaptureSoundBoundary mode_sound_boundary;
 #ifdef SBCG_USE_ADVANCED_UI
 /** @brief 上一次模式闸门是否允许CLAP业务；离开CLAP时撤销待发/展示。 */
 static bool mode_business_clap_active;
@@ -966,7 +968,7 @@ static bool mode_business_wave_active;
 /**
  * @brief 在模式进入/离开RANGE/CALIBRATION时清理旧展示与配对候选。
  * @return 无返回值。
- * @note 每轮前台调用一次，只读模式快照；离开时撤销A/B展示、清配对候选与权威交换状态，
+ * @note 每轮前台调用一次，只读模式快照；离开时撤销A/B展示与权威交换状态，
  *       进入时重置交换以强制新的RST2/RAK2确认路径，避免沿用旧世代结果。
  */
 static void ServiceModeBusinessGates(void)
@@ -980,7 +982,6 @@ static void ServiceModeBusinessGates(void)
     if (mode_business_ranging_active && !allowed)
     {
         MeasurementResult_InvalidateForMode(BSP_Console_GetTickMs());
-        UDPSoundEvent_ResetPairing();
         RangingExchange_Init(&ranging_app.exchange);
     }
     else if (!mode_business_ranging_active && allowed)
@@ -1407,6 +1408,8 @@ void App_Init(void)
 #ifdef SBCG_USE_MODE_OBSERVATION
     ModeService_Init(profile->role);
     mode_reported = false;
+    mode_sound_generation = (ModeSnapshot){0};
+    mode_sound_boundary = (AudioCaptureSoundBoundary){0};
 #ifdef SBCG_USE_BOOT_COUNTER
     LoadBootGeneration();
 #endif
@@ -1585,6 +1588,9 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 #endif
     /* 模式准入：RANGE/CALIBRATION仅CHIRP，CLAP仅CLAP，WAVE拒绝两类。 */
     if (!ModeAdmitsSoundType(is_chirp)) { return; }
+#ifdef SBCG_USE_MODE_OBSERVATION
+    if (mode_sound_boundary.controlled && notice->session != ranging_app.local_audio_session) { return; }
+#endif
     if(is_chirp)
     {
         if(event_profile->role==BOARD_ROLE_A)
@@ -1633,9 +1639,70 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 static SoundEventTimeEvent notice_pending[SOUND_NOTICE_MAX];
 static uint32_t notice_pending_ms[SOUND_NOTICE_MAX];
 static uint8_t notice_pending_count;
-/** @brief 暂存或立即发布一条事件；队满时立即发布最旧一条以保序。 */
+#ifdef SBCG_USE_MODE_OBSERVATION
+/**
+ * @brief 在有效模式或握手代次变更后同步撤销旧声音工作，并设置新模式的PCM下界。
+ * @return 无返回值。
+ * @note 仅在前台推进模式且已归还音频块后调用。游标有歧义时，快照可能尚未计入
+ *       待处理的DMA半块回调，因此保守跳过快照位置后的两个半块。
+ */
+static void ServiceModeSoundBoundary(void)
+{
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.state != MODE_ACTIVE) { mode.effective = MODE_NONE; }
+    if (mode.effective == mode_sound_generation.effective &&
+        mode.a_boot == mode_sound_generation.a_boot &&
+        mode.b_boot == mode_sound_generation.b_boot &&
+        mode.mode_seq == mode_sound_generation.mode_seq)
+    { return; }
+
+    mode_sound_generation = mode;
+    const bool ranging = mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION;
+    mode_sound_boundary = (AudioCaptureSoundBoundary){
+        .controlled = mode.a_boot != 0U || mode.b_boot != 0U,
+        .sound_enabled = ranging || mode.effective == MODE_CLAP,
+        .chirp_enabled = ranging
+    };
+    if (mode_sound_boundary.sound_enabled)
+    {
+        BSP_AudioCursor cursor;
+        if (BSP_Audio_ReadCursor(&cursor))
+        {
+            const uint64_t half = BSP_AUDIO_HALF_FRAMES;
+            const uint64_t active_first = cursor.complete_frames - cursor.complete_frames % half;
+            mode_sound_boundary.session = cursor.session;
+            mode_sound_boundary.first_frame = active_first <= UINT64_MAX - half
+                ? active_first + half : UINT64_MAX;
+        }
+        else
+        {
+            BSP_AudioSnapshot audio;
+            BSP_Audio_GetSnapshot(&audio);
+            const uint64_t skip = 2U * BSP_AUDIO_HALF_FRAMES;
+            mode_sound_boundary.session = audio.session;
+            mode_sound_boundary.first_frame = audio.running && audio.index_faults == 0U &&
+                audio.observed_frames <= UINT64_MAX - skip ? audio.observed_frames + skip : UINT64_MAX;
+        }
+    }
+    notice_pending_count = 0U;
+    SoundEventTime_DiscardPending();
+    AudioCapture_SetSoundBoundary(&mode_sound_boundary);
+    UDPSoundEvent_ResetPairing();
+}
+#endif
+/**
+ * @brief 暂存本代次声音通知；队满时立即发布最旧一条以保序。
+ * @param notice 非NULL只读TOA结果，按值复制；来源帧必须属于当前模式。
+ * @return 无返回值；前台丢弃旧模式或不允许的事件。
+ */
 static void SoundNoticeEnqueue(const SoundEventTimeEvent *notice)
 {
+#ifdef SBCG_USE_MODE_OBSERVATION
+    if (!AudioCapture_SoundFrameAllowed(&mode_sound_boundary, notice->session, notice->frame) ||
+        !ModeAdmitsSoundType(notice->event_class == EVENT_CLASS_CHIRP))
+    { return; }
+#endif
     if (notice_pending_count >= SOUND_NOTICE_MAX)
     {
         PublishSoundNotice(&notice_pending[0]);
@@ -1983,6 +2050,7 @@ void App_Process(void)
 #ifdef SBCG_USE_MODE_OBSERVATION
         /* UDP提交可能等待ETH发送，本轮音频块归还和原有业务处理后才推进观测。 */
         ServiceModeObservation(BSP_Console_GetTickMs());
+        ServiceModeSoundBoundary();
         ServiceModeBusinessGates();
 #endif
 #endif

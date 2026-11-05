@@ -433,6 +433,114 @@ def run_mode_tests():
                  if packet['hex'].startswith(mode_magic)]
         check(control and all(len(data)==40 and data[4]==1 for data in control),
               'mode observation uses separate fixed-size versioned MDP1 datagrams')
+
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A requests WAVE before testing sound sources')
+        wave_key=converge(wave,101,201,after=a_key[2])
+        for _ in range(100):
+            step()
+        def sound_counts():
+            return len(business_packets(b'SEVT')),len(business_packets(b'WFR1'))
+
+        old_counts=sound_counts()
+        step(sequence=1)
+        old_notice_tick=wall_ms
+        for board in (a,b):
+            board.cmd('CURSOR 192000')
+        check(a.cmd(f'MODE_REQUEST {range_mode}')['accepted']==1,'A requests RANGE with a pending WAVE notice')
+        range_key=converge(range_mode,101,201,after=wave_key[2])
+        check(wall_ms-old_notice_tick<700,'RANGE activates before the old notice is due')
+
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'queued WAVE sound after RANGE activation')
+        check(sound_counts()==old_counts and sa['has']==sb['has']==0,
+              'a WAVE notice cannot publish under the new RANGE sequence')
+        step(sequence=2)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'late TOA from PCM before the RANGE frame floor')
+        check(sound_counts()==old_counts and sa['has']==sb['has']==0,
+              'late TOA from a half-block that crosses the mode boundary is rejected')
+        step(sequence=3)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete RANGE event')
+        check(sound_counts()==(old_counts[0]+2,old_counts[1]+1) and
+              sa['has']==sb['has']==1 and sa['id']==sb['id']!=0,
+              'the first complete RANGE event produces a fresh result on both boards')
+
+        # RANGE and CALIBRATION both allow CHIRP, but they are distinct generations.
+        old_counts=sound_counts()
+        step(sequence=4)
+        for board in (a,b):
+            board.cmd('CURSOR_FAIL 475136')
+        check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,
+              'A requests CALIBRATION with a pending RANGE notice')
+        cal_key=converge(calibration,101,201,after=range_key[2])
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'pending RANGE event after CALIBRATION activation')
+        check(sound_counts()==old_counts and sa['has']==sb['has']==0,
+              'CALIBRATION rejects an older RANGE notice even though both admit CHIRP')
+        step(sequence=5)
+        for _ in range(17):
+            step()
+        check(sound_counts()==old_counts,
+              'without a trustworthy cursor, the active half-block is conservatively rejected')
+        step(sequence=6)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete CALIBRATION event after cursor fallback')
+        check(sound_counts()==(old_counts[0]+2,old_counts[1]+1) and
+              sa['has']==sb['has']==1 and sa['id']==sb['id']!=0,
+              'CALIBRATION recovers when a complete post-boundary block arrives')
+
+        for board in (a,b):
+            board.cmd('CLASS 2')
+            board.cmd('CAPTURE 0')
+        check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A requests CLAP to test its sound boundary')
+        clap_key=converge(clap,101,201,after=cal_key[2])
+        old_counts=sound_counts()
+        old_clp=len(business_packets(b'CLP1'))
+        step(sequence=7)
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A leaves CLAP with a pending notice')
+        wave_key=converge(wave,101,201,after=clap_key[2])
+        for board in (a,b):
+            board.cmd('CURSOR 768000')
+        check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A re-enters CLAP')
+        clap_key=converge(clap,101,201,after=wave_key[2])
+        step(sequence=8)
+        for _ in range(17):
+            step()
+        check(sound_counts()==old_counts and len(business_packets(b'CLP1'))==old_clp,
+              'CLAP re-entry rejects its pending notice and late TOA before the new boundary')
+        step(sequence=9)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete CLAP event after re-entry')
+        check(sa['clap_has']==sb['clap_has']==1 and sa['clap_id']==sb['clap_id']!=0,
+              'CLAP publishes the first complete event after re-entry')
+
+        for _ in range(60):
+            step(partition=True)
+        sa,sb=observe()
+        check(sa['effective']==sb['effective']==none,'CLAP leases expire during a partition')
+        for board in (a,b):
+            board.cmd('CURSOR 960000')
+        converge(clap,101,201,after=clap_key[2])
+        old_counts=sound_counts()
+        step(sequence=10)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'late CLAP after lease recovery')
+        check(sound_counts()==old_counts and sa['clap_has']==sb['clap_has']==0,
+              'a new lease rejects sound from before its frame boundary')
+        step(sequence=11)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete CLAP after lease recovery')
+        check(sa['clap_has']==sb['clap_has']==1 and sa['clap_id']==sb['clap_id']!=0,
+              'CLAP publishes a complete fresh event after lease recovery')
     finally:
         a.stop()
         b.stop()

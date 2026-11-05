@@ -22,6 +22,7 @@
 #include "Sync/time_domain.h"
 #include "UI/status_snapshot.h"
 #include "UI/waveform_service.h"
+#include "Audio/audio_capture.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 #include "lwip/udp.h"
@@ -41,6 +42,8 @@ static void *receive_context;
 static ip_addr_t peer_ip;
 static BoardIdentityProfile identity;
 static uint64_t common_ns;
+static uint32_t audio_cursor_frame;
+static bool audio_cursor_ok=true;
 static uint32_t audio_session=1U,clock_epoch=3U;
 static uint32_t audio_dropped, audio_processed, audio_index_faults;
 static bool clock_ok=true,sync_faulted,send_ok=true,event_pending,process_blocks=true;
@@ -87,6 +90,10 @@ void EthernetMonitor_GetSnapshot(uint32_t now,EthernetMonitorSnapshot *out)
 {(void)now;if(out)*out=(EthernetMonitorSnapshot){true,netif_is_link_up(&gnetif)!=0U,0U};}
 /** @brief 清检测器边界队列。 @param log 可空日志接口。 @return 无返回值。 */
 void SoundEventTime_Init(void(*log)(const char*,int)){(void)log;event_pending=false;}
+/** @brief 撤销夹具尚未交付的TOA结果。 @return 无返回值。 */
+void SoundEventTime_DiscardPending(void){event_pending=false;}
+/** @brief 接受App交付的采样边界，夹具仍可注入迟到的TOA以测试发布闸门。 @param boundary 非NULL边界。 @return 无返回值。 */
+void AudioCapture_SetSoundBoundary(const AudioCaptureSoundBoundary *boundary){assert(boundary!=NULL);}
 /** @brief 不生成硬件锚点。 @param now 毫秒。 @param observation 只读观测。 @return 无返回值。 */
 void SoundEventTime_Observe(uint32_t now,const AudioTimeAnchorObservation *observation){(void)now;(void)observation;}
 /** @brief 标量TOA由主机输入。 @param now 毫秒。 @param snapshot 采集快照。 @return 无返回值。 */
@@ -124,7 +131,10 @@ void AudioTimeMapMonitor_Observe(uint32_t now,const AudioTimeAnchorObservation *
 void BSP_Audio_GetSnapshot(BSP_AudioSnapshot *out)
 {if(out)*out=(BSP_AudioSnapshot){.running=true,.session=audio_session,.callback_count=1U,
     .last_callback_ms=tick_ms,.dropped_blocks=audio_dropped,.processed_blocks=audio_processed,
-    .index_faults=audio_index_faults};}
+    .index_faults=audio_index_faults,.observed_frames=audio_cursor_ok?0U:audio_cursor_frame};}
+/** @brief 返回注入的DMA位置。 @param out 非NULL输出。 @return true表示游标可用。 */
+bool BSP_Audio_ReadCursor(BSP_AudioCursor *out)
+{assert(out!=NULL);*out=audio_cursor_ok?(BSP_AudioCursor){.complete_frames=audio_cursor_frame,.session=audio_session}:(BSP_AudioCursor){0};return audio_cursor_ok;}
 /** @brief 返回检测计数元数据。 @param out 可空输出。 @return 无返回值。 */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 {if(out)*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=event_delivered};}
@@ -336,6 +346,8 @@ int main(int argc,char **argv)
   else if(sscanf(command,"FAULTS %u",&value)==1)audio_index_faults=value;
   else if(sscanf(command,"PROCESS %u",&value)==1)process_blocks=value!=0U;
   else if(sscanf(command,"CAPTURE %u",&value)==1)capture_enabled=value!=0U;
+  else if(sscanf(command,"CURSOR %u",&value)==1){audio_cursor_frame=value;audio_cursor_ok=true;}
+  else if(sscanf(command,"CURSOR_FAIL %u",&value)==1){audio_cursor_frame=value;audio_cursor_ok=false;}
   else if(sscanf(command,"CLASS %u",&value)==1){assert(value<=EVENT_CLASS_CLAP);host_event_class=(EventClass)value;}
   else if(strncmp(command,"ANCHOR ",7U)==0){
    char *cursor=command+7,*end=NULL;

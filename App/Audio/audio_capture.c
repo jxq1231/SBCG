@@ -2,7 +2,7 @@
  * @file        audio_capture.c
  * @brief       消费音频半缓冲并输出电平、帧位置及归还验证后的声音候选和有界扫频匹配。
  * @details     前台经BSP领取一个已完成的8192帧双声道PCM16块，计算统计并在归还验证成功后发布；按毫秒差节流输出观测日志。
- * @note        依赖已生成的SAI/DMA及音频BSP；处理门控只暂停前台消费，不停止DMA。扫频只在原认领中复制，End通过后分批处理副本。
+ * @note        依赖已生成的SAI/DMA及音频BSP；前台门控不停止DMA。声音业务仅接纳新模式的完整半块，公共PCM处理继续。
  */
 #include "audio_capture.h"
 #ifdef SBCG_USE_ADVANCED_UI
@@ -32,6 +32,21 @@ static AudioStatistics levels;
 /* Metadata only; the stored DMA pointer is never dereferenced after End. */
 static BSP_AudioBlock level_block;
 static AudioCaptureProfile max_profile;
+#ifdef SBCG_USE_MODE_OBSERVATION
+static AudioCaptureSoundBoundary sound_boundary;
+
+/** @brief 应用新模式边界并撤销旧检测历史。 @param boundary 非NULL边界，按值复制。 @return 无返回值。 */
+void AudioCapture_SetSoundBoundary(const AudioCaptureSoundBoundary *boundary)
+{
+    sound_boundary = *boundary;
+#ifdef SBCG_USE_SOUND_DETECTOR
+    SoundDetectorService_DiscardPending();
+#endif
+#ifdef SBCG_USE_CHIRP
+    ChirpService_DiscardPending();
+#endif
+}
+#endif
 
 /* newlib-nano and native MinGW differ in long-long printf support. Keep
    the observed-frame counter portable without enabling larger printf libs. */
@@ -61,6 +76,9 @@ static void Decimal64(uint64_t value, char output[21])
 void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log)
 {
     log_line = log;
+#ifdef SBCG_USE_MODE_OBSERVATION
+    sound_boundary = (AudioCaptureSoundBoundary){0};
+#endif
     initialized_ms = last_log_ms = now_ms;
     sequence = level_ms = previous_callbacks = previous_callback_ms = 0U;
     have_rate_snapshot = level_valid = false;
@@ -131,17 +149,29 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
         /* 仅在既有借用内复制；真实End提交后波形才对UI可见。 */
         WaveformService_StageBlock(&block);
 #endif
+#ifdef SBCG_USE_MODE_OBSERVATION
+        const bool stage_sound = AudioCapture_SoundFrameAllowed(&sound_boundary, block.session, block.first_frame);
+#ifdef SBCG_USE_CHIRP
+        const bool stage_chirp = stage_sound && (!sound_boundary.controlled || sound_boundary.chirp_enabled);
+#endif
+#endif
 #ifdef SBCG_USE_CHIRP
         /* 只复制选定声道，相关处理必须等真实End验证通过。 */
         mark = BSP_Console_GetTickMs();
-        (void)ChirpService_Stage(BSP_Console_GetTickMs(),&block);
+#ifdef SBCG_USE_MODE_OBSERVATION
+        if (stage_chirp)
+#endif
+            (void)ChirpService_Stage(BSP_Console_GetTickMs(),&block);
         profile.chirp_stage_ms = BSP_Console_GetTickMs() - mark;
 #endif
 #ifdef SBCG_USE_SOUND_DETECTOR
         /* 暂算不能代表DMA仍有效；候选只在真实End结果之后提交。 */
         /* Begin可能刚好跨DMA IRQ，入口now_ms可能早于completed_ms；取新鲜时钟。 */
         mark = BSP_Console_GetTickMs();
-        (void)SoundDetectorService_Stage(BSP_Console_GetTickMs(),&block);
+#ifdef SBCG_USE_MODE_OBSERVATION
+        if (stage_sound)
+#endif
+            (void)SoundDetectorService_Stage(BSP_Console_GetTickMs(),&block);
         profile.sound_stage_ms = BSP_Console_GetTickMs() - mark;
 #endif
         mark = BSP_Console_GetTickMs();
@@ -152,12 +182,18 @@ void AudioCapture_Process(uint32_t now_ms, bool processing_allowed)
         profile.io_ms += BSP_Console_GetTickMs() - mark;
 #ifdef SBCG_USE_CHIRP
         mark = BSP_Console_GetTickMs();
-        (void)ChirpService_Complete(accepted);
+#ifdef SBCG_USE_MODE_OBSERVATION
+        if (stage_chirp)
+#endif
+            (void)ChirpService_Complete(accepted);
         profile.chirp_complete_ms = BSP_Console_GetTickMs() - mark;
 #endif
 #ifdef SBCG_USE_SOUND_DETECTOR
         mark = BSP_Console_GetTickMs();
-        (void)SoundDetectorService_Complete(accepted);
+#ifdef SBCG_USE_MODE_OBSERVATION
+        if (stage_sound)
+#endif
+            (void)SoundDetectorService_Complete(accepted);
         profile.io_ms += BSP_Console_GetTickMs() - mark;
 #endif
         if (accepted)

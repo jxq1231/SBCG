@@ -252,12 +252,16 @@ static uint8_t wave_capture_next;
 static uint32_t wave_tx_ok,wave_tx_err,wave_rx_ok,wave_rx_bad,wave_refine_ok,wave_refine_reject;
 static uint32_t wave_no_local,wave_no_remote,wave_stale,wave_low_corr,wave_refine_ms_max;
 
-/** @brief 清空捕获储备与本地/对端窗口；初始化或换域时调用，无返回值。 */
+/** @brief 撤销捕获储备和窗口；保留无效槽内不可读的PCM。 @return 无返回值。 */
 static void ClearWaveforms(void)
 {
-    memset(local_waves,0,sizeof local_waves);
-    memset(remote_waves,0,sizeof remote_waves);
-    memset(wave_captures,0,sizeof wave_captures);
+    for(uint8_t i=0U;i<WAVE_SLOTS;++i)
+    {
+        local_waves[i].valid=false;
+        remote_waves[i].valid=false;
+    }
+    for(uint8_t i=0U;i<WAVE_CAPTURE_SLOTS;++i)
+        wave_captures[i].valid=false;
     local_wave_next=remote_wave_next=wave_capture_next=0U;
 }
 /**
@@ -984,7 +988,7 @@ void UDPSoundEvent_SetTimeDomain(uint32_t id)
     pair_manager.stats=saved_stats;
     current_time_domain=id;
 }
-/** @brief 清空配对候选与未消费结果但保留累计统计和网络绑定。 */
+/** @brief 模式切换时撤销配对候选、未消费结果与波形储备，保留统计和网络绑定。 @return 无返回值。 */
 void UDPSoundEvent_ResetPairing(void)
 {
     if(!configured)return;
@@ -992,6 +996,7 @@ void UDPSoundEvent_ResetPairing(void)
     (void)SoundPair_Init(&pair_manager,&pair_config);
     SoundPair_SetTdoaRefiner(&pair_manager,RefinePairTdoa);
     pair_manager.stats=saved_stats;
+    ClearWaveforms();
 }
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
 void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)

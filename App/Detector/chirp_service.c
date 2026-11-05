@@ -194,6 +194,14 @@ static void ClearHistory(void)
     capture_frames=0U;capture_tail_topup=false;
     (void)SoundDetector_Reset(&gate);
 }
+/**
+ * @brief 前台归还PCM后清空旧搜索与捕获历史，保留配置、回调及诊断。
+ * @return 无返回值。
+ */
+void ChirpService_DiscardPending(void)
+{
+    ClearHistory();
+}
 /** @brief 取当前CPU副本最早有效绝对帧，无参数；调用前须have_copy。 */
 static uint64_t FirstAvailable(void){return copied_first-prefix_count;}
 /** @brief 移除队首，reason为互斥丢弃原因或NONE完整完成；无返回值，不访问PCM。 */

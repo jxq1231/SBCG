@@ -266,15 +266,29 @@ static void EstimateToa(const BSP_AudioBlock *block,const SoundCandidate *event,
     staged_toa_anchor[slot]=estimate.anchor;
     staged_toa_position[slot]=estimate.position;
 }
-/** @brief 清除不能继续信任的确认历史和队列；无参数，无返回值，空历史重复失效不增加重置计数。 */
-static void ResetHistory(void)
+/** @brief 清空分类历史与候选。 @param reset_time 流失效时为true，纯模式切换时保留音频锚点。 @return 无返回值。 */
+static void ResetHistory(bool reset_time)
 {
 #ifdef SBCG_USE_SOUND_TIME
-    if(current.have_input || count!=0U || active)SoundEventTime_Invalidate(SOUND_TIME_STREAM);
+    if(reset_time && (current.have_input || count!=0U || active))
+        SoundEventTime_Invalidate(SOUND_TIME_STREAM);
+#else
+    (void)reset_time;
 #endif
     if(current.have_input || count!=0U || active)Add(&diagnostics.resets,1U);
     (void)SoundDetector_Reset(&current);DropQueue();active=stage_valid=false;staged_count=0U;staged_total=0U;
     class_history_valid=false;
+}
+/**
+ * @brief 模式边界清空分类历史、候选及TOA候选缓存，保留配置与统计。
+ * @return 无返回值。
+ * @note 仅在前台归还PCM借用后调用，不清除音频锚点。
+ */
+void SoundDetectorService_DiscardPending(void)
+{
+    ResetHistory(false);
+    memset(toa_cache,0,sizeof toa_cache);
+    toa_cache_next=0U;
 }
 /**
  * @brief 初始化实验配置、工作副本和发送限速。
@@ -317,7 +331,7 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
 bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
 {
     if(!diagnostics.configured)return false;
-    if(active){Add(&diagnostics.errors,1U);ResetHistory();return false;}
+    if(active){Add(&diagnostics.errors,1U);ResetHistory(true);return false;}
     active=true;stage_valid=false;staged_count=0U;staged_total=0U;boundary=false;
     if(block==NULL || block->samples==NULL || block->frame_count!=BSP_AUDIO_HALF_FRAMES ||
         !block->index_valid || block->session==0U ||
@@ -388,8 +402,8 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
 bool SoundDetectorService_Complete(bool accepted)
 {
     if(!diagnostics.configured)return false;
-    if(!active){Add(&diagnostics.errors,1U);ResetHistory();return false;}
-    if(!accepted || !stage_valid){Add(&diagnostics.rejected_blocks,1U);ResetHistory();return false;}
+    if(!active){Add(&diagnostics.errors,1U);ResetHistory(true);return false;}
+    if(!accepted || !stage_valid){Add(&diagnostics.rejected_blocks,1U);ResetHistory(true);return false;}
     if(boundary){Add(&diagnostics.resets,1U);DropQueue();
 #ifdef SBCG_USE_SOUND_TIME
         SoundEventTime_Invalidate(SOUND_TIME_STREAM);
@@ -439,7 +453,7 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
         snapshot->session==0U || snapshot->callback_count==0U ||
         (uint32_t)(now_ms-snapshot->last_callback_ms)>=STREAM_MAX_AGE_MS ||
         (current.have_input && current.session!=snapshot->session))
-    { ResetHistory(); }
+    { ResetHistory(true); }
     for(uint8_t i=0U;i<SOUND_DETECTOR_QUEUE_CAPACITY && count!=0U;++i)
     {
         if((uint32_t)(now_ms-queue[head].completed_ms)<STREAM_MAX_AGE_MS)break;
