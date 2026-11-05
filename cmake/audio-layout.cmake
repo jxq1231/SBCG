@@ -34,12 +34,13 @@ if(_sbcg_audio_mode)
         target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_ITCM_PROBE=1)
     endif()
     if(TARGET LwIP)
-        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_SOUND_TIME=1 SBCG_USE_MODE_OBSERVATION=1)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_USE_SOUND_TIME=1 SBCG_USE_MODE_OBSERVATION=1 SBCG_USE_BOOT_COUNTER=1)
         if(SBCG_MODE_TEST_CONTROL)
             target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_MODE_TEST_CONTROL=1)
         endif()
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE
             App/Mode/mode_service.c App/Network/mode_wire.c
+            App/BSP/boot_counter_record.c App/BSP/bsp_boot_counter.c App/BSP/bsp_flash_ram.c
             App/Detector/sound_event_time.c App/Detector/standard_sequence.c App/Detector/event_classifier.c App/Sync/time_domain.c
             App/Measure/sound_pair.c App/Measure/waveform_tdoa.c App/Measure/measurement_result.c App/Measure/measurement_gate.c App/Measure/ranging_tracker.c App/Measure/result_exchange_state.c App/Calibration/calibration.c
             App/Network/sound_event_wire.c App/Network/measurement_wire.c App/Network/measurement_ack.c App/Network/domain_wire.c App/Network/temperature_wire.c App/Network/ranging_status_wire.c App/Network/ranging_session.c App/Network/udp_sound_event.c)

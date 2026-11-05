@@ -48,6 +48,13 @@ SECTIONS
     . = ALIGN(32);
     __itcm_state_end__ = .;
   } >ITCM
+  /* Flash编程/擦除期间CPU只从ITCM取指；复制源为Flash中的孤儿段itcm_code_src。 */
+  .ItcmCodeBuf (NOLOAD) : ALIGN(32)
+  {
+    __itcm_code_start__ = .;
+    . = . + 0x400;
+    __itcm_code_end__ = .;
+  } >ITCM
 }
 /* Override the generated PROVIDE values used by sysmem.c's _sbrk. This is
    deliberately outside the generated linker script. */
@@ -82,3 +89,7 @@ ASSERT(ADDR(.ItcmState) >= 0x00000000 &&
        ADDR(.ItcmState) + SIZEOF(.ItcmState) <= 0x00004000 &&
        (ADDR(.ItcmState) % 32) == 0,
        "ITCM CPU-only state exceeds the 16 KiB instruction TCM")
+ASSERT(ADDR(.ItcmCodeBuf) >= 0x00000000 &&
+       ADDR(.ItcmCodeBuf) + SIZEOF(.ItcmCodeBuf) <= 0x00004000 &&
+       (ADDR(.ItcmCodeBuf) % 32) == 0 && SIZEOF(.ItcmCodeBuf) == 0x400,
+       "ITCM flash helper buffer exceeds the 16 KiB instruction TCM")

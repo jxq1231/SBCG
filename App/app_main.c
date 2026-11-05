@@ -38,6 +38,9 @@ static uint32_t calibration_reported;
 #ifdef SBCG_USE_SDRAM
 #include "BSP/bsp_sdram.h"
 #endif
+#ifdef SBCG_USE_BOOT_COUNTER
+#include "BSP/bsp_boot_counter.h"
+#endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
 #include "Detector/sound_detector_service.h"
@@ -763,6 +766,31 @@ static void ServiceModeObservation(uint32_t now_ms)
         LogModeSnapshot(&snapshot);
     }
 }
+
+#ifdef SBCG_USE_BOOT_COUNTER
+/**
+ * @brief   读取并登记本板跨掉电启动代次，输出一条启动诊断。
+ * @return  无返回值。
+ * @note    仅App_Init启动阶段调用一次；失败时保持模式服务未登记，串口保留稳定原因。
+ */
+static void LoadBootGeneration(void)
+{
+    BSP_BootCounterResult counter;
+    const BSP_BootCounterStatus status = BSP_BootCounter_Next(&counter);
+    char value[24];
+    FormatUnsigned64(counter.value, value);
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length = snprintf(line, sizeof line,
+        "$BOOTGEN,SOURCE=FLASH,STATUS=%s,VALUE=%s,SECTOR=%u,SLOT=%u,ERASED=%u\r\n",
+        BSP_BootCounter_StatusName(status), value, (unsigned)counter.sector,
+        (unsigned)counter.slot, counter.erased ? 1U : 0U);
+    SendLine(line, length);
+    if (status == BSP_BOOT_COUNTER_OK)
+    {
+        (void)ModeService_SetBoot(counter.value);
+    }
+}
+#endif
 #endif
 
 /** @brief 将观测决策枚举转成稳定短标签；未知值返回UNKNOWN。 */
@@ -1098,6 +1126,9 @@ void App_Init(void)
 #ifdef SBCG_USE_MODE_OBSERVATION
     ModeService_Init(profile->role);
     mode_reported = false;
+#ifdef SBCG_USE_BOOT_COUNTER
+    LoadBootGeneration();
+#endif
 #endif
 #endif
 #ifdef SBCG_USE_SDRAM
