@@ -100,3 +100,11 @@ void CalibrationControl_GetSnapshot(CalibrationControlSnapshot *out)
 {
     if(out!=NULL)*out=state;
 }
+
+/** @brief 模式不允许标定动作时取消待处理请求并标记模式拒绝，不修改标定数据。 */
+void CalibrationControl_CancelPendingForMode(void)
+{
+    if(state.result!=CALIBRATION_CONTROL_PENDING)return;
+    ++state.completed;
+    state.result=CALIBRATION_CONTROL_MODE_REJECT;
+}

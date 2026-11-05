@@ -79,5 +79,14 @@ int main(void)
     assert(!Apply(CALIBRATION_ACTION_DISABLE,NULL,true,NULL));
     assert(State().result==CALIBRATION_CONTROL_NO_SAVED);
     CalibrationControl_GetSnapshot(NULL);
-    puts("PASS calibration control: authority, bounded request, sample identity, replacement, enable/disable/clear");
+    /* 模式闸门拒绝：待处理动作被取消并推进完成计数，不执行、不改动标定。 */
+    assert(CalibrationControl_Request(CALIBRATION_ACTION_ENABLE,NULL));
+    const uint32_t completed_before=State().completed;
+    CalibrationControl_CancelPendingForMode();
+    assert(State().result==CALIBRATION_CONTROL_MODE_REJECT &&
+           State().completed==completed_before+1);
+    assert(!State().calibration.calibrated && !State().calibration.enabled);
+    CalibrationControl_CancelPendingForMode(); /* 无待处理动作时为幂等空操作。 */
+    assert(State().completed==completed_before+1);
+    puts("PASS calibration control: authority, bounded request, sample identity, replacement, enable/disable/clear, mode rejection");
 }

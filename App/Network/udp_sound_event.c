@@ -843,6 +843,15 @@ void UDPSoundEvent_SetTimeDomain(uint32_t id)
     pair_manager.stats=saved_stats;
     current_time_domain=id;
 }
+/** @brief 清空配对候选与未消费结果但保留累计统计和网络绑定。 */
+void UDPSoundEvent_ResetPairing(void)
+{
+    if(!configured)return;
+    const SoundPairSnapshot saved_stats=pair_manager.stats;
+    (void)SoundPair_Init(&pair_manager,&pair_config);
+    SoundPair_SetTdoaRefiner(&pair_manager,RefinePairTdoa);
+    pair_manager.stats=saved_stats;
+}
 /** @brief 安装配对结果消费者；NULL仅恢复日志输出。 */
 void UDPSoundEvent_SetResultSink(UDPSoundEvent_ResultSink sink)
 {
@@ -1110,7 +1119,16 @@ void UDPSoundEvent_Process(uint32_t now_ms)
 {
     if(!configured)return;
     TryBind(now_ms);
+#ifdef SBCG_USE_MODE_OBSERVATION
+    /* 已登记启动代次后仅A板在ACTIVE的RANGE/CALIBRATION模式推进权威配对；
+       B板只上报事件并学习对端会话，不再执行本地权威配对。 */
+    UDPSoundEvent_BusinessContext context;
+    const bool gated=BusinessContext(&context);
+    if(!gated || (context.allowed && local_profile.role==BOARD_ROLE_A))
+        SoundPair_Process(&pair_manager,now_ms);
+#else
     SoundPair_Process(&pair_manager,now_ms);
+#endif
     SoundPairResult result;
     char line[256];
     while(SoundPair_Take(&pair_manager,&result))

@@ -217,6 +217,15 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
  */
 void MeasurementResult_WithdrawForGate(uint32_t now_ms);
 
+/**
+ * @brief 模式离开测距业务时清空跟踪历史与远程展示缓存。
+ * @param now_ms 当前前台毫秒，仅作展示时间戳。
+ * @return 无返回值；不改变当前测量上下文、温度或标定补偿。
+ * @note 只由模式闸门在离开RANGE/CALIBRATION时调用；清空后仅新声音可重新建立结果，
+ *       远程高水位同时归零，避免B板拒收新模式后的同序号/低revision状态。
+ */
+void MeasurementResult_InvalidateForMode(uint32_t now_ms);
+
 /** @brief 复制当前展示快照；无结果时state=NONE且has_value=false。 */
 void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out);
 

@@ -540,6 +540,26 @@ void MeasurementResult_WithdrawForGate(uint32_t now_ms)
 }
 
 /**
+ * @brief 模式离开测距业务时清空跟踪历史、展示值和远程缓存。
+ * @param now_ms 当前前台毫秒，仅作展示时间戳。
+ * @return 无返回值；保留测量上下文/温度/标定，仅清可复用的旧结果状态。
+ * @note 只在模式闸门离开RANGE/CALIBRATION时调用；清空后新声音从空tracker重新建立结果。
+ */
+void MeasurementResult_InvalidateForMode(uint32_t now_ms)
+{
+    RangingTracker_Invalidate(&tracked,RANGING_INVALIDATE_DOMAIN,now_ms);
+    authority_cache.remote_seen=false;
+    authority_cache.remote_eligible=false;
+    authority_cache.remote_source_revoked=true;
+    authority_cache.remote_id_highwater=0U;
+    authority_cache.remote_source_ns=0U;
+    authority_cache.remote_fresh_ns=0U;
+    authority_cache.remote_display_ns=0U;
+    memset(&authority_cache.remote_raw,0,sizeof authority_cache.remote_raw);
+    ClearPresentation(MEASUREMENT_PRESENTATION_ACQUIRING,now_ms);
+}
+
+/**
  * @brief 复制前台已经按真实共同时间推进的有效展示副本。
  * @param out 调用方拥有的输出存储；NULL不操作。
  * @return 无返回值；本函数不采样硬件、不刷新年龄、不改变revision。

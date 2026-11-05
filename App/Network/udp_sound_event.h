@@ -166,6 +166,13 @@ bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,
  */
 void UDPSoundEvent_SetTimeDomain(uint32_t id);
 
+/**
+ * @brief 清空本地配对候选与未消费结果，保留计数和网络绑定。
+ * @return 无返回值；未初始化时不操作。
+ * @note 由模式闸门在离开RANGE/CALIBRATION时调用，防止跨模式旧候选在恢复后重新配对。
+ */
+void UDPSoundEvent_ResetPairing(void);
+
 /** @brief 重试绑定、推进配对并限速输出结果/状态；主循环调用。 */
 void UDPSoundEvent_Process(uint32_t now_ms);
 

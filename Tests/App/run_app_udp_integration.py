@@ -160,6 +160,17 @@ def run_mode_tests():
                 if packet['hex'].startswith(mode_magic)
                 and bytes.fromhex(packet['hex'])[5:7]==bytes((operation,mode))]
 
+    def raw_packets(prefix,since=0):
+        """Collect raw (unprotected) packets with one magic prefix after a tick."""
+        return [p['hex'] for board in (a,b) for p in board.history
+                if p['tick_ms']>=since and p['hex'].startswith(prefix)]
+
+    def business_packets(inner,since=0):
+        """Collect MDB1-wrapped packets whose inner magic matches after a tick."""
+        return [p['hex'] for board in (a,b) for p in board.history
+                if p['tick_ms']>=since and p['hex'].startswith('4d444231')
+                and bytes.fromhex(p['hex'])[32:36]==inner]
+
     def replay(source_packets,destination):
         for payload in source_packets:
             destination.cmd('RX '+payload)
@@ -205,6 +216,25 @@ def run_mode_tests():
                 return payload,old_commit,old_prepare,payload
             return (payload,)
 
+        # Phase 2 admission: the first RANGE generation runs real CHIRP business and
+        # keeps its MDB1-wrapped packets for stale replay after mode transitions.
+        for index in range(160):
+            step(sequence={39:1,79:2,119:3}.get(index,0))
+        sa,sb=snap(a,b,'first gated RANGE business')
+        check(sa['advanced']==sb['advanced']==1,'real A/B App builds enable advanced dispatch')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
+              'gated RANGE runs real CHIRP pairing and publishes authoritative RST2 on both boards')
+        first_id=sa['id']
+        old_business=[]
+        for board in (a,b):
+            for packet in board.history:
+                payload=packet['hex']
+                if payload.startswith('4d444231') and \
+                   bytes.fromhex(payload)[32:36] in (b'SEVT',b'WFR1',b'RST2',b'RAK2'):
+                    old_business.append(payload)
+        check(len(old_business)>=4,'gated RANGE business uses MDB1 wrappers for events and status')
+        old_raw=[payload[64:] for payload in old_business]
+
         check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A accepts the CLAP request')
         clap_key=converge(clap,100,200,after=range_key[2],route=reorder_and_duplicate)
         replay((old_ready,old_committed),a)
@@ -212,37 +242,93 @@ def run_mode_tests():
         sa,sb=observe()
         check(reordered and key(sa)==key(sb)==clap_key and sa['effective']==sb['effective']==clap,
               'old phases reordered around duplicate PREPARE cannot roll back confirmed CLAP')
+        clap_wall=wall_ms
+        for index in range(40):
+            step(sequence=0)
+        sa,sb=snap(a,b,'CLAP mode without RANGE business')
+        check(sa['has']==sb['has']==0,
+              'leaving RANGE withdraws the authoritative display on both boards')
+        check(not business_packets(b'RST2',clap_wall) and
+              not business_packets(b'SEVT',clap_wall),
+              'CLAP mode blocks SEV2/RST2 business at the mode gate')
 
         check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A accepts the WAVE request')
         wave_key=converge(wave,100,200,after=clap_key[2])
         check(wave_key[2]>clap_key[2],'both boards confirm WAVE with a new mode sequence')
+        wave_wall=wall_ms
         for index in range(160):
             step(sequence={39:1,79:2,119:3}.get(index,0))
-        sa,sb=snap(a,b,'WAVE observation preserves legacy CHIRP')
-        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
-              'observing WAVE still runs real CHIRP pairing and publishes legacy RST2 on both boards')
-        mdb1_packets=[p for board in (a,b) for p in board.history
-                      if p['hex'].startswith('4d444231')]
-        check(bool(mdb1_packets) and all(len(bytes.fromhex(p['hex']))>=32+24
-              for p in mdb1_packets),
-              'active-mode business packets use MDB1 wrapper on the wire')
+        sa,sb=snap(a,b,'WAVE blocks RANGE business')
+        check(sa['has']==sb['has']==0,
+              'WAVE mode does not establish a RANGE measurement from new sounds')
+        check(not business_packets(b'RST2',wave_wall) and
+              not business_packets(b'SEVT',wave_wall) and
+              not business_packets(b'WFR1',wave_wall),
+              'WAVE mode blocks SEV2/WFR1/RST2 traffic at the mode gate')
         a.cmd('CLASS 2');b.cmd('CLASS 2')
         a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
+        clap_business_before=len(raw_packets('434c5031',wave_wall))
         for index in range(25):
             step(sequence=4 if index==1 else 0)
-        sa,sb=snap(a,b,'WAVE observation preserves legacy CLAP')
-        check(sa['clap_has']==sb['clap_has']==1 and sa['clap_id']==sb['clap_id']!=0,
-              'observing WAVE still runs real CLAP pairing and CLP1/CLA1 exchange')
+        sa,sb=snap(a,b,'WAVE blocks CLAP business')
+        check(sa['clap_has']==sb['clap_has']==0 and
+              len(raw_packets('434c5031',wave_wall))==clap_business_before,
+              'WAVE mode keeps CLAP business off until its own phase')
         a.cmd('CLASS 1');b.cmd('CLASS 1')
         a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
 
         check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,'A accepts the CALIBRATION request')
         cal_key=converge(calibration,100,200,after=wave_key[2])
+        for index in range(160):
+            step(sequence={39:4,79:5,119:6}.get(index,0))
+        sa,sb=snap(a,b,'gated CALIBRATION business')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['id']>first_id,
+              'CALIBRATION mode admits RANGE business with a fresh measurement')
+        a.cmd('CAL CAPTURE')
+        for _ in range(10):
+            step()
+        sa,sb=snap(a,b,'calibration captured')
+        check(sa['cal_saved']==1 and sa['control_result']==2,
+              'CALIBRATION mode applies a fresh CAPTURE sample')
+        saved_offset=sa['cal_offset_mm']
+        a.cmd('CAL ENABLE')
+        for index in range(160):
+            step(sequence={39:7,79:8,119:9}.get(index,0))
+        sa,sb=snap(a,b,'calibration enabled')
+        check(sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
+              sb['applied_offset_mm']==saved_offset,
+              'enabled compensation is published to both boards in CALIBRATION')
+
         check(a.cmd(f'MODE_REQUEST {range_mode}')['accepted']==1,'A accepts the return to RANGE')
         range_key=converge(range_mode,100,200,after=cal_key[2])
         check(range_key[2]>cal_key[2],'the second RANGE has a fresh mode sequence')
-        for _ in range(15):
+        for index in range(160):
+            step(sequence={39:10,79:11,119:12}.get(index,0))
+        sa,sb=snap(a,b,'compensation after leaving CALIBRATION')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and
+              sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
+              sb['applied_offset_mm']==saved_offset,
+              'enabled compensation continues after leaving CALIBRATION')
+        a.cmd('CAL DISABLE')
+        for _ in range(10):
             step()
+        sa,sb=snap(a,b,'calibration rejected outside CALIBRATION')
+        check(sa['control_result']==8 and sa['cal_enabled']==1 and
+              sa['applied_offset_mm']==saved_offset,
+              'calibration action outside CALIBRATION is rejected without disabling compensation')
+        sa_before,sb_before=snap(a,b,'before stale replay')
+        for payload in old_business+old_raw[:12]:
+            a.cmd('RX '+payload)
+            b.cmd('RX '+payload)
+        for _ in range(20):
+            step()
+        sa,sb=snap(a,b,'after stale replay')
+        # 时间推进允许 freshness/state/revision 自然变化；身份、距离和来源不能被旧包改写。
+        stable_fields=('has','id','mm','direction','source_ns')
+        check(all(sa[field]==sa_before[field] for field in stable_fields),
+              'old-generation wrapped and raw business cannot change A measurement identity or distance')
+        check(all(sb[field]==sb_before[field] for field in stable_fields),
+              'old-generation wrapped and raw business cannot change B display identity or distance')
 
         old_to_b=tuple(mode_packets(a,op,range_mode)[-1] for op in (prepare,commit,ping,pong))
         old_to_a=tuple(mode_packets(b,op,range_mode)[-1] for op in (ready,committed,ping,pong))

@@ -402,6 +402,81 @@ static bool ReadRangingClock(uint64_t *ns,uint32_t *epoch)
 }
 
 /**
+ * @brief 模式闸门是否已登记本板启动代次。
+ * @return 已登记任一方启动代次为true；未登记时保持阶段一全业务兼容。
+ * @note 只读模式快照，前台调用；固件启动会先自动登记，主机基线不注入时走兼容路径。
+ */
+#if defined(SBCG_USE_ADVANCED_UI) || defined(SBCG_USE_MODE_OBSERVATION)
+static bool ModeGateConfigured(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    return mode.a_boot != 0U || mode.b_boot != 0U;
+#else
+    return false;
+#endif
+}
+#endif
+
+/**
+ * @brief 当前是否允许RANGE/CALIBRATION测距业务。
+ * @return 未登记代次，或双板ACTIVE且生效模式为RANGE/CALIBRATION时为true。
+ * @note 只读模式快照；决定事件发布、权威配对/发布、RST2发送和MDB1准入。
+ */
+static bool ModeRangingAllowed(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE &&
+        (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION);
+#else
+    return true;
+#endif
+}
+
+/**
+ * @brief 当前是否允许标定确认动作。
+ * @return 未登记代次，或双板ACTIVE且生效模式为CALIBRATION时为true。
+ * @note 只限制动作入口；已保存/已启用补偿仍按既有路径应用到测量显示。
+ */
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+static bool ModeCalibrationAllowed(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_CALIBRATION;
+#else
+    return true;
+#endif
+}
+#endif
+
+/** @brief CLAP专属业务在阶段三实现前保持关闭；未登记代次时保留阶段一行为。 @return 允许为true。 */
+#ifdef SBCG_USE_ADVANCED_UI
+static bool ModeClapAllowed(void)
+{
+    return !ModeGateConfigured();
+}
+
+/** @brief WAVE专属计算在阶段四实现前保持关闭；未登记代次时保留阶段一行为。 @return 允许为true。 */
+static bool ModeWaveComputeAllowed(void)
+{
+    return !ModeGateConfigured();
+}
+#endif
+
+/**
  * @brief 在收发和UI之前持续驱动状态会话与真实源期限。
  * @param now_ms 当前HAL毫秒；音频快照之后另取时校验回调年龄。
  * @return 无返回值；不发送报文、不读取PCM，不改变PTP/PPS配置。
@@ -463,12 +538,17 @@ static void RefreshRanging(uint32_t now_ms)
     const bool sample_available=MeasurementResult_GetCalibrationSample(&calibration_sample);
     MeasurementPresentationSnapshot calibration_presentation;
     MeasurementResult_GetPresentation(&calibration_presentation);
-    if(CalibrationControl_Process(context.authority,sample_available?&calibration_sample:NULL,
+    if(ModeCalibrationAllowed() &&
+        CalibrationControl_Process(context.authority,sample_available?&calibration_sample:NULL,
         calibration_presentation.calibration_offset_mm,calibration_presentation.calibration_version))
     {
         Calibration_Get(&calibration);
         MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
         MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
+    }
+    else if(!ModeCalibrationAllowed())
+    {
+        CalibrationControl_CancelPendingForMode();
     }
     CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
     if(control.completed!=calibration_reported)
@@ -485,13 +565,19 @@ static void RefreshRanging(uint32_t now_ms)
     }
 #endif
 #ifdef SBCG_USE_ADVANCED_UI
-    ClapRanging_Update(&clap_ranging,profile->role,context.domain_valid && stream_ok && clock_ok,
-        &session,clock_ok?common_ns:0U,now_ms,&temperature,&calibration);
-    const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
-    WaveformService_Update(profile->role,context.domain_valid && stream_ok && clock_ok,
-        &session,clock_ok?common_ns:0U,now_ms);
-    const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
-    if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+    if(ModeClapAllowed())
+    {
+        ClapRanging_Update(&clap_ranging,profile->role,context.domain_valid && stream_ok && clock_ok,
+            &session,clock_ok?common_ns:0U,now_ms,&temperature,&calibration);
+    }
+    if(ModeWaveComputeAllowed())
+    {
+        const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
+        WaveformService_Update(profile->role,context.domain_valid && stream_ok && clock_ok,
+            &session,clock_ok?common_ns:0U,now_ms);
+        const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
+        if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+    }
 #endif
 }
 
@@ -499,6 +585,7 @@ static void RefreshRanging(uint32_t now_ms)
 /** @brief 固定对端短包一次解码后分发；仅匹配角色消费。@param data 借用载荷。@param length 已分派长度。@return 无返回值。 */
 static void HandleAuxiliary(const uint8_t *data,uint16_t length)
 {
+    if(ModeGateConfigured())return; /* 阶段二：CLAP/WAVE短包在模式闸门启用后关闭。 */
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     if(memcmp(data,"CLP1",4)==0 && profile->role==BOARD_ROLE_B)
@@ -514,6 +601,7 @@ static void HandleAuxiliary(const uint8_t *data,uint16_t length)
 /** @brief 前台发送击掌结果/确认和共同波形计划，失败不补发突发流。@param now_ms 当前毫秒。@return 无返回值。 */
 static void ServiceAuxiliary(uint32_t now_ms)
 {
+    if(ModeGateConfigured())return; /* 阶段二：CLAP/WAVE短包在模式闸门启用后关闭。 */
     uint8_t data[CLAP_RESULT_WIRE_BYTES];ClapResultMessage result;ClapAckMessage ack;WaveformPlan plan;
     if(ClapRanging_TakeTx(&clap_ranging,now_ms,&result) && ClapWire_EncodeResult(&result,data,CLAP_RESULT_WIRE_BYTES))
         (void)UDPSoundEvent_SendAuxiliary(data,CLAP_RESULT_WIRE_BYTES);
@@ -767,6 +855,36 @@ static void ServiceModeObservation(uint32_t now_ms)
     }
 }
 
+/** @brief 上一次模式闸门是否允许测距业务；仅在本板已登记代次时有效。 */
+static bool mode_business_ranging_active;
+
+/**
+ * @brief 在模式进入/离开RANGE/CALIBRATION时清理旧展示与配对候选。
+ * @return 无返回值。
+ * @note 每轮前台调用一次，只读模式快照；离开时撤销A/B展示、清配对候选与权威交换状态，
+ *       进入时重置交换以强制新的RST2/RAK2确认路径，避免沿用旧世代结果。
+ */
+static void ServiceModeBusinessGates(void)
+{
+    if (!ModeGateConfigured())
+    {
+        mode_business_ranging_active = false;
+        return;
+    }
+    const bool allowed = ModeRangingAllowed();
+    if (mode_business_ranging_active && !allowed)
+    {
+        MeasurementResult_InvalidateForMode(BSP_Console_GetTickMs());
+        UDPSoundEvent_ResetPairing();
+        RangingExchange_Init(&ranging_app.exchange);
+    }
+    else if (!mode_business_ranging_active && allowed)
+    {
+        RangingExchange_Init(&ranging_app.exchange);
+    }
+    mode_business_ranging_active = allowed;
+}
+
 #ifdef SBCG_USE_BOOT_COUNTER
 /**
  * @brief   读取并登记本板跨掉电启动代次，输出一条启动诊断。
@@ -796,8 +914,8 @@ static void LoadBootGeneration(void)
  * @brief   为UDP业务层提供MDB1模式闸门上下文。
  * @param   out 非NULL上下文输出，仅本次调用有效。
  * @return  已登记本板启动代次为true；未登记返回false，保持阶段一未封装兼容路径。
- * @note    前台同步调用且只读模式快照。当前要求已ACTIVE且双板代次/序号一致；
- *          RANGE/CALIBRATION专属业务准入与其来源闸门在后续增量一起启用。
+ * @note    前台同步调用且只读模式快照；只有双板ACTIVE且生效模式为RANGE/CALIBRATION
+ *          才允许SEV2/WFR1/RST2/RAK2收发，其余模式由来源闸门与UDPSoundEvent共同阻断。
  */
 static bool ProvideBusinessContext(UDPSoundEvent_BusinessContext *out)
 {
@@ -812,7 +930,8 @@ static bool ProvideBusinessContext(UDPSoundEvent_BusinessContext *out)
         return false;
     }
     out->configured = true;
-    out->allowed = mode.state == MODE_ACTIVE;
+    out->allowed = mode.state == MODE_ACTIVE &&
+        (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION);
     out->role = mode.role;
     out->a_boot = mode.a_boot;
     out->b_boot = mode.b_boot;
@@ -888,6 +1007,7 @@ static void PublishMeasurement(const SoundPairResult *pair)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    if(!ModeRangingAllowed())return; /* 模式闸门关闭时A不发布新权威结果。 */
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now,&temperature);
 #ifdef SBCG_USE_ADVANCED_UI
@@ -1028,6 +1148,7 @@ static void ServiceAuthoritativeStatus(uint32_t now_ms)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    if(!ModeRangingAllowed())return;
     RangingStatusMessage message;
     if(!BuildRangingStatusMessage(&message,now_ms))return;
     const RangingStatusAck key={RANGING_STATUS_ACK_OK,message.domain,message.authority_clock_epoch,
@@ -1324,6 +1445,7 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 {
     const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
     if (event_profile == NULL) { return; }
+    if (!ModeRangingAllowed()) { return; } /* 只在RANGE/CALIBRATION发布测距事件。 */
     const bool is_chirp=notice->event_class==EVENT_CLASS_CHIRP;
 #ifdef SBCG_USE_ADVANCED_UI
     if(!is_chirp && notice->event_class!=EVENT_CLASS_CLAP)return;
@@ -1593,14 +1715,18 @@ void App_Process(void)
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_ADVANCED_UI
         ServiceAuxiliary(BSP_Console_GetTickMs());
-        const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
-        WaveformService_ProcessPeriod();
-        const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
-        if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+        if(ModeWaveComputeAllowed())
+        {
+            const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
+            WaveformService_ProcessPeriod();
+            const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
+            if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+        }
 #endif
 #ifdef SBCG_USE_MODE_OBSERVATION
         /* UDP提交可能等待ETH发送，本轮音频块归还和原有业务处理后才推进观测。 */
         ServiceModeObservation(BSP_Console_GetTickMs());
+        ServiceModeBusinessGates();
 #endif
 #endif
     }

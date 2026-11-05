@@ -22,7 +22,8 @@ typedef enum {
     CALIBRATION_CONTROL_IDLE, CALIBRATION_CONTROL_PENDING,
     CALIBRATION_CONTROL_APPLIED, CALIBRATION_CONTROL_A_ONLY,
     CALIBRATION_CONTROL_NO_SAMPLE, CALIBRATION_CONTROL_SAMPLE_CHANGED,
-    CALIBRATION_CONTROL_NO_SAVED, CALIBRATION_CONTROL_OUT_OF_RANGE
+    CALIBRATION_CONTROL_NO_SAVED, CALIBRATION_CONTROL_OUT_OF_RANGE,
+    CALIBRATION_CONTROL_MODE_REJECT
 } CalibrationControlResult;
 
 /** @brief 按钮资格及最近动作结果；sample仅在sample_available为真时有效。 */
@@ -59,6 +60,13 @@ bool CalibrationControl_Process(bool authority, const MeasurementCalibrationSamp
                                 int32_t applied_offset_mm, uint16_t applied_version);
 /** @brief 复制前台状态，不刷新业务期限。@param out 可NULL输出，不保留地址。@return 无返回值。 */
 void CalibrationControl_GetSnapshot(CalibrationControlSnapshot *out);
+
+/**
+ * @brief 当前模式不允许标定动作时取消待处理请求。
+ * @return 无返回值；只在存在待处理动作时推进完成计数并标记模式拒绝。
+ * @note 由前台模式闸门调用；不修改已保存系数、启用状态或测量结果。
+ */
+void CalibrationControl_CancelPendingForMode(void);
 #ifdef __cplusplus
 }
 #endif
