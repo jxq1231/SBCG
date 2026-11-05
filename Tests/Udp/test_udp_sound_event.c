@@ -720,7 +720,7 @@ static void EnableBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
                            uint64_t mode_seq,bool allowed)
 {
     test_business_context=(UDPSoundEvent_BusinessContext){
-        true,allowed,false,role,a_boot,b_boot,mode_seq};
+        true,allowed,false,false,role,a_boot,b_boot,mode_seq};
     test_business_enabled=true;
 }
 /** @brief 配置CLAP闸门上下文：只有clap_allowed，测距类型关闭。 @return 无返回值。 */
@@ -728,7 +728,15 @@ static void EnableClapBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
                                uint64_t mode_seq)
 {
     test_business_context=(UDPSoundEvent_BusinessContext){
-        true,false,true,role,a_boot,b_boot,mode_seq};
+        true,false,true,false,role,a_boot,b_boot,mode_seq};
+    test_business_enabled=true;
+}
+/** @brief 配置WAVE闸门上下文：只有wave_allowed，其他模式关闭。 @return 无返回值。 */
+static void EnableWaveBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
+                               uint64_t mode_seq)
+{
+    test_business_context=(UDPSoundEvent_BusinessContext){
+        true,false,false,true,role,a_boot,b_boot,mode_seq};
     test_business_enabled=true;
 }
 /** @brief 按给定世代封装一条内层报文。 @return 封装后的总字节数。 */
@@ -962,6 +970,69 @@ static void TestBusinessShortGate(void)
     assert(aux_rx_count==1U);
     puts("PASS MDB1 short: CLP1/CLA1 wrapped, direction/generation/raw/mode gates enforced");
 }
+/**
+ * @brief 验证WVP2在WAVE模式下封装为88字节，且原始/错世代/错方向/错模式被拒绝。
+ * @return 无返回值，失败由断言终止。
+ */
+static void TestBusinessWaveGate(void)
+{
+    BoardIdentityProfile a={0},b={0};
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    static uint8_t wvp2[56],wrapped[BUSINESS_WIRE_MAX_BYTES];
+    memset(wvp2,0,sizeof wvp2);memcpy(wvp2,"WVP2",4U);
+    BusinessWireMessage decoded;
+    UDPSoundEvent_BusinessCounters counters;
+
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableWaveBusiness(BOARD_ROLE_A,11U,22U,7U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    unsigned before=sends;
+    assert(UDPSoundEvent_SendProtectedWave(wvp2,sizeof wvp2));
+    assert(sends==before+1U);
+    uint16_t length=0U;
+    const uint8_t *packet=RecentSent(0U,&length);
+    assert(length==BUSINESS_WIRE_HEADER_BYTES+sizeof wvp2);
+    assert(length==88U);
+    assert(BusinessWire_Decode(packet,length,&decoded));
+    assert(decoded.role==BOARD_ROLE_A && decoded.inner_length==sizeof wvp2 &&
+           decoded.a_boot==11U && decoded.b_boot==22U && decoded.mode_seq==7U &&
+           memcmp(decoded.inner,wvp2,sizeof wvp2)==0);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,7U,true); /* 测距模式不能发WVP2 */
+    before=sends;
+    assert(!UDPSoundEvent_SendProtectedWave(wvp2,sizeof wvp2));
+    assert(sends==before);
+
+    assert(UDPSoundEvent_Init(0U,&b,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableWaveBusiness(BOARD_ROLE_B,11U,22U,7U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    uint16_t wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_A,11U,22U,7U,wrapped);
+    aux_rx_count=0U;
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U && aux_rx_length==sizeof wvp2 &&
+           memcmp(aux_rx,wvp2,sizeof wvp2)==0);
+    wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_A,11U,22U,8U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* 旧世代 */
+    assert(aux_rx_count==1U);
+    ReceiveBytes(wvp2,sizeof wvp2); /* 原始旧包 */
+    assert(aux_rx_count==1U);
+    EnableBusiness(BOARD_ROLE_B,11U,22U,7U,true); /* 测距模式不能收WVP2 */
+    wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_A,11U,22U,7U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_blocked>=1U && counters.rx_unwrapped>=1U);
+    EnableWaveBusiness(BOARD_ROLE_B,11U,22U,7U);
+    wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_B,11U,22U,7U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* B只接受A计划 */
+    assert(aux_rx_count==1U);
+    puts("PASS MDB1 wave: WVP2 56-byte inner wrapped to 88, raw/old/direction/mode rejected");
+}
 #endif
 
 int main(void)
@@ -1044,6 +1115,7 @@ int main(void)
     TestBusinessRangingGate();
     TestBusinessSoundWaveGate();
     TestBusinessShortGate();
+    TestBusinessWaveGate();
 #endif
     puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;

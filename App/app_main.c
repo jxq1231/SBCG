@@ -513,10 +513,39 @@ static bool ModeClapAllowed(void)
 #endif
 }
 
-/** @brief WAVE专属计算在阶段四实现前保持关闭；未登记代次时保留阶段一行为。 @return 允许为true。 */
+/** @brief WAVE专属计算只在已生效WAVE模式放行；未登记代次时保留阶段一行为。 @return 允许为true。 */
 static bool ModeWaveComputeAllowed(void)
 {
-    return !ModeGateConfigured();
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_WAVE;
+#else
+    return true;
+#endif
+}
+
+/**
+ * @brief 是否允许本板推进WAVE周期搜索与计划生成。
+ * @return 未登记代次恒true；登记后仅A在已生效WAVE模式为true。
+ * @note B不做独立周期对齐，只接受A计划并从本机PCM提取。
+ */
+static bool ModeWavePlannerAllowed(void)
+{
+    if (!ModeWaveComputeAllowed())
+    {
+        return false;
+    }
+    if (!ModeGateConfigured())
+    {
+        return true;
+    }
+    const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+    return profile != NULL && profile->role == BOARD_ROLE_A;
 }
 #endif
 
@@ -662,9 +691,9 @@ static void ServiceAuxiliary(uint32_t now_ms)
        ClapRanging_TakeAck(&clap_ranging,&ack) &&
        ClapWire_EncodeAck(&ack,data,CLAP_ACK_WIRE_BYTES))
         (void)UDPSoundEvent_SendProtectedShort(data,CLAP_ACK_WIRE_BYTES);
-    if(ModeWaveComputeAllowed() && WaveformService_TakePlan(&plan) &&
+    if(ModeWavePlannerAllowed() && WaveformService_TakePlan(&plan) &&
        WaveformPlanWire_Encode(&plan,data,WAVEFORM_PLAN_WIRE_BYTES))
-        (void)UDPSoundEvent_SendAuxiliary(data,WAVEFORM_PLAN_WIRE_BYTES);
+        (void)UDPSoundEvent_SendProtectedWave(data,WAVEFORM_PLAN_WIRE_BYTES);
 }
 #endif
 
@@ -916,6 +945,8 @@ static bool mode_business_ranging_active;
 #ifdef SBCG_USE_ADVANCED_UI
 /** @brief 上一次模式闸门是否允许CLAP业务；离开CLAP时撤销待发/展示。 */
 static bool mode_business_clap_active;
+/** @brief 上一次模式闸门是否允许WAVE计算；离开WAVE时作废计划与周期搜索。 */
+static bool mode_business_wave_active;
 #endif
 
 /**
@@ -950,6 +981,17 @@ static void ServiceModeBusinessGates(void)
         ClapRanging_Invalidate(&clap_ranging);
     }
     mode_business_clap_active = clap_allowed;
+    const bool wave_allowed = ModeWaveComputeAllowed();
+    if (mode_business_wave_active && !wave_allowed)
+    {
+        const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+        if (profile != NULL)
+        {
+            WaveformService_Update(profile->role, false, NULL, 0U,
+                                   BSP_Console_GetTickMs());
+        }
+    }
+    mode_business_wave_active = wave_allowed;
 #endif
 }
 
@@ -1001,6 +1043,7 @@ static bool ProvideBusinessContext(UDPSoundEvent_BusinessContext *out)
     out->allowed = mode.state == MODE_ACTIVE &&
         (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION);
     out->clap_allowed = mode.state == MODE_ACTIVE && mode.effective == MODE_CLAP;
+    out->wave_allowed = mode.state == MODE_ACTIVE && mode.effective == MODE_WAVE;
     out->role = mode.role;
     out->a_boot = mode.a_boot;
     out->b_boot = mode.b_boot;
@@ -1791,7 +1834,7 @@ void App_Process(void)
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_ADVANCED_UI
         ServiceAuxiliary(BSP_Console_GetTickMs());
-        if(ModeWaveComputeAllowed())
+        if(ModeWavePlannerAllowed())
         {
             const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
             WaveformService_ProcessPeriod();

@@ -109,6 +109,7 @@ typedef struct
     bool configured;
     bool allowed;        /**< RANGE/CALIBRATION：CHIRP/WFR1/RST2/RAK2准入。 */
     bool clap_allowed;   /**< CLAP：CLAP事件与CLP1/CLA1准入。 */
+    bool wave_allowed;   /**< WAVE：WVP2计划准入。 */
     BoardRole role;
     uint64_t a_boot;
     uint64_t b_boot;
@@ -148,6 +149,15 @@ void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out);
  * @note 仅原5009端口；登记代次后CLAP模式才允许封装，其他模式计入业务阻断。
  */
 bool UDPSoundEvent_SendProtectedShort(const uint8_t *inner, uint16_t length);
+
+/**
+ * @brief 发送受保护的WAVE计划（WVP2内层56字节，封装后88字节）。
+ * @param inner 非NULL已编码WVP2内层字节，仅本次借用。
+ * @param length 内层字节数，固定56。
+ * @return 已提交UDP为true；模式闸门拒绝、编码/网络失败为false。
+ * @note 仅A在WAVE模式发送；登记代次后原始WVP2不再被B接受。
+ */
+bool UDPSoundEvent_SendProtectedWave(const uint8_t *inner, uint16_t length);
 
 /**
  * @brief 设置MDP1前台接收消费者。
