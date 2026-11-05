@@ -43,6 +43,11 @@ static UDPSoundEvent_ModeControlSink mode_control_sink;
 static UDPSoundEvent_BusinessContextProvider business_provider;
 static uint32_t business_tx_ok, business_tx_blocked, business_tx_err;
 static uint32_t business_rx_ok, business_rx_blocked, business_rx_unwrapped, business_rx_bad;
+/* 按受保护业务类型的发送/接收计数：供模式准入对照证明专属入口为零。 */
+enum { BUSINESS_KIND_SEV2=0, BUSINESS_KIND_WFR1, BUSINESS_KIND_RST2, BUSINESS_KIND_RAK2,
+       BUSINESS_KIND_CLP1, BUSINESS_KIND_CLA1, BUSINESS_KIND_WVP2, BUSINESS_KIND_COUNT };
+static uint32_t business_tx_kind[BUSINESS_KIND_COUNT];
+static uint32_t business_rx_kind[BUSINESS_KIND_COUNT];
 static uint32_t domain_sequence;
 static UDPSoundEvent_MeasurementSink measurement_sink;
 /* 配对状态只由前台CPU访问，放ITCM避免挤占已满的DTCM/RAM；无DMA/IRQ。 */
@@ -181,7 +186,10 @@ bool UDPSoundEvent_SendProtectedShort(const uint8_t *inner,uint16_t length)
 {
     if(!configured || service_pcb==NULL || inner==NULL || length==0U ||
        !netif_is_link_up(&gnetif))return false;
-    return SendBusinessPayloadGated(inner,length,BUSINESS_GATE_CLAP)==BUSINESS_SEND_OK;
+    const bool ok=SendBusinessPayloadGated(inner,length,BUSINESS_GATE_CLAP)==BUSINESS_SEND_OK;
+    if(ok)Increment(&business_tx_kind[length==80U?
+        BUSINESS_KIND_CLP1:BUSINESS_KIND_CLA1]);
+    return ok;
 }
 
 /** @brief WAVE计划受保护发送；未登记代次时保持原字节兼容路径。 */
@@ -189,7 +197,9 @@ bool UDPSoundEvent_SendProtectedWave(const uint8_t *inner,uint16_t length)
 {
     if(!configured || service_pcb==NULL || inner==NULL || length==0U ||
        !netif_is_link_up(&gnetif))return false;
-    return SendBusinessPayloadGated(inner,length,BUSINESS_GATE_WAVE)==BUSINESS_SEND_OK;
+    const bool ok=SendBusinessPayloadGated(inner,length,BUSINESS_GATE_WAVE)==BUSINESS_SEND_OK;
+    if(ok)Increment(&business_tx_kind[BUSINESS_KIND_WVP2]);
+    return ok;
 }
 
 /* ==================== 跨板波形片段与时差精化 ==================== */
@@ -356,7 +366,7 @@ static bool SendWaveform(const SoundEventRecord *event)
     data[20]=(uint8_t)(WAVE_WINDOW_FRAMES>>8U);data[21]=(uint8_t)WAVE_WINDOW_FRAMES;
     data[22]=0U;data[23]=0U;
     const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
-    if(sent==BUSINESS_SEND_OK){Increment(&wave_tx_ok);return true;}
+    if(sent==BUSINESS_SEND_OK){Increment(&wave_tx_ok);Increment(&business_tx_kind[BUSINESS_KIND_WFR1]);return true;}
     if(sent==BUSINESS_SEND_ERROR){Increment(&wave_tx_err);}
     return false;
 }
@@ -600,7 +610,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
         pbuf_free(packet);
         if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
         ProcessSoundEventPayload(data,inner);
-        Increment(&business_rx_ok);
+        Increment(&business_rx_ok);Increment(&business_rx_kind[BUSINESS_KIND_SEV2]);
         return;
     }
     if(kind==BUSINESS_INNER_WFR1)
@@ -610,7 +620,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
         pbuf_free(packet);
         if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
         ProcessWaveformPayload(data,inner);
-        Increment(&business_rx_ok);
+        Increment(&business_rx_ok);Increment(&business_rx_kind[BUSINESS_KIND_WFR1]);
         return;
     }
     if(kind==BUSINESS_INNER_RST2)
@@ -620,7 +630,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
         pbuf_free(packet);
         if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
         ProcessRangingStatusPayload(data,inner);
-        Increment(&business_rx_ok);
+        Increment(&business_rx_ok);Increment(&business_rx_kind[BUSINESS_KIND_RST2]);
         return;
     }
     if(kind==BUSINESS_INNER_RAK2)
@@ -630,7 +640,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
         pbuf_free(packet);
         if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
         ProcessRangingAckPayload(data,inner);
-        Increment(&business_rx_ok);
+        Increment(&business_rx_ok);Increment(&business_rx_kind[BUSINESS_KIND_RAK2]);
         return;
     }
 #ifdef SBCG_USE_ADVANCED_UI
@@ -645,6 +655,9 @@ static void HandleBusinessPacket(struct pbuf *packet,
         {
             auxiliary_sink(data,inner);
             Increment(&business_rx_ok);Increment(&rx_ok);
+            if(kind==BUSINESS_INNER_CLP1)Increment(&business_rx_kind[BUSINESS_KIND_CLP1]);
+            else if(kind==BUSINESS_INNER_CLA1)Increment(&business_rx_kind[BUSINESS_KIND_CLA1]);
+            else Increment(&business_rx_kind[BUSINESS_KIND_WVP2]);
         }
         else
         {Increment(&business_rx_bad);Increment(&rx_bad);}
@@ -1107,7 +1120,8 @@ bool UDPSoundEvent_SendRangingStatus(uint32_t now_ms,const RangingStatusMessage 
     if(RangingStatusWire_Encode(message,data,sizeof data)!=RANGING_STATUS_WIRE_OK)
     {Increment(&result_tx_err);return false;}
     const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
-    if(sent==BUSINESS_SEND_OK){Increment(&result_tx_ok);return true;}
+    if(sent==BUSINESS_SEND_OK){Increment(&result_tx_ok);
+        Increment(&business_tx_kind[BUSINESS_KIND_RST2]);return true;}
     if(sent==BUSINESS_SEND_ERROR){Increment(&result_tx_err);}
     return false;
 }
@@ -1123,7 +1137,8 @@ bool UDPSoundEvent_SendRangingAck(uint32_t now_ms,const RangingStatusAck *ack)
     if(RangingStatusAck_Encode(ack,data,sizeof data)!=RANGING_STATUS_WIRE_OK)
     {Increment(&ack_tx_err);return false;}
     const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
-    if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);return true;}
+    if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);
+        Increment(&business_tx_kind[BUSINESS_KIND_RAK2]);return true;}
     if(sent==BUSINESS_SEND_ERROR){Increment(&ack_tx_err);}
     return false;
 }
@@ -1160,7 +1175,8 @@ bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
     {Increment(&tx_err);return false;}
     const BusinessSendStatus sent=SendBusinessPayloadGated(data,sizeof data,
         event->type==SOUND_EVENT_CLAP?BUSINESS_GATE_CLAP:BUSINESS_GATE_RANGING);
-    if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);return true;}
+    if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);
+        Increment(&business_tx_kind[BUSINESS_KIND_SEV2]);return true;}
     if(sent==BUSINESS_SEND_ERROR){Increment(&tx_err);}
     return false;
 }
@@ -1301,12 +1317,21 @@ void UDPSoundEvent_Process(uint32_t now_ms)
         emit(line,snprintf(line,sizeof line,
             "$MDB1_STATE,GATE=%u,ALLOWED=%u,CLAP=%u,WAVE=%u,TX_OK=%" PRIu32 ",TX_BLOCK=%" PRIu32
             ",TX_ERR=%" PRIu32 ",RX_OK=%" PRIu32 ",RX_BLOCK=%" PRIu32
-            ",RX_RAW=%" PRIu32 ",RX_BAD=%" PRIu32 "\r\n",
+            ",RX_RAW=%" PRIu32 ",RX_BAD=%" PRIu32
+            ",T0=%" PRIu32 ",T1=%" PRIu32 ",T2=%" PRIu32 ",T3=%" PRIu32
+            ",T4=%" PRIu32 ",T5=%" PRIu32 ",T6=%" PRIu32
+            ",R0=%" PRIu32 ",R1=%" PRIu32 ",R2=%" PRIu32 ",R3=%" PRIu32
+            ",R4=%" PRIu32 ",R5=%" PRIu32 ",R6=%" PRIu32 "\r\n",
             business_gated?1U:0U,(business_gated&&business_context.allowed)?1U:0U,
             (business_gated&&business_context.clap_allowed)?1U:0U,
             (business_gated&&business_context.wave_allowed)?1U:0U,
             business_tx_ok,business_tx_blocked,business_tx_err,
-            business_rx_ok,business_rx_blocked,business_rx_unwrapped,business_rx_bad));
+            business_rx_ok,business_rx_blocked,business_rx_unwrapped,business_rx_bad,
+            business_tx_kind[0],business_tx_kind[1],business_tx_kind[2],
+            business_tx_kind[3],business_tx_kind[4],business_tx_kind[5],
+            business_tx_kind[6],business_rx_kind[0],business_rx_kind[1],
+            business_rx_kind[2],business_rx_kind[3],business_rx_kind[4],
+            business_rx_kind[5],business_rx_kind[6]));
     }
 }
 /** @brief 复制统计；NULL参数不操作。 */

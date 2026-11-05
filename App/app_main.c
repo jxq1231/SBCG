@@ -172,6 +172,13 @@ static uint32_t heartbeat_seq;
 /* CHIRP构建：迄今最大前台循环总时长及同一轮AudioCapture/UI/其余耗时，仅诊断。 */
 #ifdef SBCG_USE_CHIRP
 static uint32_t max_loop_ms,max_loop_audio_ms,max_loop_ui_ms,max_loop_other_ms;
+#ifdef SBCG_USE_CHIRP
+/* 前台循环耗时固定毫秒桶；只用于性能对照，窗口输出后清零。 */
+#define APP_LOOP_HIST_BUCKETS 16U
+static uint32_t app_loop_hist[APP_LOOP_HIST_BUCKETS];
+static uint32_t app_loop_hist_max_ms;
+static uint32_t app_loop_hist_last_ms;
+#endif
 static uint32_t prof_lwip_max_ms,prof_temp_max_ms,prof_sound_max_ms;
 static uint32_t max_loop_flush_ms;
 #ifdef SBCG_USE_AUDIO
@@ -1675,6 +1682,43 @@ static void SoundNoticeDrain(uint32_t now_ms)
  *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
  *          PROFILE2分段计时仅随CHIRP诊断启用；其他构建不读取或更新该诊断状态。
  */
+#ifdef SBCG_USE_CHIRP
+/** @brief 将一轮前台耗时计入固定毫秒桶并记录窗口最大值。 @param ms 本轮前台耗时毫秒。 @return 无返回值。 */
+static void LoopHistogramRecord(uint32_t ms)
+{
+    static const uint16_t edges[APP_LOOP_HIST_BUCKETS-1U]={1U,2U,3U,4U,5U,6U,8U,10U,
+        12U,16U,20U,24U,32U,48U,96U};
+    uint32_t bucket=APP_LOOP_HIST_BUCKETS-1U;
+    for(uint32_t i=0U;i<sizeof edges/sizeof edges[0];++i)
+    {
+        if(ms<edges[i]){bucket=i;break;}
+    }
+    ++app_loop_hist[bucket];
+    if(ms>app_loop_hist_max_ms)app_loop_hist_max_ms=ms;
+}
+/** @brief 每10s输出本窗口循环耗时分桶并清零。 @param now_ms 当前毫秒。 @return 无返回值。 */
+static void LoopHistogramReport(uint32_t now_ms)
+{
+    if((uint32_t)(now_ms-app_loop_hist_last_ms)<10000U)return;
+    app_loop_hist_last_ms=now_ms;
+    uint32_t total=0U;
+    for(uint32_t i=0U;i<APP_LOOP_HIST_BUCKETS;++i)total+=app_loop_hist[i];
+    char line[APP_LOG_LINE_CAPACITY];
+    int n=snprintf(line,sizeof line,"$LOOP_HIST,COUNT=%" PRIu32,total);
+    for(uint32_t i=0U;i<APP_LOOP_HIST_BUCKETS && n>0 && (size_t)n<sizeof line;++i)
+    {
+        n+=snprintf(line+n,sizeof line-(size_t)n,",B%" PRIu32 "=%" PRIu32,i,app_loop_hist[i]);
+    }
+    if(n>0 && (size_t)n<sizeof line)
+    {
+        n+=snprintf(line+n,sizeof line-(size_t)n,",MAX_MS=%" PRIu32 "\r\n",app_loop_hist_max_ms);
+    }
+    if(n>0 && (size_t)n<(int)sizeof line){SendLine(line,n);}
+    memset(app_loop_hist,0,sizeof app_loop_hist);
+    app_loop_hist_max_ms=0U;
+}
+#endif
+
 void App_Process(void)
 {
 #ifdef SBCG_USE_BOARD_IDENTITY
@@ -1908,6 +1952,7 @@ void App_Process(void)
         const uint32_t known = loop_audio_ms + loop_ui_ms;
         max_loop_other_ms = loop_ms > known ? loop_ms - known : 0U;
     }
+    LoopHistogramRecord(loop_ms);
 #if defined(SBCG_USE_AUDIO)
     /* 每5秒输出低频率A3分解：最大循环的OTHER/Flush与AudioCapture内部最大轮。 */
     if ((uint32_t)(BSP_Console_GetTickMs() - last_profile_ms) >= 5000U) {
@@ -1926,6 +1971,7 @@ void App_Process(void)
             prof_lwip_max_ms, prof_temp_max_ms, prof_sound_max_ms);
         if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
         prof_lwip_max_ms = prof_temp_max_ms = prof_sound_max_ms = 0U;
+        LoopHistogramReport(BSP_Console_GetTickMs());
         length = snprintf(line, sizeof(line),
             "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
             ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32
