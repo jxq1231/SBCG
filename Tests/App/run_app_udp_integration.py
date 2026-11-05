@@ -239,6 +239,16 @@ def run_mode_tests():
         check(len(old_business)>=4,'gated RANGE business uses MDB1 wrappers for events and status')
         old_raw=[payload[64:] for payload in old_business]
 
+        # Stay in the same mode generation long enough to exceed B's old four-event queue.
+        for event_number in range(4,9):
+            step(sequence=event_number)
+            for _ in range(39):
+                step()
+            sa,sb=snap(a,b,f'gated RANGE event {event_number}')
+            check(sa['has']==sb['has']==1 and sa['id']==sb['id']>first_id,
+                  f'gated RANGE event {event_number} publishes a fresh result on both boards')
+            first_id=sa['id']
+
         check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A accepts the CLAP request')
         clap_key=converge(clap,100,200,after=range_key[2],route=reorder_and_duplicate)
         replay((old_ready,old_committed),a)
@@ -261,7 +271,7 @@ def run_mode_tests():
         a.cmd('CLASS 2');b.cmd('CLASS 2')
         a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
         clap_business_wall=wall_ms
-        step(sequence=4)
+        step(sequence=9)
         # From the first publication onward ACKs are dropped: A must keep retrying.
         for _ in range(40):
             step(drop_cla1=True)
@@ -282,6 +292,16 @@ def run_mode_tests():
         check(bool(business_packets(b'CLA1',clap_business_wall)) and
               len(business_packets(b'CLP1',clap_business_wall))==clp_after_ack,
               'matching CLA1 stops CLP1 retransmission')
+        last_clap_id=sa['clap_id']
+        for event_number in range(2,9):
+            step(sequence=8+event_number)
+            for _ in range(39):
+                step()
+            sa,sb=snap(a,b,f'gated CLAP event {event_number}')
+            check(sa['clap_has']==sb['clap_has']==1 and
+                  sa['clap_id']==sb['clap_id']>last_clap_id,
+                  f'gated CLAP event {event_number} publishes a fresh result on both boards')
+            last_clap_id=sa['clap_id']
         a.cmd('CLASS 1');b.cmd('CLASS 1')
         a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
 
@@ -290,7 +310,7 @@ def run_mode_tests():
         check(wave_key[2]>clap_key[2],'both boards confirm WAVE with a new mode sequence')
         wave_wall=wall_ms
         for index in range(160):
-            step(sequence={39:1,79:2,119:3}.get(index,0))
+            step(sequence={39:17,79:18,119:19}.get(index,0))
         sa,sb=snap(a,b,'WAVE blocks RANGE business')
         check(sa['has']==sb['has']==0,
               'WAVE mode does not establish a RANGE measurement from new sounds')
@@ -302,7 +322,7 @@ def run_mode_tests():
         a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
         clap_business_before=len(business_packets(b'CLP1',wave_wall))
         for index in range(25):
-            step(sequence=4 if index==1 else 0)
+            step(sequence=20 if index==1 else 0)
         sa,sb=snap(a,b,'WAVE blocks CLAP business')
         check(sa['clap_has']==sb['clap_has']==0 and
               len(business_packets(b'CLP1',wave_wall))==clap_business_before,
@@ -313,7 +333,7 @@ def run_mode_tests():
         check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,'A accepts the CALIBRATION request')
         cal_key=converge(calibration,100,200,after=wave_key[2])
         for index in range(160):
-            step(sequence={39:5,79:6,119:7}.get(index,0))
+            step(sequence={39:21,79:22,119:23}.get(index,0))
         sa,sb=snap(a,b,'gated CALIBRATION business')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['id']>first_id,
               'CALIBRATION mode admits RANGE business with a fresh measurement')
@@ -326,7 +346,7 @@ def run_mode_tests():
         saved_offset=sa['cal_offset_mm']
         a.cmd('CAL ENABLE')
         for index in range(160):
-            step(sequence={39:8,79:9,119:10}.get(index,0))
+            step(sequence={39:24,79:25,119:26}.get(index,0))
         sa,sb=snap(a,b,'calibration enabled')
         check(sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
               sb['applied_offset_mm']==saved_offset,
@@ -336,7 +356,7 @@ def run_mode_tests():
         range_key=converge(range_mode,100,200,after=cal_key[2])
         check(range_key[2]>cal_key[2],'the second RANGE has a fresh mode sequence')
         for index in range(160):
-            step(sequence={39:11,79:12,119:13}.get(index,0))
+            step(sequence={39:27,79:28,119:29}.get(index,0))
         sa,sb=snap(a,b,'compensation after leaving CALIBRATION')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and
               sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and

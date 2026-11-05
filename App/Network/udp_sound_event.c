@@ -4,7 +4,7 @@
  * @details     按版本解码声音事件，校验来源、事件侧与有效域；为右锚发布保留3000ms配对预算。
  *              A侧使用两板窗口精化时差；证据失败明确拒绝，不以标称/旧齿距离出新数。
  *              撤域或换域清除旧配对候选，成功结果经纯核心计算距离/方向。
- *              模式观测启用时，沿用固定对端和原PCB交付MDP1控制消息。
+ *              模式观测启用时，沿用固定对端和原PCB交付MDP1控制消息；仅A侧维护配对队列。
  *              WFR1的PCM在捕获区、pbuf与对端槽之间直接复制，不在栈上拼接整帧。
  * @note        只证明软件链路；不建立PTP同步、不把接收时刻当声音到达、不宣称物理精度。
  */
@@ -549,7 +549,14 @@ static bool BusinessGateAllows(BusinessInnerKind kind,
         return context->allowed;
     }
 }
-/** @brief 处理已解出的SEV2内层；与未封装路径共用同一解码、域和配对逻辑。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
+/**
+ * @brief 解码并校验对端SEV2事件，交给已登记的事件消费者。
+ * @param data 非NULL只读内层字节，调用期间借用。
+ * @param length 内层字节数。
+ * @return 无返回值；拒绝时更新接收错误计数。
+ * @note 前台UDP接收路径。受模式闸门保护的B板仅学习对端会话；
+ *       A板与兼容路径仍将事件加入本地配对队列后通知消费者。
+ */
 static void ProcessSoundEventPayload(const uint8_t *data,uint16_t length)
 {
     if(!IsSoundEventLength(length)){Increment(&rx_bad);return;}
@@ -557,7 +564,8 @@ static void ProcessSoundEventPayload(const uint8_t *data,uint16_t length)
     if(SoundEventWire_Decode(data,length,&event)!=SOUND_EVENT_WIRE_OK)
     {Increment(&rx_bad);return;}
     UDPSoundEvent_BusinessContext context;
-    if(BusinessContext(&context))
+    const bool gated=BusinessContext(&context);
+    if(gated)
     {
         const bool clap=event.type==SOUND_EVENT_CLAP;
         if(clap?!context.clap_allowed:!context.allowed)
@@ -568,9 +576,14 @@ static void ProcessSoundEventPayload(const uint8_t *data,uint16_t length)
     {Increment(&rx_bad);return;}
     if(current_time_domain==0U || event.time_domain!=current_time_domain)
     {Increment(&rx_bad);return;}
-    const uint32_t now=read_tick!=NULL?read_tick():0U;
-    if(!SoundPair_Submit(&pair_manager,&event,now))
+    if(event.quality<pair_config.min_quality)
     {Increment(&rx_bad);return;}
+    if(!gated || local_profile.role!=BOARD_ROLE_B)
+    {
+        const uint32_t now=read_tick!=NULL?read_tick():0U;
+        if(!SoundPair_Submit(&pair_manager,&event,now))
+        {Increment(&rx_bad);return;}
+    }
     if(event_sink!=NULL){event_sink(&event);}
     Increment(&rx_ok);
 }
@@ -1159,23 +1172,34 @@ bool UDPSoundEvent_SendRangingAck(uint32_t now_ms,const RangingStatusAck *ack)
 }
 
 /**
- * @brief 在当前有效域内发布本板事件，并提交一份给本地配对器。
- * @param now_ms 本地提交时刻，单位毫秒，供配对保留期计算。
+ * @brief 在当前有效域内发布本板事件，按角色决定是否加入本地配对队列。
+ * @param now_ms 本地前台毫秒计数，供配对保留期计算。
  * @param event 非NULL只读事件，返回前复制，不保留调用方指针。
- * @return true为UDP发送成功；false为未配置、域不符、队列或收发失败并计数。
- * @note 域拒绝不进入配对器；网络发送失败时已提交的本地候选仍等待对端。
+ * @return UDP发送成功为true；无效事件、闸门拒绝或发送失败为false。
+ * @note 模式闸门保护下仅A板保留本地候选，B板直接上报。
+ *       A板与兼容路径在网络发送失败后仍保留已提交的本地候选。
  */
 bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
 {
     if(!configured || event==NULL){Increment(&tx_err);return false;}
     if(current_time_domain==0U || event->time_domain!=current_time_domain)
     {Increment(&tx_err);return false;}
-    /* 本端事件必须同时进入配对器；Receive只接收对端，配对器需要A+B两侧。 */
-    if(!SoundPair_Submit(&pair_manager,event,now_ms))
-    {Increment(&tx_err);return false;}
-    /* 波形窗口只服务于CHIRP测距；CLAP模式或闸门关闭时不生成/发送WFR1与本地储备。 */
     UDPSoundEvent_BusinessContext event_context;
     const bool event_gated=BusinessContext(&event_context);
+    const bool pair_locally=!event_gated || local_profile.role!=BOARD_ROLE_B;
+    uint8_t data[SOUND_EVENT_WIRE_BYTES];
+    if(pair_locally)
+    {
+        if(!SoundPair_Submit(&pair_manager,event,now_ms))
+        {Increment(&tx_err);return false;}
+    }
+    else if(event->side!=SOUND_SIDE_B || event->quality<pair_config.min_quality ||
+            SoundEventWire_Encode(event,data,sizeof data)!=SOUND_EVENT_WIRE_OK)
+    {
+        /* B板先校验事件，避免为无效事件发送波形窗口。 */
+        Increment(&tx_err);return false;
+    }
+    /* 波形窗口只服务于CHIRP测距；CLAP模式或闸门关闭时不生成/发送WFR1与本地储备。 */
     const bool ranging_gate_ok=!event_gated || event_context.allowed;
     if(event->type==SOUND_EVENT_CHIRP && ranging_gate_ok)
     {
@@ -1185,8 +1209,7 @@ bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
     }
     if(service_pcb==NULL || !netif_is_link_up(&gnetif))
     {Increment(&tx_err);return false;}
-    uint8_t data[SOUND_EVENT_WIRE_BYTES];
-    if(SoundEventWire_Encode(event,data,sizeof data)!=SOUND_EVENT_WIRE_OK)
+    if(pair_locally && SoundEventWire_Encode(event,data,sizeof data)!=SOUND_EVENT_WIRE_OK)
     {Increment(&tx_err);return false;}
     const BusinessSendStatus sent=SendBusinessPayloadGated(data,sizeof data,
         event->type==SOUND_EVENT_CLAP?BUSINESS_GATE_CLAP:BUSINESS_GATE_RANGING);
