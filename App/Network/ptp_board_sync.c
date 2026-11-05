@@ -1,7 +1,7 @@
 /**
  * @file ptp_board_sync.c
  * @brief 使用MAC硬件RX/TX快照完成固定A/B单播两步PTPv2交换。
- * @details 319接收事件、320接收一般消息；前台每秒汇总交换状态及拒绝分支，仅LwIP分配pbuf/PCB。
+ * @details 319接收事件、320接收一般消息；前台每秒汇总交换状态及拒绝分支，逐包串口追踪默认关闭。
  * @note 不调整硬件时钟；共享现有BSP单缓冲Begin/End令牌，无新IRQ/DMA/Cache配置。
  */
 #include "ptp_board_sync.h"
@@ -66,6 +66,7 @@ static uint64_t Ns(BSP_PtpTime t) { return (uint64_t)t.seconds*NS_PER_SEC+t.nano
 static bool Valid(BSP_PtpTime t) { return t.nanoseconds<1000000000U; }
 /** @brief 检查序号是否在16位向前半空间。 @param n 新序号。 @param old 已收水位。 @return 严格较新为true。 */
 static bool Newer(uint16_t n,uint16_t old) { uint16_t d=(uint16_t)(n-old);return d!=0U&&d<32768U; }
+#ifdef SBCG_PTP_EVENT_TRACE
 /**
  * @brief 输出一条PTP收发/候选事件，用于关联A发送与B等待Follow_Up的时序。
  * @param event 固定短事件名，不能为NULL。
@@ -75,7 +76,7 @@ static bool Newer(uint16_t n,uint16_t old) { uint16_t d=(uint16_t)(n-old);return
  * @param now 读取的本机毫秒。
  * @param extra A的FollowUp相对Sync延迟毫秒，或候选年龄；无额外值填0。
  * @return 无返回值。
- * @note 只读诊断输出，不改变状态机；正常每250ms一对，串口开销小于1KB/s。
+ * @note 仅详细诊断构建启用；收发均在前台格式化，通过日志回调发布，不改变状态机。
  */
 static void TraceEvent(const char *event,uint16_t seq,uint16_t cand_seq,bool rx_valid,uint32_t now,uint32_t extra)
 {
@@ -87,6 +88,10 @@ static void TraceEvent(const char *event,uint16_t seq,uint16_t cand_seq,bool rx_
         (unsigned)candidate.state,rx_valid?1U:0U,extra);
     if(n>0&&(size_t)n<sizeof(line)) { emit(line,n); }
 }
+#else
+/** @brief 默认构建省略逐包日志及其参数求值，保留周期统计和四时刻输出。 */
+#define TraceEvent(...) ((void)0)
+#endif
 /** @brief 判断启动/重新获取静默是否结束。 @param now 当前毫秒。 @return 允许交换为true。 */
 static bool GuardDone(uint32_t now) { return (uint32_t)(now-guard_start_ms)>=GUARD_MS; }
 /** @brief 清除跨时钟修订不可用的CPU状态。 @return 无返回值。 @note 不复位任何序号水位。 */
@@ -218,7 +223,7 @@ static PtpWireMessage Message(PtpWireType type,uint16_t seq)
  * @param source 回调期间有效的源IP，可为NULL并拒绝。
  * @param source_port 源UDP端口，必须与对应PCB端口相同。
  * @return 无返回值。
- * @note 只复制CPU字段；时钟校正和格式化均由前台处理，不在本回调执行。
+ * @note 由前台LwIP同步调用；保存CPU字段，启用详细追踪时格式化日志，不在此处校正时钟。
  */
 static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,const ip_addr_t *source,u16_t source_port)
 {

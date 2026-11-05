@@ -86,6 +86,11 @@ if(TARGET LwIP)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/Network/ptp_wire.c App/Network/ptp_board_sync.c
         App/Sync/clock_servo.c App/Sync/time_sync.c)
+    option(SBCG_PTP_EVENT_TRACE "Emit per-message PTP serial diagnostics" OFF)
+    if(SBCG_PTP_EVENT_TRACE)
+        set_property(SOURCE App/Network/ptp_board_sync.c APPEND PROPERTY
+            COMPILE_DEFINITIONS SBCG_PTP_EVENT_TRACE)
+    endif()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         App/BSP/board_identity.c App/BSP/bsp_board_identity.c)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/udp_heartbeat.c)

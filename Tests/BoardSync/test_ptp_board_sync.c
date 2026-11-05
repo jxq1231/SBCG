@@ -108,10 +108,25 @@ int main(void)
     PtpWireMessage fu;assert(PtpWire_Decode(sent[1],sizes[1],&fu)==PTP_WIRE_OK&&fu.timestamp_ns==UINT64_C(10000000300));
     Deliver(PTP_WIRE_DELAY_REQ,42,0);PtpBoardSync_Process(now);assert(sends==3&&sent[2][0]==9&&begins==1);
     Deliver(PTP_WIRE_DELAY_REQ,42,0);PtpBoardSync_Process(now);assert(sends==3);
+#ifdef SBCG_PTP_EVENT_TRACE
+    assert(Contains("$PTP_EVENT,ROLE=A,EV=TX_SYNC") &&
+           Contains("$PTP_EVENT,ROLE=A,EV=TX_FU") &&
+           Contains("$PTP_EVENT,ROLE=A,EV=RX_REQ"));
+#else
+    assert(!Contains("$PTP_EVENT,"));
+#endif
     puts("PASS A: six-second startup, standard Sync/FU DMA TX and DelayResp DMA RX, duplicate ignored");
     Reset(BOARD_ROLE_B,0);Ready();BComplete(5);SyncExchange e;uint32_t captured;
     assert(PtpBoardSync_TakeExchange(&e,&captured));assert(e.t1_a_tx_ns==UINT64_C(10000000100)&&e.t2_b_rx_ns==UINT64_C(10000000200)&&e.t3_b_tx_ns==UINT64_C(10000000300)&&e.t4_a_rx_ns==UINT64_C(10000000400));
     assert(!PtpBoardSync_TakeExchange(&e,&captured));Deliver(PTP_WIRE_DELAY_RESP,1,UINT64_C(10000000400));assert(!PtpBoardSync_TakeExchange(&e,&captured));
+    assert(Contains("$PTP_SYNC_RAW,"));
+#ifdef SBCG_PTP_EVENT_TRACE
+    assert(Contains("$PTP_EVENT,ROLE=B,EV=RX_SYNC") &&
+           Contains("$PTP_EVENT,ROLE=B,EV=RX_FU") &&
+           Contains("$PTP_EVENT,ROLE=B,EV=TX_REQ"));
+#else
+    assert(!Contains("$PTP_EVENT,"));
+#endif
     puts("PASS B: natural A/B quartet copied once, independent DelayReq sequence, replay ignored");
     Reset(BOARD_ROLE_B,0);Ready();Deliver(PTP_WIRE_FOLLOW_UP,1,100);Deliver(PTP_WIRE_SYNC,1,0);Deliver(PTP_WIRE_FOLLOW_UP,2,100);assert(!sends);now+=1000;PtpBoardSync_Process(now);Deliver(PTP_WIRE_FOLLOW_UP,1,100);assert(!sends&&!PtpBoardSync_TakeExchange(&e,&captured));
     /* 丢FollowUp后候选只等200ms，下一帧Sync(250ms)必须替换旧候选而非被BUSY拒绝。 */
