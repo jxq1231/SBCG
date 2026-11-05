@@ -720,7 +720,15 @@ static void EnableBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
                            uint64_t mode_seq,bool allowed)
 {
     test_business_context=(UDPSoundEvent_BusinessContext){
-        true,allowed,role,a_boot,b_boot,mode_seq};
+        true,allowed,false,role,a_boot,b_boot,mode_seq};
+    test_business_enabled=true;
+}
+/** @brief 配置CLAP闸门上下文：只有clap_allowed，测距类型关闭。 @return 无返回值。 */
+static void EnableClapBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
+                               uint64_t mode_seq)
+{
+    test_business_context=(UDPSoundEvent_BusinessContext){
+        true,false,true,role,a_boot,b_boot,mode_seq};
     test_business_enabled=true;
 }
 /** @brief 按给定世代封装一条内层报文。 @return 封装后的总字节数。 */
@@ -859,6 +867,101 @@ static void TestBusinessSoundWaveGate(void)
            memcmp(decoded.inner,"SEVT",4U)==0);
     puts("PASS MDB1 sound/wave: SEV2 and 1048-byte WFR1 wrapped with inner bytes preserved");
 }
+
+static uint8_t aux_rx[128];
+static uint16_t aux_rx_length;
+static unsigned aux_rx_count;
+/** @brief 保存MDB1解封后的CLP1/CLA1内层，供角色/世代测试断言。 */
+static void AuxSink(const uint8_t *data,uint16_t length)
+{
+    if(length>sizeof aux_rx)return;
+    memcpy(aux_rx,data,length);aux_rx_length=length;++aux_rx_count;
+}
+/**
+ * @brief 验证CLP1/CLA1在CLAP模式下的MDB1封装、方向/世代/原始旧包拒绝。
+ * @return 无返回值，失败由断言终止。
+ */
+static void TestBusinessShortGate(void)
+{
+    BoardIdentityProfile a={0},b={0};
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    static uint8_t clp1[80],cla1[24],wrapped[BUSINESS_WIRE_MAX_BYTES];
+    memset(clp1,0,sizeof clp1);memcpy(clp1,"CLP1",4U);
+    memset(cla1,0,sizeof cla1);memcpy(cla1,"CLA1",4U);
+    UDPSoundEvent_BusinessCounters counters;
+    BusinessWireMessage decoded;
+
+    /* A在CLAP模式发送CLP1，必须带MDB1外头且内层逐字节保留。 */
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableClapBusiness(BOARD_ROLE_A,11U,22U,5U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    unsigned before=sends;
+    assert(UDPSoundEvent_SendProtectedShort(clp1,sizeof clp1));
+    assert(sends==before+1U);
+    uint16_t length=0U;
+    const uint8_t *packet=RecentSent(0U,&length);
+    assert(length==BUSINESS_WIRE_HEADER_BYTES+sizeof clp1);
+    assert(BusinessWire_Decode(packet,length,&decoded));
+    assert(decoded.role==BOARD_ROLE_A && decoded.inner_length==sizeof clp1 &&
+           decoded.a_boot==11U && decoded.b_boot==22U && decoded.mode_seq==5U &&
+           memcmp(decoded.inner,clp1,sizeof clp1)==0);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,5U,true); /* 测距模式不能发送CLP1。 */
+    before=sends;
+    assert(!UDPSoundEvent_SendProtectedShort(clp1,sizeof clp1));
+    assert(sends==before);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.tx_blocked==1U);
+
+    /* B在CLAP模式接收封装CLP1并交付辅助消费者。 */
+    assert(UDPSoundEvent_Init(0U,&b,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableClapBusiness(BOARD_ROLE_B,11U,22U,5U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    uint16_t wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_A,11U,22U,5U,wrapped);
+    aux_rx_count=0U;
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U && aux_rx_length==sizeof clp1 &&
+           memcmp(aux_rx,clp1,sizeof clp1)==0);
+    wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_A,11U,22U,6U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* 旧世代 */
+    assert(aux_rx_count==1U);
+    ReceiveBytes(clp1,sizeof clp1); /* 原始旧包 */
+    assert(aux_rx_count==1U);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_blocked==1U && counters.rx_unwrapped==1U);
+    EnableBusiness(BOARD_ROLE_B,11U,22U,5U,true); /* 测距模式不能接收CLP1。 */
+    wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_A,11U,22U,5U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U);
+
+    /* B发送CLA1，A接收；错误方向被拒绝。 */
+    EnableClapBusiness(BOARD_ROLE_B,11U,22U,5U);
+    before=sends;
+    assert(UDPSoundEvent_SendProtectedShort(cla1,sizeof cla1));
+    assert(sends==before+1U);
+    packet=RecentSent(0U,&length);
+    assert(length==BUSINESS_WIRE_HEADER_BYTES+sizeof cla1);
+    assert(BusinessWire_Decode(packet,length,&decoded));
+    assert(decoded.role==BOARD_ROLE_B && memcmp(decoded.inner,cla1,sizeof cla1)==0);
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableClapBusiness(BOARD_ROLE_A,11U,22U,5U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    aux_rx_count=0U;
+    wrapped_length=WrapBusiness(cla1,sizeof cla1,BOARD_ROLE_B,11U,22U,5U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U && aux_rx_length==sizeof cla1 && memcmp(aux_rx,cla1,4U)==0);
+    wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_B,11U,22U,5U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* A不接受B发来的CLP1方向。 */
+    assert(aux_rx_count==1U);
+    puts("PASS MDB1 short: CLP1/CLA1 wrapped, direction/generation/raw/mode gates enforced");
+}
 #endif
 
 int main(void)
@@ -940,6 +1043,7 @@ int main(void)
     puts("PASS MDP1: wire layout, malformed fields, roles, endpoint and pbuf handling");
     TestBusinessRangingGate();
     TestBusinessSoundWaveGate();
+    TestBusinessShortGate();
 #endif
     puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;

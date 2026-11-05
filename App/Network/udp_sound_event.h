@@ -107,7 +107,8 @@ typedef void (*UDPSoundEvent_ModeControlSink)(const ModeControlMessage *message)
 typedef struct
 {
     bool configured;
-    bool allowed;
+    bool allowed;        /**< RANGE/CALIBRATION：CHIRP/WFR1/RST2/RAK2准入。 */
+    bool clap_allowed;   /**< CLAP：CLAP事件与CLP1/CLA1准入。 */
     BoardRole role;
     uint64_t a_boot;
     uint64_t b_boot;
@@ -138,6 +139,15 @@ typedef struct
 
 /** @brief 复制MDB1业务计数；NULL参数不操作。 @param out 调用方输出。 @return 无返回值。 */
 void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out);
+
+/**
+ * @brief 发送受保护的CLAP短报文（CLP1/CLA1）；未登记代次时按原字节未封装发送。
+ * @param inner 非NULL已编码CLP1/CLA1内层字节，仅本次借用。
+ * @param length 内层字节数（CLP1为80，CLA1为24）。
+ * @return 已提交UDP为true；模式闸门拒绝、编码/网络失败为false。
+ * @note 仅原5009端口；登记代次后CLAP模式才允许封装，其他模式计入业务阻断。
+ */
+bool UDPSoundEvent_SendProtectedShort(const uint8_t *inner, uint16_t length);
 
 /**
  * @brief 设置MDP1前台接收消费者。

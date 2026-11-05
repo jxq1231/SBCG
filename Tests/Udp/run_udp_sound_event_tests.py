@@ -11,7 +11,7 @@ out=ROOT/'Logs/UDP/SoundEvent';out.mkdir(parents=True,exist_ok=True)
 includes=['App','Tests/Network/stubs','LWIP/Target',
           'Middlewares/Third_Party/LwIP/src/include',
           'Middlewares/Third_Party/LwIP/system']
-cmd=[gcc,'-std=c11','-Wall','-Wextra','-Werror','-pedantic','-DSBCG_USE_MODE_OBSERVATION=1']
+cmd=[gcc,'-std=c11','-Wall','-Wextra','-Werror','-pedantic','-DSBCG_USE_MODE_OBSERVATION=1','-DSBCG_USE_ADVANCED_UI=1']
 for include in includes: cmd+=['-I',str(ROOT/include)]
 cmd += [str(ROOT/'Tests/Udp/test_udp_sound_event.c'),
         str(ROOT/'App/Network/udp_sound_event.c'),

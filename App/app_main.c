@@ -462,11 +462,55 @@ static bool ModeCalibrationAllowed(void)
 }
 #endif
 
-/** @brief CLAP专属业务在阶段三实现前保持关闭；未登记代次时保留阶段一行为。 @return 允许为true。 */
+/**
+ * @brief 判断当前生效模式是否准入指定声音事件类型。
+ * @param is_chirp true为CHIRP，false为CLAP。
+ * @return 未登记代次恒true；登记后RANGE/CALIBRATION仅准入CHIRP、CLAP仅准入CLAP。
+ * @note WAVE拒绝两类；候选发布与UDP收发使用同一判定，避免模式错配事件进入配对。
+ */
+static bool ModeAdmitsSoundType(bool is_chirp)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    if (mode.state != MODE_ACTIVE)
+    {
+        return false;
+    }
+    if (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION)
+    {
+        return is_chirp;
+    }
+    if (mode.effective == MODE_CLAP)
+    {
+        return !is_chirp;
+    }
+    return false;
+#else
+    (void)is_chirp;
+    return true;
+#endif
+}
+
+/** @brief CLAP专属业务只在已生效CLAP模式放行；未登记代次时保留阶段一行为。 @return 允许为true。 */
 #ifdef SBCG_USE_ADVANCED_UI
 static bool ModeClapAllowed(void)
 {
-    return !ModeGateConfigured();
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_CLAP;
+#else
+    return true;
+#endif
 }
 
 /** @brief WAVE专属计算在阶段四实现前保持关闭；未登记代次时保留阶段一行为。 @return 允许为true。 */
@@ -585,29 +629,41 @@ static void RefreshRanging(uint32_t now_ms)
 /** @brief 固定对端短包一次解码后分发；仅匹配角色消费。@param data 借用载荷。@param length 已分派长度。@return 无返回值。 */
 static void HandleAuxiliary(const uint8_t *data,uint16_t length)
 {
-    if(ModeGateConfigured())return; /* 阶段二：CLAP/WAVE短包在模式闸门启用后关闭。 */
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     if(memcmp(data,"CLP1",4)==0 && profile->role==BOARD_ROLE_B)
-    { ClapResultMessage result;if(ClapWire_DecodeResult(data,length,&result))
-        (void)ClapRanging_OnMessage(&clap_ranging,&result); }
+    {
+        if(!ModeClapAllowed())return;
+        ClapResultMessage result;if(ClapWire_DecodeResult(data,length,&result))
+            (void)ClapRanging_OnMessage(&clap_ranging,&result);
+    }
     else if(memcmp(data,"CLA1",4)==0 && profile->role==BOARD_ROLE_A)
-    { ClapAckMessage ack;if(ClapWire_DecodeAck(data,length,&ack))
-        (void)ClapRanging_OnAck(&clap_ranging,&ack); }
+    {
+        if(!ModeClapAllowed())return;
+        ClapAckMessage ack;if(ClapWire_DecodeAck(data,length,&ack))
+            (void)ClapRanging_OnAck(&clap_ranging,&ack);
+    }
     else if(memcmp(data,"WVP2",4)==0 && profile->role==BOARD_ROLE_B)
-    { WaveformPlan plan;if(WaveformPlanWire_Decode(data,length,&plan))
-        (void)WaveformService_OnPlan(&plan,now); }
+    {
+        if(!ModeWaveComputeAllowed())return; /* WAVE计划在阶段四前关闭。 */
+        WaveformPlan plan;if(WaveformPlanWire_Decode(data,length,&plan))
+            (void)WaveformService_OnPlan(&plan,now);
+    }
 }
 /** @brief 前台发送击掌结果/确认和共同波形计划，失败不补发突发流。@param now_ms 当前毫秒。@return 无返回值。 */
 static void ServiceAuxiliary(uint32_t now_ms)
 {
-    if(ModeGateConfigured())return; /* 阶段二：CLAP/WAVE短包在模式闸门启用后关闭。 */
     uint8_t data[CLAP_RESULT_WIRE_BYTES];ClapResultMessage result;ClapAckMessage ack;WaveformPlan plan;
-    if(ClapRanging_TakeTx(&clap_ranging,now_ms,&result) && ClapWire_EncodeResult(&result,data,CLAP_RESULT_WIRE_BYTES))
-        (void)UDPSoundEvent_SendAuxiliary(data,CLAP_RESULT_WIRE_BYTES);
-    if(ClapRanging_TakeAck(&clap_ranging,&ack) && ClapWire_EncodeAck(&ack,data,CLAP_ACK_WIRE_BYTES))
-        (void)UDPSoundEvent_SendAuxiliary(data,CLAP_ACK_WIRE_BYTES);
-    if(WaveformService_TakePlan(&plan) && WaveformPlanWire_Encode(&plan,data,WAVEFORM_PLAN_WIRE_BYTES))
+    if(ModeClapAllowed() &&
+       ClapRanging_TakeTx(&clap_ranging,now_ms,&result) &&
+       ClapWire_EncodeResult(&result,data,CLAP_RESULT_WIRE_BYTES))
+        (void)UDPSoundEvent_SendProtectedShort(data,CLAP_RESULT_WIRE_BYTES);
+    if(ModeClapAllowed() &&
+       ClapRanging_TakeAck(&clap_ranging,&ack) &&
+       ClapWire_EncodeAck(&ack,data,CLAP_ACK_WIRE_BYTES))
+        (void)UDPSoundEvent_SendProtectedShort(data,CLAP_ACK_WIRE_BYTES);
+    if(ModeWaveComputeAllowed() && WaveformService_TakePlan(&plan) &&
+       WaveformPlanWire_Encode(&plan,data,WAVEFORM_PLAN_WIRE_BYTES))
         (void)UDPSoundEvent_SendAuxiliary(data,WAVEFORM_PLAN_WIRE_BYTES);
 }
 #endif
@@ -857,6 +913,10 @@ static void ServiceModeObservation(uint32_t now_ms)
 
 /** @brief 上一次模式闸门是否允许测距业务；仅在本板已登记代次时有效。 */
 static bool mode_business_ranging_active;
+#ifdef SBCG_USE_ADVANCED_UI
+/** @brief 上一次模式闸门是否允许CLAP业务；离开CLAP时撤销待发/展示。 */
+static bool mode_business_clap_active;
+#endif
 
 /**
  * @brief 在模式进入/离开RANGE/CALIBRATION时清理旧展示与配对候选。
@@ -883,6 +943,14 @@ static void ServiceModeBusinessGates(void)
         RangingExchange_Init(&ranging_app.exchange);
     }
     mode_business_ranging_active = allowed;
+#ifdef SBCG_USE_ADVANCED_UI
+    const bool clap_allowed = ModeClapAllowed();
+    if (mode_business_clap_active && !clap_allowed)
+    {
+        ClapRanging_Invalidate(&clap_ranging);
+    }
+    mode_business_clap_active = clap_allowed;
+#endif
 }
 
 #ifdef SBCG_USE_BOOT_COUNTER
@@ -932,6 +1000,7 @@ static bool ProvideBusinessContext(UDPSoundEvent_BusinessContext *out)
     out->configured = true;
     out->allowed = mode.state == MODE_ACTIVE &&
         (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION);
+    out->clap_allowed = mode.state == MODE_ACTIVE && mode.effective == MODE_CLAP;
     out->role = mode.role;
     out->a_boot = mode.a_boot;
     out->b_boot = mode.b_boot;
@@ -1007,12 +1076,17 @@ static void PublishMeasurement(const SoundPairResult *pair)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
-    if(!ModeRangingAllowed())return; /* 模式闸门关闭时A不发布新权威结果。 */
+#ifdef SBCG_USE_ADVANCED_UI
+    if(!ModeRangingAllowed() && !ModeClapAllowed())return;
+#else
+    if(!ModeRangingAllowed())return;
+#endif
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now,&temperature);
 #ifdef SBCG_USE_ADVANCED_UI
     if(pair->type==SOUND_EVENT_CLAP)
     {
+        if(!ModeClapAllowed())return;
         const bool published=ClapRanging_PublishPair(&clap_ranging,pair);
         ClapRangingSnapshot clap;ClapRanging_GetSnapshot(&clap_ranging,&clap);
         char line[180];const int n=snprintf(line,sizeof line,
@@ -1023,6 +1097,7 @@ static void PublishMeasurement(const SoundPairResult *pair)
         return;
     }
 #endif
+    if(!ModeRangingAllowed())return; /* CHIRP测距结果只在RANGE/CALIBRATION发布。 */
     StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
     MeasurementGateSnapshot gate;MeasurementGate_Get(&gate);
     uint64_t common_ns;uint32_t epoch;
@@ -1445,13 +1520,14 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 {
     const BoardIdentityProfile *event_profile = BSP_BoardIdentity_Get();
     if (event_profile == NULL) { return; }
-    if (!ModeRangingAllowed()) { return; } /* 只在RANGE/CALIBRATION发布测距事件。 */
     const bool is_chirp=notice->event_class==EVENT_CLASS_CHIRP;
 #ifdef SBCG_USE_ADVANCED_UI
     if(!is_chirp && notice->event_class!=EVENT_CLASS_CLAP)return;
 #else
     if(!is_chirp)return;
 #endif
+    /* 模式准入：RANGE/CALIBRATION仅CHIRP，CLAP仅CLAP，WAVE拒绝两类。 */
+    if (!ModeAdmitsSoundType(is_chirp)) { return; }
     if(is_chirp)
     {
         if(event_profile->role==BOARD_ROLE_A)

@@ -126,7 +126,7 @@ def run_mode_tests():
     origins={'A':0,'B':0}
     wall_ms=0
 
-    def step(route=None,sequence=0,partition=False):
+    def step(route=None,sequence=0,partition=False,drop_cla1=False):
         nonlocal wall_ms
         wall_ms+=50
         common_ns=1_000_000_000+wall_ms*1_000_000
@@ -137,6 +137,10 @@ def run_mode_tests():
                 return ()
             if route is not None and payload.startswith(mode_magic):
                 return route(payload)
+            if drop_cla1 and payload.startswith('4d444231'):
+                data=bytes.fromhex(payload)
+                if len(data)>=36 and data[32:36]==b'CLA1':
+                    return ()
             return (payload,)
         drain(a,b,route=forward)
 
@@ -249,8 +253,37 @@ def run_mode_tests():
         check(sa['has']==sb['has']==0,
               'leaving RANGE withdraws the authoritative display on both boards')
         check(not business_packets(b'RST2',clap_wall) and
-              not business_packets(b'SEVT',clap_wall),
-              'CLAP mode blocks SEV2/RST2 business at the mode gate')
+              not business_packets(b'WFR1',clap_wall),
+              'CLAP mode blocks swept-ranging RST2/WFR1 traffic at the mode gate')
+
+        # Phase 3 CLAP admission: real CLAP events pair on A, protected CLP1/CLA1
+        # exchange results, and a lost CLA1 triggers the existing 500ms retry.
+        a.cmd('CLASS 2');b.cmd('CLASS 2')
+        a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
+        clap_business_wall=wall_ms
+        step(sequence=4)
+        # From the first publication onward ACKs are dropped: A must keep retrying.
+        for _ in range(40):
+            step(drop_cla1=True)
+        sa,sb=snap(a,b,'CLAP mode real clap result')
+        check(sa['clap_has']==sb['clap_has']==1 and
+              sa['clap_id']==sb['clap_id']!=0 and sa['clap_mm']==sb['clap_mm'],
+              'CLAP mode pairs a real clap and mirrors the authoritative result on B')
+        clp_retries=len(business_packets(b'CLP1',clap_business_wall))
+        check(clp_retries>=3,
+              'lost CLA1 makes A retry CLP1 at the preserved 500ms cadence')
+        check(bool(business_packets(b'CLP1',clap_business_wall)),
+              'CLAP mode protects CLP1 with the MDB1 wrapper')
+        for _ in range(40):
+            step()
+        clp_after_ack=len(business_packets(b'CLP1',clap_business_wall))
+        for _ in range(20):
+            step()
+        check(bool(business_packets(b'CLA1',clap_business_wall)) and
+              len(business_packets(b'CLP1',clap_business_wall))==clp_after_ack,
+              'matching CLA1 stops CLP1 retransmission')
+        a.cmd('CLASS 1');b.cmd('CLASS 1')
+        a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
 
         check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A accepts the WAVE request')
         wave_key=converge(wave,100,200,after=clap_key[2])
@@ -267,12 +300,12 @@ def run_mode_tests():
               'WAVE mode blocks SEV2/WFR1/RST2 traffic at the mode gate')
         a.cmd('CLASS 2');b.cmd('CLASS 2')
         a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
-        clap_business_before=len(raw_packets('434c5031',wave_wall))
+        clap_business_before=len(business_packets(b'CLP1',wave_wall))
         for index in range(25):
             step(sequence=4 if index==1 else 0)
         sa,sb=snap(a,b,'WAVE blocks CLAP business')
         check(sa['clap_has']==sb['clap_has']==0 and
-              len(raw_packets('434c5031',wave_wall))==clap_business_before,
+              len(business_packets(b'CLP1',wave_wall))==clap_business_before,
               'WAVE mode keeps CLAP business off until its own phase')
         a.cmd('CLASS 1');b.cmd('CLASS 1')
         a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
@@ -280,7 +313,7 @@ def run_mode_tests():
         check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,'A accepts the CALIBRATION request')
         cal_key=converge(calibration,100,200,after=wave_key[2])
         for index in range(160):
-            step(sequence={39:4,79:5,119:6}.get(index,0))
+            step(sequence={39:5,79:6,119:7}.get(index,0))
         sa,sb=snap(a,b,'gated CALIBRATION business')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['id']>first_id,
               'CALIBRATION mode admits RANGE business with a fresh measurement')
@@ -293,7 +326,7 @@ def run_mode_tests():
         saved_offset=sa['cal_offset_mm']
         a.cmd('CAL ENABLE')
         for index in range(160):
-            step(sequence={39:7,79:8,119:9}.get(index,0))
+            step(sequence={39:8,79:9,119:10}.get(index,0))
         sa,sb=snap(a,b,'calibration enabled')
         check(sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
               sb['applied_offset_mm']==saved_offset,
@@ -303,7 +336,7 @@ def run_mode_tests():
         range_key=converge(range_mode,100,200,after=cal_key[2])
         check(range_key[2]>cal_key[2],'the second RANGE has a fresh mode sequence')
         for index in range(160):
-            step(sequence={39:10,79:11,119:12}.get(index,0))
+            step(sequence={39:11,79:12,119:13}.get(index,0))
         sa,sb=snap(a,b,'compensation after leaving CALIBRATION')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and
               sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and

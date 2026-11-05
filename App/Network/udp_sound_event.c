@@ -111,14 +111,23 @@ static bool BusinessContext(UDPSoundEvent_BusinessContext *out)
     return business_provider!=NULL && out!=NULL && business_provider(out) && out->configured;
 }
 
+/** @brief 受保护业务载荷的闸门类别：测距或CLAP。 */
+typedef enum
+{
+    BUSINESS_GATE_RANGING = 0,
+    BUSINESS_GATE_CLAP
+} BusinessGate;
+
 /**
- * @brief   按当前闸门发送受保护业务载荷：未登记时原样发送，登记后代次匹配时封装MDB1。
+ * @brief   按闸门类别发送受保护业务载荷：未登记时原样发送，登记后代次匹配时封装MDB1。
  * @param   inner 非NULL只读内层报文，仅本次借用。
  * @param   inner_length 内层字节数，1..BUSINESS_WIRE_MAX_INNER。
+ * @param   gate 该内层类型所属模式闸门。
  * @return  成功/模式拒绝/错误三类结果；模式拒绝与网络错误分别计数。
  * @note    调用方仍负责角色、链路和编码前置检查；本函数不复用内层以外的报文状态。
  */
-static BusinessSendStatus SendBusinessPayload(const uint8_t *inner,uint16_t inner_length)
+static BusinessSendStatus SendBusinessPayloadGated(const uint8_t *inner,uint16_t inner_length,
+                                                   BusinessGate gate)
 {
     if(inner==NULL || inner_length==0U || inner_length>BUSINESS_WIRE_MAX_INNER)
     {Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
@@ -128,7 +137,8 @@ static BusinessSendStatus SendBusinessPayload(const uint8_t *inner,uint16_t inne
     uint8_t header[BUSINESS_WIRE_HEADER_BYTES];
     if(gated)
     {
-        if(!context.allowed)
+        const bool allowed=gate==BUSINESS_GATE_CLAP?context.clap_allowed:context.allowed;
+        if(!allowed)
         {Increment(&business_tx_blocked);return BUSINESS_SEND_BLOCKED;}
         const BusinessWireMessage message={
             .role=local_profile.role,.inner_length=inner_length,
@@ -156,6 +166,20 @@ static BusinessSendStatus SendBusinessPayload(const uint8_t *inner,uint16_t inne
     if(err!=ERR_OK){Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
     Increment(&business_tx_ok);
     return BUSINESS_SEND_OK;
+}
+
+/** @brief RANGE/CALIBRATION受保护载荷发送。 */
+static BusinessSendStatus SendBusinessPayload(const uint8_t *inner,uint16_t inner_length)
+{
+    return SendBusinessPayloadGated(inner,inner_length,BUSINESS_GATE_RANGING);
+}
+
+/** @brief CLAP短报文受保护发送；未登记代次时保持原字节兼容路径。 */
+bool UDPSoundEvent_SendProtectedShort(const uint8_t *inner,uint16_t length)
+{
+    if(!configured || service_pcb==NULL || inner==NULL || length==0U ||
+       !netif_is_link_up(&gnetif))return false;
+    return SendBusinessPayloadGated(inner,length,BUSINESS_GATE_CLAP)==BUSINESS_SEND_OK;
 }
 
 /* ==================== 跨板波形片段与时差精化 ==================== */
@@ -407,6 +431,9 @@ static bool IsSoundEventLength(uint16_t length)
     return length==SOUND_EVENT_WIRE_V1_BYTES || length==SOUND_EVENT_WIRE_V2_BYTES ||
         length==SOUND_EVENT_WIRE_V3_BYTES || length==SOUND_EVENT_WIRE_BYTES;
 }
+/** @brief CLP1/CLA1内层固定字节数；与clap_wire编码一致，仅用于解封长度校验。 */
+#define CLAP_RESULT_INNER_BYTES 80U
+#define CLAP_ACK_INNER_BYTES 24U
 /** @brief MDB1内层受保护类型。 */
 typedef enum
 {
@@ -414,7 +441,9 @@ typedef enum
     BUSINESS_INNER_SEV2,
     BUSINESS_INNER_WFR1,
     BUSINESS_INNER_RST2,
-    BUSINESS_INNER_RAK2
+    BUSINESS_INNER_RAK2,
+    BUSINESS_INNER_CLP1,
+    BUSINESS_INNER_CLA1
 } BusinessInnerKind;
 /** @brief 按内层长度和magic识别受保护类型。 @param data 内层首地址。 @param length 内层字节数。 @return 类型。 */
 static BusinessInnerKind BusinessInner(const uint8_t *data,uint16_t length)
@@ -428,6 +457,10 @@ static BusinessInnerKind BusinessInner(const uint8_t *data,uint16_t length)
        memcmp(data,"WFR1",4U)==0)return BUSINESS_INNER_WFR1;
     if(IsSoundEventLength(length) && memcmp(data,"SEVT",4U)==0)
         return BUSINESS_INNER_SEV2;
+    if(length==CLAP_RESULT_INNER_BYTES && memcmp(data,"CLP1",4U)==0)
+        return BUSINESS_INNER_CLP1;
+    if(length==CLAP_ACK_INNER_BYTES && memcmp(data,"CLA1",4U)==0)
+        return BUSINESS_INNER_CLA1;
     return BUSINESS_INNER_NONE;
 }
 /** @brief 受保护类型的接收方向资格；SEV2在解码后再按事件side校验。 @param kind 内层类型。 @return 本板接收该类型为true。 */
@@ -439,7 +472,30 @@ static bool BusinessDirectionAllowed(BusinessInnerKind kind)
     case BUSINESS_INNER_RST2: return local_profile.role==BOARD_ROLE_B;
     case BUSINESS_INNER_RAK2: return local_profile.role==BOARD_ROLE_A;
     case BUSINESS_INNER_SEV2: return true;
+    case BUSINESS_INNER_CLP1: return local_profile.role==BOARD_ROLE_B;
+    case BUSINESS_INNER_CLA1: return local_profile.role==BOARD_ROLE_A;
     default: return false;
+    }
+}
+/**
+ * @brief 校验内层类型是否匹配当前模式闸门。
+ * @param kind 内层类型。
+ * @param context 非NULL已登记业务闸门。
+ * @return 允许处理为true。
+ * @note CLAP事件/短包只在CLAP模式放行；测距类型只在RANGE/CALIBRATION放行。
+ */
+static bool BusinessGateAllows(BusinessInnerKind kind,
+                               const UDPSoundEvent_BusinessContext *context)
+{
+    switch(kind)
+    {
+    case BUSINESS_INNER_CLP1:
+    case BUSINESS_INNER_CLA1:
+        return context->clap_allowed;
+    case BUSINESS_INNER_SEV2:
+        return context->allowed || context->clap_allowed;
+    default:
+        return context->allowed;
     }
 }
 /** @brief 处理已解出的SEV2内层；与未封装路径共用同一解码、域和配对逻辑。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
@@ -449,6 +505,13 @@ static void ProcessSoundEventPayload(const uint8_t *data,uint16_t length)
     SoundEventRecord event;
     if(SoundEventWire_Decode(data,length,&event)!=SOUND_EVENT_WIRE_OK)
     {Increment(&rx_bad);return;}
+    UDPSoundEvent_BusinessContext context;
+    if(BusinessContext(&context))
+    {
+        const bool clap=event.type==SOUND_EVENT_CLAP;
+        if(clap?!context.clap_allowed:!context.allowed)
+        {Increment(&rx_bad);return;}
+    }
     SoundEventSide local;
     if(!LocalSide(&local) || event.side==local)
     {Increment(&rx_bad);return;}
@@ -503,7 +566,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
     BusinessWireMessage message;
     if(!BusinessWire_DecodeHeader(header,sizeof header,&message) ||
        packet->tot_len!=(uint16_t)(BUSINESS_WIRE_HEADER_BYTES+message.inner_length) ||
-       message.role==local_profile.role || !context->allowed ||
+       message.role==local_profile.role ||
        message.a_boot!=context->a_boot || message.b_boot!=context->b_boot ||
        message.mode_seq!=context->mode_seq)
     {Increment(&business_rx_blocked);Increment(&rx_bad);pbuf_free(packet);return;}
@@ -512,7 +575,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
     {Increment(&business_rx_bad);Increment(&rx_bad);pbuf_free(packet);return;}
     const uint16_t inner=message.inner_length;
     const BusinessInnerKind kind=BusinessInner(magic,inner);
-    if(!BusinessDirectionAllowed(kind))
+    if(!BusinessDirectionAllowed(kind) || !BusinessGateAllows(kind,context))
     {Increment(&business_rx_blocked);Increment(&rx_bad);pbuf_free(packet);return;}
     if(kind==BUSINESS_INNER_SEV2)
     {
@@ -554,6 +617,23 @@ static void HandleBusinessPacket(struct pbuf *packet,
         Increment(&business_rx_ok);
         return;
     }
+#ifdef SBCG_USE_ADVANCED_UI
+    if(kind==BUSINESS_INNER_CLP1 || kind==BUSINESS_INNER_CLA1)
+    {
+        uint8_t data[CLAP_RESULT_INNER_BYTES];
+        const bool copied=pbuf_copy_partial(packet,data,inner,BUSINESS_WIRE_HEADER_BYTES)==inner;
+        pbuf_free(packet);
+        if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
+        if(auxiliary_sink!=NULL)
+        {
+            auxiliary_sink(data,inner);
+            Increment(&business_rx_ok);Increment(&rx_ok);
+        }
+        else
+        {Increment(&business_rx_bad);Increment(&rx_bad);}
+        return;
+    }
+#endif
     Increment(&business_rx_bad);Increment(&rx_bad);pbuf_free(packet);
 }
 /**
@@ -606,7 +686,9 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
             (raw_length==RANGING_STATUS_ACK_BYTES && HasMagic(packet,"RAK2")) ||
             (raw_length==(uint16_t)(WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES) &&
              HasMagic(packet,WAVE_MAGIC)) ||
-            (IsSoundEventLength(raw_length) && HasMagic(packet,"SEVT"));
+            (IsSoundEventLength(raw_length) && HasMagic(packet,"SEVT")) ||
+            (raw_length==CLAP_RESULT_INNER_BYTES && HasMagic(packet,"CLP1")) ||
+            (raw_length==CLAP_ACK_INNER_BYTES && HasMagic(packet,"CLA1"));
         if(protected_raw)
         {
             Increment(&business_rx_unwrapped);Increment(&rx_bad);pbuf_free(packet);return;
@@ -1043,15 +1125,23 @@ bool UDPSoundEvent_Send(uint32_t now_ms,const SoundEventRecord *event)
     /* 本端事件必须同时进入配对器；Receive只接收对端，配对器需要A+B两侧。 */
     if(!SoundPair_Submit(&pair_manager,event,now_ms))
     {Increment(&tx_err);return false;}
-    /* 波形窗口先于事件发送：A收到B事件时即可用两板窗口精化时差。 */
-    if(local_profile.role==BOARD_ROLE_B){ (void)SendWaveform(event); }
-    else { PrepareLocalWaveform(event); }
+    /* 波形窗口只服务于CHIRP测距；CLAP模式或闸门关闭时不生成/发送WFR1与本地储备。 */
+    UDPSoundEvent_BusinessContext event_context;
+    const bool event_gated=BusinessContext(&event_context);
+    const bool ranging_gate_ok=!event_gated || event_context.allowed;
+    if(event->type==SOUND_EVENT_CHIRP && ranging_gate_ok)
+    {
+        /* 波形窗口先于事件发送：A收到B事件时即可用两板窗口精化时差。 */
+        if(local_profile.role==BOARD_ROLE_B){ (void)SendWaveform(event); }
+        else { PrepareLocalWaveform(event); }
+    }
     if(service_pcb==NULL || !netif_is_link_up(&gnetif))
     {Increment(&tx_err);return false;}
     uint8_t data[SOUND_EVENT_WIRE_BYTES];
     if(SoundEventWire_Encode(event,data,sizeof data)!=SOUND_EVENT_WIRE_OK)
     {Increment(&tx_err);return false;}
-    const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
+    const BusinessSendStatus sent=SendBusinessPayloadGated(data,sizeof data,
+        event->type==SOUND_EVENT_CLAP?BUSINESS_GATE_CLAP:BUSINESS_GATE_RANGING);
     if(sent==BUSINESS_SEND_OK){Increment(&tx_ok);return true;}
     if(sent==BUSINESS_SEND_ERROR){Increment(&tx_err);}
     return false;
@@ -1124,7 +1214,8 @@ void UDPSoundEvent_Process(uint32_t now_ms)
        B板只上报事件并学习对端会话，不再执行本地权威配对。 */
     UDPSoundEvent_BusinessContext context;
     const bool gated=BusinessContext(&context);
-    if(!gated || (context.allowed && local_profile.role==BOARD_ROLE_A))
+    if(!gated || ((context.allowed || context.clap_allowed) &&
+                  local_profile.role==BOARD_ROLE_A))
         SoundPair_Process(&pair_manager,now_ms);
 #else
     SoundPair_Process(&pair_manager,now_ms);
@@ -1190,10 +1281,11 @@ void UDPSoundEvent_Process(uint32_t now_ms)
         UDPSoundEvent_BusinessContext business_context;
         const bool business_gated=BusinessContext(&business_context);
         emit(line,snprintf(line,sizeof line,
-            "$MDB1_STATE,GATE=%u,ALLOWED=%u,TX_OK=%" PRIu32 ",TX_BLOCK=%" PRIu32
+            "$MDB1_STATE,GATE=%u,ALLOWED=%u,CLAP=%u,TX_OK=%" PRIu32 ",TX_BLOCK=%" PRIu32
             ",TX_ERR=%" PRIu32 ",RX_OK=%" PRIu32 ",RX_BLOCK=%" PRIu32
             ",RX_RAW=%" PRIu32 ",RX_BAD=%" PRIu32 "\r\n",
             business_gated?1U:0U,(business_gated&&business_context.allowed)?1U:0U,
+            (business_gated&&business_context.clap_allowed)?1U:0U,
             business_tx_ok,business_tx_blocked,business_tx_err,
             business_rx_ok,business_rx_blocked,business_rx_unwrapped,business_rx_bad));
     }
