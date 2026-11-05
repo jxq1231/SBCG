@@ -5,6 +5,7 @@
  *              A侧使用两板窗口精化时差；证据失败明确拒绝，不以标称/旧齿距离出新数。
  *              撤域或换域清除旧配对候选，成功结果经纯核心计算距离/方向。
  *              模式观测启用时，沿用固定对端和原PCB交付MDP1控制消息。
+ *              WFR1的PCM在捕获区、pbuf与对端槽之间直接复制，不在栈上拼接整帧。
  * @note        只证明软件链路；不建立PTP同步、不把接收时刻当声音到达、不宣称物理精度。
  */
 #include "udp_sound_event.h"
@@ -125,18 +126,22 @@ typedef enum
 } BusinessGate;
 
 /**
- * @brief   按闸门类别发送受保护业务载荷：未登记时原样发送，登记后代次匹配时封装MDB1。
- * @param   inner 非NULL只读内层报文，仅本次借用。
- * @param   inner_length 内层字节数，1..BUSINESS_WIRE_MAX_INNER。
+ * @brief   将一段或两段内层字节写入同一UDP pbuf，按闸门决定是否附加MDB1头。
+ * @param   head 非NULL只读内层首段，仅本次借用。
+ * @param   head_length 首段字节数，大于零。
+ * @param   tail 可空只读内层尾段，调用返回后可复用。
+ * @param   tail_length 尾段字节数；非零时tail必须非NULL。
  * @param   gate 该内层类型所属模式闸门。
- * @return  成功/模式拒绝/错误三类结果；模式拒绝与网络错误分别计数。
- * @note    调用方仍负责角色、链路和编码前置检查；本函数不复用内层以外的报文状态。
+ * @return  成功/模式拒绝/错误三类结果；全部写入后才发送。
+ * @note    调用方负责角色、链路和编码前置检查，本函数分配并释放pbuf。
  */
-static BusinessSendStatus SendBusinessPayloadGated(const uint8_t *inner,uint16_t inner_length,
-                                                   BusinessGate gate)
+static BusinessSendStatus SendBusinessParts(const uint8_t *head,uint16_t head_length,
+                                            const void *tail,uint16_t tail_length,BusinessGate gate)
 {
-    if(inner==NULL || inner_length==0U || inner_length>BUSINESS_WIRE_MAX_INNER)
+    if(head==NULL || head_length==0U || head_length>BUSINESS_WIRE_MAX_INNER ||
+       tail_length>BUSINESS_WIRE_MAX_INNER-head_length || (tail_length!=0U && tail==NULL))
     {Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
+    const uint16_t inner_length=(uint16_t)(head_length+tail_length);
     UDPSoundEvent_BusinessContext context;
     const bool gated=BusinessContext(&context);
     uint16_t total=inner_length;
@@ -150,29 +155,36 @@ static BusinessSendStatus SendBusinessPayloadGated(const uint8_t *inner,uint16_t
         const BusinessWireMessage message={
             .role=local_profile.role,.inner_length=inner_length,
             .a_boot=context.a_boot,.b_boot=context.b_boot,
-            .mode_seq=context.mode_seq,.inner=inner};
+            .mode_seq=context.mode_seq,.inner=head};
         if(!BusinessWire_EncodeHeader(&message,header))
         {Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
         total=(uint16_t)(BUSINESS_WIRE_HEADER_BYTES+inner_length);
     }
     struct pbuf *packet=pbuf_alloc(PBUF_TRANSPORT,total,PBUF_RAM);
     if(packet==NULL){Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
-    err_t err;
-    if(gated)
-    {
-        err=pbuf_take(packet,header,sizeof header);
-        if(err==ERR_OK)
-            err=pbuf_take_at(packet,inner,inner_length,BUSINESS_WIRE_HEADER_BYTES);
-    }
-    else
-    {
-        err=pbuf_take(packet,inner,inner_length);
-    }
+    const uint16_t inner_offset=gated?BUSINESS_WIRE_HEADER_BYTES:0U;
+    err_t err=gated?pbuf_take(packet,header,sizeof header):pbuf_take(packet,head,head_length);
+    if(err==ERR_OK && gated)err=pbuf_take_at(packet,head,head_length,inner_offset);
+    if(err==ERR_OK && tail_length!=0U)
+        err=pbuf_take_at(packet,tail,tail_length,(uint16_t)(inner_offset+head_length));
     if(err==ERR_OK)err=udp_sendto(service_pcb,packet,&peer,UDP_SOUND_EVENT_BOARD_PORT);
     pbuf_free(packet);
     if(err!=ERR_OK){Increment(&business_tx_err);return BUSINESS_SEND_ERROR;}
     Increment(&business_tx_ok);
     return BUSINESS_SEND_OK;
+}
+
+/**
+ * @brief   发送已连续编码的内层业务载荷。
+ * @param   inner 非NULL只读字节，仅本次借用。
+ * @param   inner_length 内层报文字节数。
+ * @param   gate 该内层类型所属模式闸门。
+ * @return  成功、拒绝或发送错误。
+ */
+static BusinessSendStatus SendBusinessPayloadGated(const uint8_t *inner,uint16_t inner_length,
+                                                   BusinessGate gate)
+{
+    return SendBusinessParts(inner,inner_length,NULL,0U,gate);
 }
 
 /** @brief RANGE/CALIBRATION受保护载荷发送。 */
@@ -343,7 +355,8 @@ static void PrepareLocalWaveform(const SoundEventRecord *event)
 /**
  * @brief B板把本事件窗口发送给A；须先于事件本身发送。
  * @param event 非NULL只读事件，使用sequence/frame/time_ns/fraction_q16。
- * @return true为已提交UDP；false为未配置/链路/无对应捕获并计错误。
+ * @return true为已提交UDP；false为未配置、链路不可用、捕获缺失或发送失败。
+ * @note  前台持有捕获区，WFR1头与PCM分段复制到pbuf；返回后不保留捕获指针。
  */
 static bool SendWaveform(const SoundEventRecord *event)
 {
@@ -353,9 +366,7 @@ static bool SendWaveform(const SoundEventRecord *event)
     int64_t local=0;
     if(!FindCapture(event,&capture,&local))
     {Increment(&wave_tx_err);return false;}
-    uint8_t data[WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES];
-    memcpy(data+WAVE_HEADER_BYTES,capture->samples+local,
-           WAVE_WINDOW_FRAMES*sizeof(int16_t));
+    uint8_t data[WAVE_HEADER_BYTES];
     const uint64_t start_ns=WindowStartNs(event);
     data[0]='W';data[1]='F';data[2]='R';data[3]='1';
     data[4]=1U;data[5]=(uint8_t)SOUND_SIDE_B;data[6]=0U;data[7]=0U;
@@ -365,17 +376,28 @@ static bool SendWaveform(const SoundEventRecord *event)
     {data[12U+i]=(uint8_t)(start_ns>>(8U*(7U-i)));}
     data[20]=(uint8_t)(WAVE_WINDOW_FRAMES>>8U);data[21]=(uint8_t)WAVE_WINDOW_FRAMES;
     data[22]=0U;data[23]=0U;
-    const BusinessSendStatus sent=SendBusinessPayload(data,sizeof data);
+    const BusinessSendStatus sent=SendBusinessParts(data,sizeof data,capture->samples+local,
+                                                     WAVE_WINDOW_FRAMES*sizeof(int16_t),
+                                                     BUSINESS_GATE_RANGING);
     if(sent==BUSINESS_SEND_OK){Increment(&wave_tx_ok);Increment(&business_tx_kind[BUSINESS_KIND_WFR1]);return true;}
     if(sent==BUSINESS_SEND_ERROR){Increment(&wave_tx_err);}
     return false;
 }
-/** @brief 收到对端波形包后保存；返回true表示已按A侧身份接受并存储。 */
-static bool AcceptRemoteWaveform(const uint8_t *data,size_t length)
+/**
+ * @brief  从原始或MDB1中的WFR1读取头，并将PCM直接复制到对端窗口槽。
+ * @param  packet 非NULL已识别WFR1类型的pbuf，只读；调用方仍持有并负责释放。
+ * @param  offset 从pbuf头到WFR1头的字节偏移。
+ * @return 头校验及完整PCM复制成功为true。
+ * @note  仅前台访问窗口槽。短拷贝后槽保持无效，写游标只在成功后前进。
+ */
+static bool AcceptRemoteWaveform(const struct pbuf *packet,uint16_t offset)
 {
-    if(data==NULL || length!=WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES)
+    uint8_t data[WAVE_HEADER_BYTES];
+    if(packet->tot_len!=offset+sizeof data+WAVE_WINDOW_FRAMES*sizeof(int16_t) ||
+       local_profile.role!=BOARD_ROLE_A ||
+       pbuf_copy_partial(packet,data,sizeof data,offset)!=sizeof data)
     {Increment(&wave_rx_bad);return false;}
-    if(local_profile.role!=BOARD_ROLE_A || data[4]!=1U ||
+    if(data[4]!=1U ||
        data[5]!=(uint8_t)SOUND_SIDE_B || data[6]!=0U || data[7]!=0U ||
        ((uint16_t)data[20]<<8U|data[21])!=WAVE_WINDOW_FRAMES)
     {Increment(&wave_rx_bad);return false;}
@@ -385,7 +407,10 @@ static bool AcceptRemoteWaveform(const uint8_t *data,size_t length)
     uint64_t start_ns=0U;
     for(uint8_t i=0U;i<8U;++i){start_ns=(start_ns<<8U)|data[12U+i];}
     WaveSlot *slot=&remote_waves[remote_wave_next];
-    memcpy(slot->samples,data+WAVE_HEADER_BYTES,WAVE_WINDOW_FRAMES*sizeof(int16_t));
+    slot->valid=false;
+    if(pbuf_copy_partial(packet,slot->samples,sizeof slot->samples,
+                         (uint16_t)(offset+sizeof data))!=sizeof slot->samples)
+    {Increment(&wave_rx_bad);return false;}
     slot->sequence=sequence;
     slot->start_ns=start_ns;
     slot->stored_ms=read_tick!=NULL?read_tick():0U;
@@ -549,11 +574,6 @@ static void ProcessSoundEventPayload(const uint8_t *data,uint16_t length)
     if(event_sink!=NULL){event_sink(&event);}
     Increment(&rx_ok);
 }
-/** @brief 处理已解出的WFR1内层；A侧接收并存储对端窗口。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
-static void ProcessWaveformPayload(const uint8_t *data,uint16_t length)
-{
-    (void)AcceptRemoteWaveform(data,length);
-}
 /** @brief 处理已解出的RST2内层；仅B接收。 @param data 非NULL内层。 @param length 内层字节数。 @return 无返回值。 */
 static void ProcessRangingStatusPayload(const uint8_t *data,uint16_t length)
 {
@@ -581,7 +601,7 @@ static void ProcessRangingAckPayload(const uint8_t *data,uint16_t length)
  * @param   packet 本次接收所有权，函数内释放。
  * @param   context 非NULL已校验业务闸门上下文。
  * @return  无返回值；角色/世代/模式/类型不合格的报文只计数，不写业务状态。
- * @note    内层缓冲按类型固定大小复制，避免为每种报文新增全局缓冲。
+ * @note    小包按类型复制，WFR1直接复制到窗口槽；两者均只释放pbuf一次。
  */
 static void HandleBusinessPacket(struct pbuf *packet,
                                  const UDPSoundEvent_BusinessContext *context)
@@ -615,11 +635,9 @@ static void HandleBusinessPacket(struct pbuf *packet,
     }
     if(kind==BUSINESS_INNER_WFR1)
     {
-        uint8_t data[WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES];
-        const bool copied=pbuf_copy_partial(packet,data,inner,BUSINESS_WIRE_HEADER_BYTES)==inner;
+        const bool accepted=AcceptRemoteWaveform(packet,BUSINESS_WIRE_HEADER_BYTES);
         pbuf_free(packet);
-        if(!copied){Increment(&business_rx_bad);Increment(&rx_bad);return;}
-        ProcessWaveformPayload(data,inner);
+        if(!accepted){Increment(&business_rx_bad);Increment(&rx_bad);return;}
         Increment(&business_rx_ok);Increment(&business_rx_kind[BUSINESS_KIND_WFR1]);
         return;
     }
@@ -674,7 +692,7 @@ static void HandleBusinessPacket(struct pbuf *packet,
  * @param source 本次调用有效的来源地址，NULL或非对端时丢弃。
  * @param source_port 来源端口，必须匹配板间固定端口。
  * @return 无返回值；DOMAIN握手不受声音事件域资格门控。
- * @note 仅NO_SYS网络轮询上下文，不在硬件IRQ中处理协议。MDP1消费者仅本次借用解码副本。
+ * @note 仅NO_SYS网络轮询上下文。原始WFR1直接写入窗口槽，MDP1消费者仅本次借用解码副本。
  */
 static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
                     const ip_addr_t *source,u16_t source_port)
@@ -741,11 +759,8 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
     if(packet!=NULL && packet->tot_len==(uint16_t)(WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES) &&
        HasMagic(packet,WAVE_MAGIC))
     {
-        uint8_t data[WAVE_HEADER_BYTES+2U*WAVE_WINDOW_FRAMES];
-        const bool copied=pbuf_copy_partial(packet,data,sizeof data,0)==sizeof data;
+        (void)AcceptRemoteWaveform(packet,0U);
         pbuf_free(packet);
-        if(!copied){Increment(&wave_rx_bad);return;}
-        ProcessWaveformPayload(data,sizeof data);
         return;
     }
     if(packet->tot_len==TEMPERATURE_WIRE_BYTES)

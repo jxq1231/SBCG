@@ -32,6 +32,8 @@ static unsigned char sent_ring[4][1200];
 static unsigned short sent_ring_len[4];
 static unsigned char wave_sent[1048];
 static unsigned int wave_sends;
+static unsigned int wave_pcm_writes;
+static bool fail_wave_pcm_write;
 static unsigned char rx_payload[SOUND_EVENT_WIRE_BYTES];
 static unsigned int sends, allocs, frees;
 static SoundPairResult paired;
@@ -59,9 +61,25 @@ struct pbuf *pbuf_alloc(pbuf_layer layer, u16_t len, pbuf_type type)
 { (void)layer;(void)type; ++allocs; fake_pbuf.tot_len=len; fake_pbuf.payload=sent; return &fake_pbuf; }
 err_t pbuf_take(struct pbuf *p, const void *data, u16_t len)
 { assert(p==&fake_pbuf); memcpy(p->payload,data,len); return ERR_OK; }
+/**
+ * @brief 模拟pbuf偏移写入，并支持仅对WFR1 PCM阶段注入故障。
+ * @param p 非NULL且为测试发送缓冲。
+ * @param data 非NULL只读数据，调用期间借用。
+ * @param len 字节数，须在缓冲范围内。
+ * @param offset 写入偏移，单位字节。
+ * @return 注入失败时ERR_MEM，否则ERR_OK。
+ */
 err_t pbuf_take_at(struct pbuf *p, const void *data, u16_t len, u16_t offset)
-{ assert(p==&fake_pbuf); assert((unsigned)offset+len<=p->tot_len);
-  memcpy((unsigned char*)p->payload+offset,data,len); return ERR_OK; }
+{
+    assert(p==&fake_pbuf && (unsigned)offset+len<=p->tot_len);
+    if(len==1024U && (offset==24U || offset==BUSINESS_WIRE_HEADER_BYTES+24U))
+    {
+        ++wave_pcm_writes;
+        if(fail_wave_pcm_write)return ERR_MEM;
+    }
+    memcpy((unsigned char*)p->payload+offset,data,len);
+    return ERR_OK;
+}
 u8_t pbuf_free(struct pbuf *p) { (void)p; ++frees; return 1U; }
 err_t udp_sendto(struct udp_pcb *p, struct pbuf *buf, const ip_addr_t *dest, u16_t port)
 {
@@ -75,9 +93,31 @@ err_t udp_sendto(struct udp_pcb *p, struct pbuf *buf, const ip_addr_t *dest, u16
     }
     return ERR_OK;
 }
+/**
+ * @brief 模拟跨pbuf片段读取，短链仅返回实际字节数。
+ * @param p 非NULL测试报文，只读。
+ * @param data 非NULL输出，调用方持有。
+ * @param len 请求读取的字节数。
+ * @param offset 从报文头起算的字节偏移。
+ * @return 已复制的字节数。
+ */
 u16_t pbuf_copy_partial(const struct pbuf *p, void *data, u16_t len, u16_t offset)
-{ assert(p!=NULL); assert((unsigned)offset<=p->tot_len && len<=p->tot_len-offset);
-  memcpy(data,(const unsigned char*)p->payload+offset,len); return len; }
+{
+    assert(p!=NULL && (unsigned)offset<=p->tot_len && len<=p->tot_len-offset);
+    u16_t copied=0U;
+    for(;p!=NULL && copied<len;p=p->next)
+    {
+        const u16_t size=p->len==0U?p->tot_len:p->len;
+        if(offset>=size){offset=(u16_t)(offset-size);continue;}
+        const u16_t available=(u16_t)(size-offset);
+        const u16_t remaining=(u16_t)(len-copied);
+        const u16_t take=available<remaining?available:remaining;
+        memcpy((uint8_t*)data+copied,(const uint8_t*)p->payload+offset,take);
+        copied=(u16_t)(copied+take);
+        offset=0U;
+    }
+    return copied;
+}
 /** @brief 记录波形证据拒绝日志是否出现，不修改服务状态。 */
 static void Log(const char *line,int length)
 { (void)length;if(strstr(line,"STATUS=WAVE_UNAVAILABLE,")!=NULL)saw_wave_rejection=true; }
@@ -111,6 +151,26 @@ static void ReceiveBytes(const uint8_t *wire,uint16_t length)
     packet.tot_len=length;
     receive_cb(receive_arg,&fake_pcb,&packet,&peer_ip,5009U);
 }
+/**
+ * @brief 把报文作为三段pbuf送入真实接收回调。
+ * @param wire 非NULL完整报文，调用期间借用。
+ * @param length 报文字节数，至少41。
+ * @param short_tail 为true时最后一个分段少一字节。
+ * @return 无返回值；断言接收回调恰好释放一次。
+ */
+static void ReceiveSplit(const uint8_t *wire,uint16_t length,bool short_tail)
+{
+    assert(length>41U);
+    struct pbuf tail={.payload=(void*)(wire+40U),.len=(u16_t)(length-40U-(short_tail?1U:0U)),
+                      .tot_len=(u16_t)(length-40U)};
+    struct pbuf middle={.next=&tail,.payload=(void*)(wire+17U),.len=23U,
+                        .tot_len=(u16_t)(length-17U)};
+    struct pbuf first={.next=&middle,.payload=(void*)wire,.len=17U,.tot_len=length};
+    const unsigned before=frees;
+    receive_cb(receive_arg,&fake_pcb,&first,&peer_ip,5009U);
+    assert(frees==before+1U);
+}
+
 /**
  * @brief 生成确定的宽带PCM；两端相同输入通过真实互相关，非替换配对结果。
  * @param pcm 非NULL可写1408点缓冲，调用方持有。
@@ -153,7 +213,7 @@ static void ReceiveCapturedWire(const uint8_t *wire)
     const uint64_t start=event.time_ns+UINT64_C(10666667);
     for(unsigned i=0U;i<8U;++i)wave[12U+i]=(uint8_t)(start>>(8U*(7U-i)));
     wave[20]=2U;memcpy(wave+24U,pcm+512U,1024U);
-    ReceiveBytes(wave,sizeof wave);
+    ReceiveSplit(wave,sizeof wave,false);
     ReceiveBytes(wire,SOUND_EVENT_WIRE_BYTES);
 }
 
@@ -500,6 +560,15 @@ static void TestWaveWindowCut(void)
     assert(start_ns == UINT64_C(1010661458));
     const uint16_t expected_offset = (uint16_t)(event.frame + 512U - slice.first_frame);
     assert(memcmp(wave_sent + 24U, pcm + expected_offset, 1024U) == 0);
+    const unsigned before_sends=sends, before_allocs=allocs, before_frees=frees;
+    const unsigned before_writes=wave_pcm_writes;
+    fail_wave_pcm_write=true;
+    ++event.sequence;
+    assert(SendCapturedEvent(tick_ms,&event));
+    fail_wave_pcm_write=false;
+    /* PCM失败的窗口不能发送，原SEVT仍照常提交，两份pbuf均释放。 */
+    assert(wave_pcm_writes==before_writes+1U && wave_sends==1U);
+    assert(sends==before_sends+1U && allocs==before_allocs+2U && frees==before_frees+2U);
 }
 /**
  * @brief 缺失/低相关波形必须拒绝，成功的1m/2m波形不受320mm初始参考影响。
@@ -513,18 +582,18 @@ static void TestWaveformEvidence(const BoardIdentityProfile *profile)
     SoundEventRecord remote=local;remote.side=SOUND_SIDE_B;
     remote.time_ns=UINT64_C(1002915452);remote.toa_candidate_count=2U;
     remote.toa_candidate_q16[0]=-6236500;remote.toa_candidate_q16[1]=0;
-    for(unsigned failure=0U;failure<3U;++failure)
+    for(unsigned failure=0U;failure<4U;++failure)
     {
         InitService(profile,100U);saw_wave_rejection=false;
         const unsigned before=pair_count;
         if(failure==0U)assert(UDPSoundEvent_Send(100U,&local)); /* 无本板捕获。 */
         else assert(SendCapturedEvent(100U,&local));
-        if(failure==2U)
+        if(failure>=2U)
         {
-            /* 合法WFR1头，但全零PCM不能通过相关，禁止退回候选齿。 */
+            /* 全零或最后一字节缺失均不得产生有效波形证据。 */
             uint8_t wave[1048]={0};memcpy(wave,"WFR1",4U);wave[4]=1U;wave[5]=SOUND_SIDE_B;
             wave[11]=71U;wave[12+7]=1U;wave[20]=2U;
-            ReceiveBytes(wave,sizeof wave);
+            ReceiveSplit(wave,sizeof wave,failure==3U);
         }
         assert(SoundEventWire_Encode(&remote,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
         ReceiveBytes(rx_payload,sizeof rx_payload);UDPSoundEvent_Process(101U);
@@ -858,8 +927,9 @@ static void TestBusinessSoundWaveGate(void)
     SoundEventRecord event={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,1U,5U,
                             UINT64_C(1000000000),0U,0U,0U,{0,0,0,0}};
     const unsigned before=sends;
+    const unsigned before_writes=wave_pcm_writes;
     assert(SendCapturedEvent(100U,&event));
-    assert(sends==before+2U);
+    assert(sends==before+2U && wave_pcm_writes==before_writes+1U);
     uint16_t wave_length=0U,event_length=0U;
     const uint8_t *event_packet=RecentSent(0U,&event_length);
     const uint8_t *wave_packet=RecentSent(1U,&wave_length);
@@ -873,7 +943,27 @@ static void TestBusinessSoundWaveGate(void)
     assert(BusinessWire_Decode(event_packet,event_length,&decoded));
     assert(decoded.inner_length==SOUND_EVENT_WIRE_BYTES &&
            memcmp(decoded.inner,"SEVT",4U)==0);
-    puts("PASS MDB1 sound/wave: SEV2 and 1048-byte WFR1 wrapped with inner bytes preserved");
+
+    uint8_t wave_wire[BUSINESS_WIRE_HEADER_BYTES+1048U];
+    uint8_t event_wire[BUSINESS_WIRE_HEADER_BYTES+SOUND_EVENT_WIRE_BYTES];
+    memcpy(wave_wire,wave_packet,sizeof wave_wire);
+    memcpy(event_wire,event_packet,sizeof event_wire);
+    BoardIdentityProfile a=b;
+    a.role=BOARD_ROLE_A;
+    a.peer_ip[3]=2U;
+    InitService(&a,100U);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,3U,true);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    SoundEventRecord local=event;
+    local.side=SOUND_SIDE_A;
+    local.time_ns-=UINT64_C(900000);
+    assert(SendCapturedEvent(100U,&local));
+    ReceiveSplit(wave_wire,sizeof wave_wire,false);
+    ReceiveBytes(event_wire,sizeof event_wire);
+    const unsigned pairs_before=pair_count;
+    UDPSoundEvent_Process(101U);
+    assert(pair_count==pairs_before+1U && paired.valid && paired.waveform_refined);
+    puts("PASS MDB1 sound/wave: exact WFR1 bytes and refinement after chained receive");
 }
 
 static uint8_t aux_rx[128];
