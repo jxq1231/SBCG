@@ -1263,6 +1263,7 @@ static void SoundNoticeDrain(uint32_t now_ms)
  *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
  *          DHT低态仍逐轮将最新域资格复制给UDP层；此标量同步不主动发送报文或读取音频。
  *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
+ *          WAVE全滞后搜索在网络及测距处理后每轮只推进一批，避免回调重复计算。
  *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
  *          GAP_MS采样点不同，只作同一调度周期的近似对照，不用于相减推断未归因时间。
  *          PROFILE2分段计时仅随CHIRP诊断启用；其他构建不读取或更新该诊断状态。
@@ -1426,6 +1427,10 @@ void App_Process(void)
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_ADVANCED_UI
         ServiceAuxiliary(BSP_Console_GetTickMs());
+        const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
+        WaveformService_ProcessPeriod();
+        const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
+        if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
 #endif
 #endif
     }
