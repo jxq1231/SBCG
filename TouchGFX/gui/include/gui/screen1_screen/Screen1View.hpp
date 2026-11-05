@@ -95,6 +95,8 @@ protected:
     touchgfx::Unicode::UnicodeChar pageTitleBuffer[40];
     touchgfx::TextAreaWithOneWildcard pageLines[5];
     touchgfx::Unicode::UnicodeChar pageLineBuffers[5][64];
+    touchgfx::TextAreaWithOneWildcard groupLine;
+    touchgfx::Unicode::UnicodeChar groupLineBuffer[64];
     touchgfx::Box settingTiles[3];
     touchgfx::TextAreaWithOneWildcard settingLabels[3];
     touchgfx::Unicode::UnicodeChar settingBuffers[3][16];
