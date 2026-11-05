@@ -113,6 +113,8 @@ void WaveformService_NotifyClockChange(void);
 /** @brief 更新前台健康及节流，驱动计划/快照。 @param role 本板角色。 @param healthy 共同时钟健康。 @param session 当前资格副本可NULL。 @param common_ns 已读取共同纳秒，无效时0。 @param now_ms HAL毫秒，可回绕。 @return 无返回值。 */
 void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSnapshot *session,
                             uint64_t common_ns, uint32_t now_ms);
+/** @brief 前台网络与测距处理后每轮调用一次，推进A的待处理周期搜索批次；B或无搜索时为空操作。 @return 无返回值。 */
+void WaveformService_ProcessPeriod(void);
 /** @brief 在唯一Begin/End借用内复制左声道。 @param block 非NULL只读借用块，仅调用期间访问；不自行Begin。 @return 无返回值。 */
 void WaveformService_StageBlock(const BSP_AudioBlock *block);
 /** @brief 原有End结束后提交或丢弃stage。 @param accepted 必须为真实End结果。 @param now_ms 当前HAL毫秒。 @return 无返回值。 */

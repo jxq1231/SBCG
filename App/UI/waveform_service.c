@@ -5,6 +5,7 @@
  *          两板相位。A用AudioTimeMap从共同时间反算本板DMA帧，B用同一绝对窗口和
  *          自己的AudioTimeMap取本地帧。无计划、失域或未收敛时显示本板最近20ms
  *          原始PCM（LOCAL），不画人工零线，不做插值、滤波、平滑或独立相位补偿。
+ *          A的全滞后周期搜索按前台轮次分批，避免占用PTP报文处理窗口。
  * @note .WaveformState为CPU独占SDRAM NOLOAD；Init先清元数据，数组写后才读。
  *       所有入口前台串行调用，Stage只在借用期间访问DMA块，不保存指针。
  */
@@ -25,6 +26,7 @@
 #define PERIOD_MIN_LAG 8U
 #define PERIOD_MAX_LAG 480U
 #define PERIOD_SCRATCH_FRAMES (PERIOD_WINDOW_FRAMES + PERIOD_MAX_LAG)
+#define PERIOD_LAGS_PER_SLICE 64U
 #define PERIOD_MIN_RMS_PCM 50.0f
 #define PERIOD_REFRESH_MS WAVEFORM_PERIOD_REFRESH_MS
 #define PERIOD_CONFIRM_RELATIVE 0.005
@@ -62,6 +64,13 @@ static struct {
     /** 最近一次共同PERIOD计划的周期；B本地回退时沿用，使LOCAL与SYNC同样显示约3个周期。 */
     double local_period_ns;
     double candidate_period_ns, candidate_first_ns, candidate_middle_ns;
+    /** 同一份PCM副本和建窗时的坐标；next_lag为0表示没有待处理搜索。 */
+    struct {
+        uint64_t start_ns;
+        double start_frame_offset, frames_per_ns, crossing_period;
+        float best;
+        uint32_t next_lag;
+    } period_search;
     WaveformPlan plan;
     WaveformSnapshot snapshot;
 } state;
@@ -81,6 +90,7 @@ static void ClearHistory(void)
     state.pending = false;
     state.outgoing = false;
     state.phase_valid = false;
+    state.period_search.next_lag = 0U;
     state.have_period_check = false;
     state.have_period_evidence = false;
     state.confirmation_count = 0U;
@@ -107,6 +117,7 @@ void WaveformService_NotifyClockChange(void)
     state.outgoing = false;
     state.have_refresh = false;
     state.phase_valid = false;
+    state.period_search.next_lag = 0U;
     state.have_period_check = false;
     state.have_period_evidence = false;
     state.confirmation_count = 0U;
@@ -171,6 +182,7 @@ void WaveformService_ObserveAnchor(const AudioTimeAnchorObservation *observation
         state.have_left = false;
         state.model_valid = false;
         state.pending = false;
+        state.period_search.next_lag = 0U;
         return;
     }
     if (!state.have_left) {
@@ -187,6 +199,7 @@ void WaveformService_ObserveAnchor(const AudioTimeAnchorObservation *observation
         state.session, midpoint, &validation) == AUDIO_TIME_MAP_OK;
     if (!state.model_valid) {
         state.pending = false;
+        state.period_search.next_lag = 0U;
         return;
     }
     double left_frame = ((double)state.left.frame_lo + (double)state.left.frame_hi + 1.0) / 2.0;
@@ -287,17 +300,13 @@ static double ZeroCrossPeriod(void)
 }
 
 /**
- * @brief A从2048帧历史检测基频；范围约8..480帧（100Hz..5kHz）。
- * @param start 窗口起点零基帧。
- * @return 8..480帧的分数周期；静音/不稳定/越界时0。
- * @note 一次差分搜索保留各滞后误差，选择接近最优的最短局部谷，防止2/4/5倍误周期。
- *       过零只细化已获差分证据的同一基周期；抛物线拟合仅作用于周期元数据，不插值PCM。
+ * @brief 从已复制的窗口验证过零周期与其分频候选。
+ * @param crossing_period 过零提议，单位帧；0表示没有可靠提议。
+ * @return 验证通过的分数周期（帧），否则0，由全滞后搜索继续判断。
  */
-static double FindPeriod(uint64_t start)
+static double CheckCrossingPeriod(double crossing_period)
 {
-    if (!LoadPeriodWindow(start) || !PeriodWindowHasSignal()) return 0.0;
     /* 干净周期只验证过零提议及2/3/4/5分频候选，不新增常态全滞后扫描。 */
-    const double crossing_period = ZeroCrossPeriod();
     if (crossing_period > 0.0) {
         float errors[6] = {2.0f, 2.0f, 2.0f, 2.0f, 2.0f, 2.0f};
         float crossing_best = 2.0f;
@@ -317,12 +326,17 @@ static double FindPeriod(uint64_t start)
         for (uint32_t divisor = 5U; divisor >= 1U; --divisor)
             if (errors[divisor] <= crossing_limit) return crossing_period / (double)divisor;
     }
-    float best = 2.0f;
-    for (uint32_t lag = PERIOD_MIN_LAG - 1U; lag <= PERIOD_MAX_LAG + 1U; ++lag) {
-        storage.period_error[lag] = PeriodError(lag);
-        if (lag >= PERIOD_MIN_LAG && lag <= PERIOD_MAX_LAG &&
-            storage.period_error[lag] < best) best = storage.period_error[lag];
-    }
+    return 0.0;
+}
+
+/**
+ * @brief 全滞后扫描完成后，从同一窗口的误差选取最短的近优局部谷。
+ * @return 分数周期（帧），未找到可靠谷时为0；细化仅作用于周期元数据。
+ */
+static double SelectScannedPeriod(void)
+{
+    const float best = state.period_search.best;
+    const double crossing_period = state.period_search.crossing_period;
     if (best > PERIOD_ERROR_LIMIT) return 0.0;
     const float limit = best + PERIOD_NEAR_BEST < PERIOD_ERROR_LIMIT ?
         best + PERIOD_NEAR_BEST : PERIOD_ERROR_LIMIT;
@@ -359,27 +373,13 @@ static void ExpirePeriod(void)
 }
 
 /**
- * @brief 以200ms节流更新A的周期/相位参考；锁定后不随A每次移动重调。
+ * @brief 消费当前窗口的一次周期判定，推进A的三次确认和相位网格。
+ * @param period 本次检测的分数周期（帧），0表示无可靠候选。
  * @return 无返回值。
- * @note B不运行此函数。三个相隔200ms、彼此0.5%内的候选才建立/修订周期；
- *       短暂失败只保持最后可靠证据600ms。修订沿旧时间网格连续衔接，不跟随A新过零点。
+ * @note 使用建窗时的模型与PCM副本，证据年龄从建窗时刻计算；锁相后不随A每次移动重调。
  */
-static void UpdatePeriod(void)
+static void AcceptPeriod(double period)
 {
-    if (!state.model_valid) { state.phase_valid = false; return; }
-    if (state.have_period_check && (uint32_t)(state.now_ms - state.period_ms) < PERIOD_REFRESH_MS) {
-        ExpirePeriod(); return;
-    }
-    state.have_period_check = true;
-    state.period_ms = state.refresh_ms;
-    if (state.common_ns <= HISTORY_DELAY_NS) { ExpirePeriod(); return; }
-    const uint64_t start_ns = state.common_ns - HISTORY_DELAY_NS;
-    if (start_ns < state.domain.source_floor_ns) { ExpirePeriod(); return; }
-    const double first = FrameAt(start_ns);
-    if (first < 0.0 || first + (double)PERIOD_SCRATCH_FRAMES >= (double)state.end_frame) {
-        ExpirePeriod(); return;
-    }
-    const double period = FindPeriod(RoundFrame(first));
     if (period <= 0.0) {
         state.confirmation_count = 0U;
         state.candidate_period_ns = 0.0;
@@ -387,7 +387,9 @@ static void UpdatePeriod(void)
         ExpirePeriod();
         return;
     }
-    const double period_ns = period / state.frames_per_ns;
+    const uint64_t start_ns = state.period_search.start_ns;
+    const double frames_per_ns = state.period_search.frames_per_ns;
+    const double period_ns = period / frames_per_ns;
     if (state.confirmation_count >= WAVEFORM_PERIOD_CONFIRMATIONS ||
         state.confirmation_count == 0U ||
         period_ns < state.candidate_first_ns * (1.0 - PERIOD_CONFIRM_RELATIVE) ||
@@ -401,7 +403,7 @@ static void UpdatePeriod(void)
     state.candidate_period_ns = period_ns;
     if (state.phase_valid && period_ns >= state.phase_period_ns * (1.0 - PERIOD_CONFIRM_RELATIVE) &&
         period_ns <= state.phase_period_ns * (1.0 + PERIOD_CONFIRM_RELATIVE)) {
-        state.period_good_ms = state.now_ms;
+        state.period_good_ms = state.period_ms;
         state.reason = WAVEFORM_REASON_PERIOD_LOCKED;
     } else state.reason = state.phase_valid ? WAVEFORM_REASON_PERIOD_HELD : WAVEFORM_REASON_ACQUIRING;
     if (state.confirmation_count == WAVEFORM_PERIOD_CONFIRMATIONS) {
@@ -417,14 +419,14 @@ static void UpdatePeriod(void)
         } else {
             /* 首次使用A过零；无过零但差分重复性可信时使用该共同历史时刻为参考。 */
             state.phase_origin_ns = (double)start_ns;
-            const uint64_t start_frame = RoundFrame(first);
             const uint32_t limit = (uint32_t)period + 2U;
             for (uint32_t i = 0U; i <= limit; ++i) {
-                const double left = Sample(start_frame + i), right = Sample(start_frame + i + 1U);
+                const double left = storage.period[i], right = storage.period[i + 1U];
                 if (left <= 0.0 && right > 0.0) {
-                    const double crossing = (double)(start_frame + i) - left / (right - left);
+                    const double crossing_offset = state.period_search.start_frame_offset +
+                        (double)i - left / (right - left);
                     state.phase_origin_ns = (double)start_ns +
-                        (crossing - first) / state.frames_per_ns;
+                        crossing_offset / frames_per_ns;
                     break;
                 }
             }
@@ -432,10 +434,81 @@ static void UpdatePeriod(void)
         state.phase_period_ns = confirmed_ns;
         state.phase_valid = true;
         state.have_period_evidence = true;
-        state.period_good_ms = state.now_ms;
+        state.period_good_ms = state.period_ms;
         state.reason = WAVEFORM_REASON_PERIOD_LOCKED;
     }
     ExpirePeriod();
+}
+
+/**
+ * @brief 按200ms间隔为A建窗，快速路径当轮判定，慢路径保留副本给分批入口。
+ * @return 无返回值。已有搜索时不覆盖其PCM或候选时间。
+ */
+static void UpdatePeriod(void)
+{
+    if (!state.model_valid) { state.phase_valid = false; return; }
+    if (state.period_search.next_lag != 0U || (state.have_period_check &&
+        (uint32_t)(state.now_ms - state.period_ms) < PERIOD_REFRESH_MS)) {
+        ExpirePeriod();
+        return;
+    }
+    state.have_period_check = true;
+    state.period_ms = state.refresh_ms;
+    if (state.common_ns <= HISTORY_DELAY_NS) { ExpirePeriod(); return; }
+    const uint64_t start_ns = state.common_ns - HISTORY_DELAY_NS;
+    if (start_ns < state.domain.source_floor_ns) { ExpirePeriod(); return; }
+    const double first = FrameAt(start_ns);
+    if (first < 0.0 || first + (double)PERIOD_SCRATCH_FRAMES >= (double)state.end_frame) {
+        ExpirePeriod();
+        return;
+    }
+    const uint64_t start_frame = RoundFrame(first);
+    if (!LoadPeriodWindow(start_frame) || !PeriodWindowHasSignal()) {
+        AcceptPeriod(0.0);
+        return;
+    }
+    state.period_search.start_ns = start_ns;
+    state.period_search.start_frame_offset = (double)start_frame - first;
+    state.period_search.frames_per_ns = state.frames_per_ns;
+    state.period_search.crossing_period = ZeroCrossPeriod();
+    const double quick = CheckCrossingPeriod(state.period_search.crossing_period);
+    if (quick > 0.0) {
+        AcceptPeriod(quick);
+        return;
+    }
+    state.period_search.best = 2.0f;
+    state.period_search.next_lag = PERIOD_MIN_LAG - 1U;
+    ExpirePeriod();
+}
+
+/**
+ * @brief 在前台推进最多64个滞后；完整扫描结束才提交一次候选。
+ * @return 无返回值。
+ * @note 每轮主循环在网络和测距处理后调用一次；失域、断流或模型失效已撤销旧搜索。
+ *       与共同窗口刷新分离，不改写PCM，也不改变B对A窗口的跟随方式。
+ */
+void WaveformService_ProcessPeriod(void)
+{
+    uint32_t lag = state.period_search.next_lag;
+    if (lag == 0U) return;
+    if ((uint32_t)(state.now_ms - state.period_ms) >= WAVEFORM_PERIOD_HOLD_MS) {
+        state.period_search.next_lag = 0U;
+        AcceptPeriod(0.0);
+        return;
+    }
+    for (uint32_t count = 0U; count < PERIOD_LAGS_PER_SLICE &&
+         lag <= PERIOD_MAX_LAG + 1U; ++count, ++lag) {
+        const float error = PeriodError(lag);
+        storage.period_error[lag] = error;
+        if (lag >= PERIOD_MIN_LAG && lag <= PERIOD_MAX_LAG &&
+            error < state.period_search.best) state.period_search.best = error;
+    }
+    if (lag <= PERIOD_MAX_LAG + 1U) {
+        state.period_search.next_lag = lag;
+        return;
+    }
+    state.period_search.next_lag = 0U;
+    AcceptPeriod(SelectScannedPeriod());
 }
 
 /**
@@ -646,6 +719,7 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
         state.have_sequence = false;
         state.have_refresh = false;
         state.phase_valid = false;
+        state.period_search.next_lag = 0U;
         state.period_ms = 0U;
         state.have_period_check = false;
         state.have_period_evidence = false;
@@ -666,6 +740,7 @@ void WaveformService_Update(BoardRole role, bool healthy, const RangingSessionSn
     }
     const bool model_fresh = state.model_valid &&
         (uint32_t)(now_ms - state.anchor_ms) <= (uint32_t)(MODEL_HOLD_NS / 1000000U);
+    if (!model_fresh) state.period_search.next_lag = 0U;
     if (state.pending && (!qualified || !model_fresh ||
         (uint32_t)(now_ms - state.plan_ms) > PLAN_TIMEOUT_MS)) {
         state.pending = false;

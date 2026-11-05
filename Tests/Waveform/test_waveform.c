@@ -362,11 +362,52 @@ static void CheckShortestPeriod(void)
         tone_period_frames = periods[i];
         sample_bias = 15000;
         WaveformService_Init(); History(0.0); Anchors();
-        WaveformPlan plan; ConfirmPeriod(&plan);
+        WaveformSnapshot diagnostic;
+        for (uint32_t attempt = 0U; attempt < WAVEFORM_PERIOD_CONFIRMATIONS; ++attempt) {
+            const uint32_t ms = 2400U + attempt * 200U;
+            const WaveformPlan pending = PlanAt(ms, 0.0);
+            assert(pending.mode == WAVEFORM_MODE_RAW);
+            WaveformService_GetSnapshot(&diagnostic);
+            assert(diagnostic.confirmation_count == attempt);
+            WaveformService_ProcessPeriod();
+            WaveformService_GetSnapshot(&diagnostic);
+            assert(diagnostic.confirmation_count == attempt);
+            for (uint32_t slice = 1U; slice < 8U; ++slice) {
+                WaveformService_Update(BOARD_ROLE_A, true, &domain,
+                    UINT64_C(9900000000) + (uint64_t)(ms + slice) * UINT64_C(1000000), ms + slice);
+                WaveformService_ProcessPeriod();
+            }
+            WaveformService_GetSnapshot(&diagnostic);
+            assert(diagnostic.confirmation_count == attempt + 1U);
+        }
+        const WaveformPlan plan = PlanAt(2900U, 0.0);
         const double expected_mhz = 48000000.0 / periods[i];
+        assert(plan.mode == WAVEFORM_MODE_PERIOD);
         assert(fabs((double)plan.period_milli_hz - expected_mhz) < expected_mhz * 0.005);
+        assert(SpanDiff(plan.window_span_ns, ExpectedPeriodSpan(plan.period_milli_hz)) <= 2000U);
     }
     sample_bias = 0; tone_period_frames = 96.0;
+}
+
+/** @brief 失去共同时间资格时取消部分扫描，旧PCM不能补出候选。 @return 无返回值。 */
+static void CheckPeriodScanCancellation(void)
+{
+    sample_bias = 15000;
+    WaveformService_Init(); History(0.0); Anchors();
+    const WaveformPlan pending = PlanAt(2400U, 0.0);
+    assert(pending.mode == WAVEFORM_MODE_RAW);
+    WaveformService_ProcessPeriod();
+    WaveformService_Update(BOARD_ROLE_A, false, NULL, 0U, 2401U);
+    for (uint32_t ms = 2401U; ms <= 2408U; ++ms) {
+        WaveformService_Update(BOARD_ROLE_A, false, NULL, 0U, ms);
+        WaveformService_ProcessPeriod();
+    }
+    WaveformSnapshot diagnostic;
+    WaveformService_GetSnapshot(&diagnostic);
+    assert(diagnostic.confirmation_count == 0U && diagnostic.candidate_milli_hz == 0U);
+    assert(diagnostic.valid && !diagnostic.synced && !diagnostic.period_valid);
+    assert(diagnostic.window_span_ns == WAVEFORM_WINDOW_SPAN_NS);
+    sample_bias = 0;
 }
 
 /** @brief 失败及等待不续租A周期证据；600ms后计划转RAW，但LOCAL显示横轴仍保留最近周期。 */
@@ -403,6 +444,7 @@ static void CheckPhaseAndFrequencyChange(void)
     WaveformPlan plan = original;
     for (uint32_t ms = 3000U; ms <= 3800U; ms += 200U) {
         plan = PlanAt(ms, 1.5707963267948966);
+        for (uint32_t slice = 0U; slice < 8U; ++slice) WaveformService_ProcessPeriod();
         assert(plan.mode == WAVEFORM_MODE_PERIOD);
         const double cycles = (double)(plan.window_start_ns - original.window_start_ns) / 1000000.0;
         assert(fabs(cycles - floor(cycles + 0.5)) < 0.002);
@@ -411,13 +453,16 @@ static void CheckPhaseAndFrequencyChange(void)
     bool revised = false;
     for (uint32_t ms = 4000U; ms <= 4800U; ms += 200U) {
         plan = PlanAt(ms, 1.5707963267948966);
+        for (uint32_t slice = 0U; slice < 8U; ++slice) WaveformService_ProcessPeriod();
         WaveformSnapshot diagnostic; WaveformService_GetSnapshot(&diagnostic);
         if (!revised && diagnostic.candidate_milli_hz > 1007000U) {
             if (diagnostic.confirmation_count < WAVEFORM_PERIOD_CONFIRMATIONS)
                 assert(plan.mode == WAVEFORM_MODE_RAW || plan.period_milli_hz < 1003000U);
             else {
+                plan = PlanAt(ms + WAVEFORM_REFRESH_MS, 1.5707963267948966);
                 assert(plan.period_milli_hz > 1007000U);
                 revised = true;
+                break;
             }
         }
     }
@@ -511,6 +556,7 @@ int main(void)
     CheckFractionalPlan();
     CheckLocalPeriodSpan();
     CheckShortestPeriod();
+    CheckPeriodScanCancellation();
     CheckPeriodHold();
     CheckPhaseAndFrequencyChange();
     CheckRawFidelity();
