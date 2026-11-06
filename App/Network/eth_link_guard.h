@@ -48,6 +48,7 @@ typedef struct
     bool mac_full_duplex;      /**< MACCR.DM：true 为全双工。 */
     uint32_t rx_delta;         /**< 距上次采样成功收包计数的增量，允许自然回绕。 */
     uint32_t since_last_rx_ms; /**< 距最近一次收包增量的毫秒数。 */
+    bool rx_dma_error;         /**< ETH DMASR 的 RX 错误位（RBUS/RPSS/RWTS/FBES）任一置位。 */
 } EthLinkGuardInput;
 
 /** @brief 纯决策的限次状态；由 EthLinkGuard_StateInit 初始化，仅由 Evaluate 更新。 */

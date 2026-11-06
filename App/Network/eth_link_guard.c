@@ -135,7 +135,10 @@ void EthLinkGuard_Evaluate(const EthLinkGuardInput *input,
     else if ((input->rx_delta == 0U) &&
              (input->since_last_rx_ms >= ETH_LINK_GUARD_STALE_RX_MS))
     {
+        /* 没有本板 ETH DMA 错误时，静默更可能是对端掉线/未发；
+           重初始化本板 MAC 既不能恢复对端，又会清掉 PTP 配置，故只报告。 */
         decision->reason = ETH_LINK_GUARD_REASON_RX_STALE;
+        if (!input->rx_dma_error) { return; }
     }
     else
     {
@@ -568,6 +571,10 @@ void EthLinkGuard_Process(uint32_t now_ms, EthLinkGuard_Log log)
                                        link.full_duplex;
     input.rx_delta = rx_delta;
     input.since_last_rx_ms = since_last_rx_ms;
+    const uint32_t dmasr = mac_valid ? READ_REG(heth.Instance->DMASR) : 0U;
+    input.rx_dma_error = mac_valid &&
+        ((dmasr & (ETH_DMASR_RBUS | ETH_DMASR_RPSS | ETH_DMASR_RWTS |
+                   ETH_DMASR_FBES)) != 0U);
 
     EthLinkGuardDecision decision;
     EthLinkGuard_Evaluate(&input, &guard_state, now_ms, &decision);

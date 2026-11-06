@@ -29,6 +29,7 @@ static EthLinkGuardInput Input100Full(void)
     input.mac_full_duplex = true;
     input.rx_delta = 1U;
     input.since_last_rx_ms = 100U;
+    input.rx_dma_error = true;
     return input;
 }
 
@@ -273,6 +274,28 @@ static void TestPhyDownResetsBudget(void)
     puts("PASS PHY down: link transition resets bounded-action budget");
 }
 
+/**
+ * @brief   验证对端静默但本板无 DMA 错误时不重初始化本板 MAC。
+ * @return  无返回值。
+ * @note    对端掉线不能通过重置本板 ETH 恢复，REINIT 还会清掉 PTP 配置。
+ */
+static void TestPeerSilenceNoReinit(void)
+{
+    EthLinkGuardState state;
+    EthLinkGuardDecision decision;
+    EthLinkGuard_StateInit(&state, 0U);
+
+    EthLinkGuardInput input = Input100Full();
+    input.rx_delta = 0U;
+    input.since_last_rx_ms = 2500U;
+    input.rx_dma_error = false;
+    EthLinkGuard_Evaluate(&input, &state, 2500U, &decision);
+    assert(decision.action == ETH_LINK_GUARD_NONE);
+    assert(decision.reason == ETH_LINK_GUARD_REASON_RX_STALE);
+    assert(state.actions_in_window == 0U);
+    puts("PASS peer silence without DMA error: report only, no local MAC reset");
+}
+
 int main(void)
 {
     TestConsistent();
@@ -282,6 +305,7 @@ int main(void)
     TestRecoveryResetsBudget();
     TestNoFalseActions();
     TestPhyDownResetsBudget();
+    TestPeerSilenceNoReinit();
     puts("All eth_link_guard host tests passed.");
     return 0;
 }
