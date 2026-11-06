@@ -4,7 +4,7 @@
  * @details     发送采用前台环形缓冲 + USART1_TX DMA 续传，前台只做入队与启动，不再等待整行发送；若 CubeMX
  *          尚未链接 TX DMA，则退回原同步发送以保持功能。接收仍由 USART1 IRQ 单字节入队并统计。
  * @note        依赖 CubeMX 已初始化的 huart1、USART1_TX DMA（DMA2 Stream7）与 HAL tick；DMA 缓冲为 CPU 专用
- *          .bss，当前未启用 D-Cache，无需额外维护；接收环形数组 256 字节，发送环形数组 1024 字节。
+ *          .bss，当前未启用 D-Cache，无需额外维护；接收环形数组 256 字节，发送环形数组 2048 字节。
  */
 
 #include "bsp_console.h"
@@ -17,7 +17,7 @@ extern UART_HandleTypeDef huart1;
 #define CONSOLE_TX_TIMEOUT_MS 25U
 #define CONSOLE_RX_CAPACITY 256U
 #define CONSOLE_RX_RETRY_MS 10U
-#define CONSOLE_TX_CAPACITY 1024U
+#define CONSOLE_TX_CAPACITY 2048U
 
 /* Single IRQ producer / main consumer. Brief PRIMASK sections preserve the
  * caller's mask and protect pop/flush/rearm, never a UART wait or TX operation.

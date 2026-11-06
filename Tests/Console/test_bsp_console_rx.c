@@ -96,7 +96,7 @@ int main(void)
 
     /* TX: without a linked DMA handle, enqueue falls back to blocking send. */
     BSP_ConsoleTxStats tx;
-    static uint8_t big[1023];
+    static uint8_t big[2047];
     memset(big, 'Q', sizeof big);
     huart1.hdmatx = NULL;
     assert(BSP_Console_Write("AB", 2U));
@@ -127,7 +127,7 @@ int main(void)
     assert(BSP_Console_Write((const char *)big, (uint16_t)sizeof big));
     assert(!BSP_Console_Write("Z", 1U));
     BSP_Console_GetTxStats(&tx);
-    assert(tx.dropped == 1U && tx.high_water == 1023U);
+    assert(tx.dropped == 1U && tx.high_water == 2047U);
     HAL_UART_TxCpltCallback(&huart1);
     HAL_UART_TxCpltCallback(&huart1);
 
