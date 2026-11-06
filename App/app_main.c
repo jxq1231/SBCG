@@ -1575,17 +1575,19 @@ void App_Init(void)
     log_full_count=log_write_count=log_bad_count=log_high_water=0U;
     pending_head = pending_count = 0U;
     BSP_Console_GetInfo(&info);
+#ifdef SBCG_FW_SHA
+    const int length = snprintf(line, sizeof(line),
+        "$BOOT,FW=" APP_FIRMWARE_ID ",HCLK_HZ=%" PRIu32
+        ",UID_W0=%08" PRIX32 ",UID_W1=%08" PRIX32 ",UID_W2=%08" PRIX32 ",SHA=%s\r\n",
+        info.core_clock_hz, info.uid_words[0], info.uid_words[1], info.uid_words[2],
+        SBCG_FW_SHA);
+#else
     const int length = snprintf(line, sizeof(line),
         "$BOOT,FW=" APP_FIRMWARE_ID ",HCLK_HZ=%" PRIu32
         ",UID_W0=%08" PRIX32 ",UID_W1=%08" PRIX32 ",UID_W2=%08" PRIX32 "\r\n",
         info.core_clock_hz, info.uid_words[0], info.uid_words[1], info.uid_words[2]);
-    SendLine(line, length);
-#ifdef SBCG_FW_SHA
-    {
-        static const char fw[] = "$FW,SHA=" SBCG_FW_SHA ",ID=" APP_FIRMWARE_ID "\r\n";
-        SendLine(fw, (int)(sizeof fw - 1U));
-    }
 #endif
+    SendLine(line, length);
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
     ReportReset();
 #endif
