@@ -8,6 +8,7 @@
 #include "BSP/bsp_touchgfx_display.h"
 #include "BSP/bsp_board_identity.h"
 #include "BSP/bsp_audio.h"
+#include "BSP/bsp_touch.h"
 #include "Network/ethernet_monitor.h"
 #include "Sync/time_sync.h"
 #include "Temperature/temperature_service.h"
@@ -34,6 +35,9 @@ void BSP_TouchGFXDisplay_Process(void){++polls;}
 bool BSP_TouchGFXDisplay_Reveal(uint32_t address){++reveals;if(address!=BSP_TOUCHGFX_FRAME_A&&address!=BSP_TOUCHGFX_FRAME_B){lcd.status=BSP_TOUCHGFX_ERROR;lcd.config_errors=1U;return false;}lcd.status=BSP_TOUCHGFX_RUNNING;lcd.front_address=address;return true;}
 /** @brief 复制BSP桩状态。@param out 非NULL输出。@return 无返回值。 */
 void BSP_TouchGFXDisplay_GetSnapshot(BSP_TouchGFXDisplaySnapshot*out){*out=lcd;}
+static BSP_TouchSnapshot touch_snapshot;
+/** @brief 提供只读触控诊断副本。@param out 非NULL输出。@return 无返回值。 */
+void BSP_Touch_GetSnapshot(BSP_TouchSnapshot *out){*out=touch_snapshot;}
 /** @brief 记录业务捕获并提供静态身份。@return 全场景有效的只读身份地址。 */
 const BoardIdentityProfile *BSP_BoardIdentity_Get(void){++captures;return &identity;}
 /** @brief 提供网络状态。@param n 当前测试毫秒。@param out 非NULL输出。@return 无返回值。 */
@@ -58,7 +62,11 @@ static char last_log[256];
 static void Log(const char*s,int n)
 {
  assert(n>0&&n<256&&s[n-2]=='\r'&&s[n-1]=='\n');
- if(strstr(s,"$UI_RANGE"))
+ if(strstr(s,"$TOUCH"))
+ {
+  assert(strstr(s,"READS=")&&strstr(s,"BUSY=")&&strstr(s,"ID_BAD=")&&strstr(s,"MAX_MS="));
+ }
+ else if(strstr(s,"$UI_RANGE"))
  {
   assert(strstr(s,"SCHEMA=1")&&strstr(s,"ID=")&&strstr(s,"STATE="));
  }

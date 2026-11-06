@@ -140,6 +140,23 @@ static const char* ModeShortName(ModeKind mode)
     default: return "--";
     }
 }
+/**
+ * @brief 待生效状态缩写，仅在请求与生效不一致时追加到顶部。
+ * @param state 模式观测状态。
+ * @return 静态短字符串；ACTIVE 返回空串，保持既有正常态文本不变。
+ * @note 单字母含义：B=启动、W=等待对端、S=切换中、E=错误。
+ */
+static const char* ModeStateMark(ModeState state)
+{
+    switch (state)
+    {
+    case MODE_STARTUP: return "B";
+    case MODE_SYNC_WAIT: return "W";
+    case MODE_SWITCHING: return "S";
+    case MODE_ERROR: return "E";
+    default: return "";
+    }
+}
 #endif
 
 /** @brief 初始化本视图的数据版本门控；尚未读取业务。@return 无返回值。 */
@@ -676,9 +693,10 @@ void Screen1View::refreshMode()
     const bool pending = mode.requested != MODE_NONE && mode.requested != mode.effective;
     if (mode.role == BOARD_ROLE_A)
     {
-        std::snprintf(text, sizeof text, "A RQ:%s%s EF:%s",
+        /* 待生效时追加状态缩写，便于现场区分“请求已发出但卡在哪一步”。 */
+        std::snprintf(text, sizeof text, "A RQ:%s%s%s EF:%s",
             ModeShortName(mode.requested), pending ? "+" : "",
-            ModeShortName(mode.effective));
+            pending ? ModeStateMark(mode.state) : "", ModeShortName(mode.effective));
     }
     else
     {

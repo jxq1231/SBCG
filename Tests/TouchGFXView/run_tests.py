@@ -110,7 +110,7 @@ extern "C" bool CalibrationControl_Request(CalibrationAction a){
 }
 extern "C" void BSP_Touch_GetSnapshot(BSP_TouchSnapshot*out){out->sample_valid=touch_valid;}
 extern "C" bool UI_TouchGFX_GetText(UI_StatusText*out,uint32_t*g){if(!available)return false;*out=page;*g=generation;return true;}
-static bool equals(const uint16_t*b,const char*s){while(*s&&*b==static_cast<unsigned char>(*s)){++b;++s;}return !*b&&!*s;}
+static bool equals(const uint16_t*b,const char*s){const uint16_t*o=b;while(*s&&*b==static_cast<unsigned char>(*s)){++b;++s;}const bool ok=(!*b&&!*s);if(!ok){std::printf("equals mismatch: got [");for(const uint16_t*p=o;*p;++p)std::putchar(static_cast<char>(*p));std::printf("] expected [%s]%c",s,10);}return ok;}
 static void dumpWidget(int page,const char*name,const touchgfx::Drawable&w,int typed=-1,const uint16_t*text=nullptr){
  if(!w.isVisible())return;
  std::printf("{\\"page\\":%d,\\"name\\":\\"%s\\",\\"x\\":%d,\\"y\\":%d,\\"w\\":%d,\\"h\\":%d,\\"color\\":%u,\\"typed\\":%d,\\"text\\":",page,name,w.x,w.y,w.w,w.h,w.color,typed);
@@ -361,10 +361,10 @@ int main(){
  assert(equals(view.roleTextBuffer,"B VW:WAV EF:RNG"));
  mode_state.role=BOARD_ROLE_A;mode_requests=0;
  tap(view,300,250);assert(mode_requests==1U && mode_last==MODE_WAVE);
- mode_state.requested=MODE_WAVE;mode_state.effective=MODE_RANGE;view.handleTickEvent();
- assert(equals(view.roleTextBuffer,"A RQ:WAV+ EF:RNG"));
+ mode_state.requested=MODE_WAVE;mode_state.effective=MODE_RANGE;mode_state.state=MODE_SWITCHING;view.handleTickEvent();
+ assert(equals(view.roleTextBuffer,"A RQ:WAV+S EF:RNG"));
  assert(view.lineIs(0,"MODE NOT ACTIVE"));
- mode_state.effective=MODE_WAVE;view.handleTickEvent();
+ mode_state.state=MODE_ACTIVE;mode_state.effective=MODE_WAVE;view.handleTickEvent();
  assert(equals(view.roleTextBuffer,"A RQ:WAV EF:WAV"));
  mode_state.requested=MODE_RANGE;mode_state.effective=MODE_RANGE;mode_requests=0;
  tap(view,180,250);tap(view,60,250);tap(view,180,250);
