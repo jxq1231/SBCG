@@ -44,6 +44,10 @@ void App_GetModeSnapshot(ModeSnapshot *out);
 #ifdef SBCG_MODE_TEST_CONTROL
 /** @brief 通过应用日志输出一次当前模式快照。@return 无返回值。 */
 void App_ReportMode(void);
+#ifdef SBCG_USE_ADVANCED_UI
+/** @brief 启用或关闭本板限时CLAP原始窗诊断。 @param enabled true启用。 @return 接受为true。 */
+bool App_SetClapPcmTrace(bool enabled);
+#endif
 #endif
 #endif
 

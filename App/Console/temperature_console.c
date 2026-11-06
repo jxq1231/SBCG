@@ -151,6 +151,18 @@ static bool execute_mode_command(const char *text)
         App_ReportMode();
         return true;
     }
+#ifdef SBCG_USE_ADVANCED_UI
+    if (strcmp(text, "CLAP PCM ON") == 0 || strcmp(text, "CLAP PCM OFF") == 0)
+    {
+        if (App_SetClapPcmTrace(strcmp(text, "CLAP PCM ON") == 0))
+        {
+            static const char ok[] = "$CMD,NAME=CLAP_PCM,RESULT=OK\r\n";
+            emit(ok, (int)(sizeof ok - 1U));
+        }
+        else { result("CLAP_PCM", "ERROR", "UNAVAILABLE"); }
+        return true;
+    }
+#endif
     if (strncmp(text, "MODE BOOT ", 10U) == 0)
     {
         uint64_t boot;

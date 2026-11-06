@@ -224,6 +224,29 @@ static int16_t Sample(uint64_t frame)
     return storage.ring[frame % WAVEFORM_RING_FRAMES];
 }
 
+#ifdef SBCG_MODE_TEST_CONTROL
+/**
+ * @brief 复制已完成End的同会话左声道窗口，跨环尾按绝对帧连续读取。
+ * @param session 非零的采集会话。
+ * @param first_frame 窗口绝对首帧。
+ * @param frames 需要的帧数，大于零。
+ * @param out 非NULL且至少frames点的调用方缓冲，失败不修改。
+ * @return 整个窗口仍在验证环中为true。
+ * @note 仅串行前台调用，不访问DMA指针。
+ */
+bool WaveformService_CopyVerifiedPcm(uint32_t session, uint64_t first_frame,
+                                     uint16_t frames, int16_t *out)
+{
+    if (!state.have_ring || session != state.session || frames == 0U || out == NULL ||
+        first_frame < state.first_frame || first_frame >= state.end_frame ||
+        state.end_frame - first_frame < frames)
+    { return false; }
+    for (uint16_t i = 0U; i < frames; ++i)
+        out[i] = Sample(first_frame + i);
+    return true;
+}
+#endif
+
 /** @brief 把double帧坐标圆整为无符号帧。 @param value 帧坐标。 @return 四舍五入后的帧。 */
 static uint64_t RoundFrame(double value)
 {

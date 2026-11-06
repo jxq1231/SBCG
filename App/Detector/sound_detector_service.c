@@ -4,6 +4,7 @@
  * @details     工作副本隔离未验证PCM，固定两级4条队列；分类等待完整2400帧，失败/断流清历史。
  *              TOA仅使用当前借用块内完整256帧窗口；窗口不完整时保留能量候选并输出NA。
  *              名义微秒发布前检查数值及uint64范围，十进制缓冲可容纳20位及结尾字符。
+ *              模式诊断构建在候选日志内附带实际分类结果。
  * @note        仅串行前台；双2400点CPU自有尾部缓存经End提交，不保留DMA指针，无新IRQ/DMA/PTP时间查询。
  */
 #include "sound_detector_service.h"
@@ -20,9 +21,9 @@
 #define EVENT_LOG_PERIOD_MS 250U
 #define STATE_LOG_PERIOD_MS 1000U
 #define TOA_SEARCH_WINDOW 256U
-#define TOA_LEFT_MARGIN 64U
+#define TOA_LEFT_MARGIN SOUND_DETECTOR_TOA_LEFT_MARGIN
 #define AUDIO_RATE_HZ 48000U
-#define CLASSIFY_FRAMES 2400U
+#define CLASSIFY_FRAMES SOUND_DETECTOR_CLASSIFY_FRAMES
 const SoundDetectorConfig SoundDetectorService_DefaultConfig={64U,256U,128U,2U,8U,24000U};
 typedef struct { SoundCandidate event; uint32_t completed_ms,sequence;
                  uint64_t toa_anchor; double toa_fraction; bool toa_valid,toa_ready;
@@ -49,6 +50,25 @@ static SoundToaPosition staged_toa_position[SOUND_DETECTOR_QUEUE_CAPACITY];
 static uint32_t staged_total,staged_ms,last_event_ms,last_state_ms;
 static uint8_t staged_count,head,count;
 static bool active,stage_valid,boundary;
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+static SoundDetectorTraceSink trace_sink;
+
+/** @brief 设置已归还的候选诊断回调。 @param sink 前台回调，NULL关闭。 @return 无返回值。 */
+void SoundDetectorService_SetTraceSink(SoundDetectorTraceSink sink)
+{
+    trace_sink=sink;
+}
+#endif
+
+/**
+ * @brief 计算TOA搜索窗的绝对首帧，采集会话开头贴零。
+ * @param onset_frame 能量候选起点，单位双声道帧。
+ * @return 估算窗首帧。
+ */
+static uint64_t ToaWindowFirst(uint64_t onset_frame)
+{
+    return onset_frame>TOA_LEFT_MARGIN ? onset_frame-TOA_LEFT_MARGIN : 0U;
+}
 static void (*emit_line)(const char *,int);
 #define TOA_CANDIDATE_CACHE 8U
 static struct { uint32_t sequence; SoundDetectorServiceToaCandidates data; } toa_cache[TOA_CANDIDATE_CACHE];
@@ -220,8 +240,7 @@ static bool EstimateToaCore(const BSP_AudioBlock *block,const SoundCandidate *ev
     out->ready=true;out->valid=false;out->anchor=0U;out->fraction=0.0;
     out->candidates=(ToaBackwardCandidates){0U,{0.0}};
     out->position=(SoundToaPosition){SOUND_TOA_MISSING,0U,0U,0U,{0,0,0,0}};
-    const uint64_t anchor=event->onset_frame>TOA_LEFT_MARGIN?
-        event->onset_frame-TOA_LEFT_MARGIN:0U;
+    const uint64_t anchor=ToaWindowFirst(event->onset_frame);
     int16_t window[TOA_SEARCH_WINDOW];
     const ToaWindowStatus status=BuildToaWindow(block,anchor,channel,window);
     if(status==TOA_WINDOW_WAIT){out->ready=false;return false;}
@@ -443,6 +462,7 @@ void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
  * @param snapshot 当前非NULL只读采集快照，函数不保留指针。
  * @return 无返回值。
  * @note staging时不执行任何发布；故障清旧历史，不补发日志。候选仅含本地帧，SYNC始终0。
+ *       模式诊断构建附带分类和质量，使用同一候选序号对照后续TOA。
  *       名义TOA微秒为负数、非有限数或舍入后达到2^64时输出NA；不更改局部估算成功计数。
  */
 void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snapshot)
@@ -475,13 +495,25 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
         }
         Emit(line,snprintf(line,sizeof line,
             "$SOUND_CAND,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",CH=%u,FIRST=%s,CONFIRMED=%s,E_AC=%" PRIu32
-            ",PEAK=%" PRIu32 ",CLIP=%u,CAND=%u,LOCAL=1,SYNC=0,TOA_US=%s\r\n",
+            ",PEAK=%" PRIu32 ",CLIP=%u,CAND=%u,LOCAL=1,SYNC=0,TOA_US=%s"
+#ifdef SBCG_MODE_TEST_CONTROL
+            ",CLASS=%u,QUALITY=%u"
+#endif
+            "\r\n",
             item.sequence,item.event.session,(unsigned)diagnostics.channel,first,confirmed,item.event.mean_square_ac,
-            item.event.peak_abs,item.event.clipped ? 1U:0U,(unsigned)item.toa.candidate_count,toa_us));
+            item.event.peak_abs,item.event.clipped ? 1U:0U,(unsigned)item.toa.candidate_count,toa_us
+#ifdef SBCG_MODE_TEST_CONTROL
+            ,(unsigned)item.event.event_class,(unsigned)item.event.quality
+#endif
+        ));
 #ifdef SBCG_USE_SOUND_TIME
         /* 已归还并验证且已发布的元数据副本；时间服务不访问PCM。 */
         CacheToaCandidates(item.sequence,&item.toa);
         (void)SoundEventTime_SubmitToa(now_ms,item.sequence,&item.event,&item.toa);
+#endif
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+        if(trace_sink!=NULL && diagnostics.channel==0U)
+            trace_sink(item.sequence,&item.event,ToaWindowFirst(item.event.onset_frame));
 #endif
     }
     if((uint32_t)(now_ms-last_state_ms)<STATE_LOG_PERIOD_MS){RecordProcessTime(begin_ms);return;}

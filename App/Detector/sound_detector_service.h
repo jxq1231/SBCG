@@ -9,6 +9,15 @@
 #include "Detector/sound_detector.h"
 #include "BSP/bsp_audio.h"
 #define SOUND_DETECTOR_QUEUE_CAPACITY 4U
+#define SOUND_DETECTOR_CLASSIFY_FRAMES 2400U
+#define SOUND_DETECTOR_TOA_LEFT_MARGIN 64U
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+/** @brief 已归还的候选诊断回调；event仅本次借用，toa_first为估算窗首帧。 */
+typedef void (*SoundDetectorTraceSink)(uint32_t sequence, const SoundCandidate *event,
+                                       uint64_t toa_first);
+/** @brief 注册前台诊断回调；NULL关闭。 @return 无返回值。 */
+void SoundDetectorService_SetTraceSink(SoundDetectorTraceSink sink);
+#endif
 /** @brief 最近一次已发布候选的B侧早/晚TOA偏移，供上层事件发布复制。 */
 typedef struct {
     uint8_t count;

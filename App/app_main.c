@@ -523,6 +523,59 @@ static bool ModeClapAllowed(void)
 #endif
 }
 
+#ifdef SBCG_MODE_TEST_CONTROL
+#define CLAP_PCM_TRACE_MS 120000U
+#define CLAP_PCM_TRACE_ID_BIT UINT32_C(0x80000000)
+static bool clap_pcm_trace_armed;
+static uint32_t clap_pcm_trace_start_ms;
+static int16_t clap_pcm_trace_samples[SOUND_DETECTOR_CLASSIFY_FRAMES+SOUND_DETECTOR_TOA_LEFT_MARGIN]
+    __attribute__((section(".WaveformState"),aligned(32)));
+
+/**
+ * @brief 控制当前CLAP代次的本板PCM诊断，启用后最多120秒。
+ * @param enabled true请求启用，false立即关闭。
+ * @return 接受为true；未确认CLAP时拒绝启用。
+ * @note 串口前台命令使用；离开或重建模式代次自动撤销。
+ */
+bool App_SetClapPcmTrace(bool enabled)
+{
+    if (enabled && (!ModeGateConfigured() || !ModeClapAllowed())) { return false; }
+    clap_pcm_trace_start_ms = BSP_Console_GetTickMs();
+    clap_pcm_trace_armed = enabled;
+    return true;
+}
+
+/**
+ * @brief 把已验证环中的分类窗和TOA窗联合复制并下传给本机PC采集端。
+ * @param sequence 检测候选的非零序号，最高位保留给PCM1诊断标记。
+ * @param event 非NULL候选，调用期间借用，用会话及onset定位样本。
+ * @param toa_first TOA搜索窗绝对首帧。
+ * @return 无返回值；环中缺任一段则跳过该候选。
+ * @note 音频已归还，使用左声道独占CPU缓冲；接收端按序号去掉标记位。
+ */
+static void TraceClapPcm(uint32_t sequence, const SoundCandidate *event,uint64_t toa_first)
+{
+    if (!clap_pcm_trace_armed) { return; }
+    if ((uint32_t)(BSP_Console_GetTickMs()-clap_pcm_trace_start_ms)>=CLAP_PCM_TRACE_MS)
+    {
+        clap_pcm_trace_armed = false;
+        return;
+    }
+    if (sequence==0U || sequence>=CLAP_PCM_TRACE_ID_BIT) { return; }
+
+    const uint16_t frames = (uint16_t)(event->onset_frame-toa_first+SOUND_DETECTOR_CLASSIFY_FRAMES);
+    if (!WaveformService_CopyVerifiedPcm(event->session,toa_first,frames,clap_pcm_trace_samples))
+    { return; }
+
+    const ChirpCaptureSlice slice = {
+        .samples=clap_pcm_trace_samples,.frames=frames,.session=event->session,
+        .id=CLAP_PCM_TRACE_ID_BIT|sequence,.first_frame=toa_first,
+        .hint_frame=event->onset_frame,.raw_first_frame=toa_first
+    };
+    (void)UDPChirpCapture_Send(&slice);
+}
+#endif
+
 /** @brief WAVE专属计算只在已生效WAVE模式放行；未登记代次时保留阶段一行为。 @return 允许为true。 */
 static bool ModeWaveComputeAllowed(void)
 {
@@ -1483,6 +1536,10 @@ void App_Init(void)
     TemperatureConsole_Init(SendLine);
 #ifdef SBCG_USE_AUDIO
     AudioCapture_Init(BSP_Console_GetTickMs(), SendLine);
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+    clap_pcm_trace_armed = false;
+    SoundDetectorService_SetTraceSink(TraceClapPcm);
+#endif
 #endif
 #if defined(SBCG_USE_LWIP) && defined(SBCG_USE_CHIRP)
     /* 候选附近End验证PCM快照经UDP下传；Init已清状态，注册sink不改变检测结果。 */
@@ -1575,6 +1632,7 @@ void App_Init(void)
  * @param   notice 非NULL只读事件副本，包含序号、会话、模型帧与PTP时间。
  * @return  无返回值；未分类、无身份或域无效时丢弃。
  * @note    仅CHIRP推进标准序列；CLAP独立发布，不改变标准音门控。事件携带原模型帧。
+ *          模式诊断构建按候选序号记录CLAP实际UDP提交结果。
  */
 static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 {
@@ -1631,7 +1689,19 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
         for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
             event.toa_candidate_q16[i] = candidates.offset_q16[i];
     }
-    (void)UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
+    const bool sent = UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
+#ifdef SBCG_MODE_TEST_CONTROL
+    if (!is_chirp)
+    {
+        char line[112];
+        const int length = snprintf(line, sizeof line,
+            "$CLAP_TX,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",SENT=%u\r\n",
+            event.sequence,event.session,sent ? 1U : 0U);
+        SendLine(line,length);
+    }
+#else
+    (void)sent;
+#endif
 }
 /** @brief 事件发布延迟：等待同一次扫频的波形捕获完成，避免窗口晚于事件。 */
 #define SOUND_NOTICE_DELAY_MS 700U
@@ -1658,6 +1728,9 @@ static void ServiceModeSoundBoundary(void)
     { return; }
 
     mode_sound_generation = mode;
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+    clap_pcm_trace_armed = false;
+#endif
     const bool ranging = mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION;
     mode_sound_boundary = (AudioCaptureSoundBoundary){
         .controlled = mode.a_boot != 0U || mode.b_boot != 0U,
