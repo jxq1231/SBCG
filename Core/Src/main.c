@@ -24,6 +24,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
+#ifdef SBCG_STACK_DIAGNOSTIC
+#include "BSP/bsp_stack_diag.h"
+#endif
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
 #include "BSP/bsp_reset.h"
 #endif
@@ -59,6 +62,7 @@ DMA_HandleTypeDef hdma_sai2_b;
 TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 SDRAM_HandleTypeDef hsdram1;
 
@@ -95,6 +99,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+#ifdef SBCG_STACK_DIAGNOSTIC
+  /* 在HAL启动中断前涂写MSP预留区，跳过当前main栈帧。 */
+  BSP_StackDiag_Paint();
+#endif
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
   /* 在HAL/时钟初始化前保存并清除累计复位状态，不改变时钟或引脚配置。 */
   BSP_Reset_Capture();
@@ -555,8 +563,11 @@ static void MX_DMA_Init(void)
   __HAL_RCC_DMA2_CLK_ENABLE();
 
   /* DMA interrupt init */
+  /* DMA2_Stream6_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 4, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
   /* DMA2_Stream7_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 4, 0);
+  HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
 
 }

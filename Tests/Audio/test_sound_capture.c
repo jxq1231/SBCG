@@ -71,6 +71,21 @@ int main(void)
  snapshot.callback_count=1;snapshot.observed_frames=8192;snapshot.last_callback_ms=999;available=true;Tone(1024);
  snapshot_reads=0;advance_summary=true;Process(1000,true);
  CHECK(strstr(audio_line,"STATE=RUN,") && strstr(audio_line,",VALID=1,"));
+ /* The rejected half-block still uses the normal statistics and Begin/End path. */
+ const unsigned ends_before=ends;
+ const AudioCaptureSoundBoundary boundary={
+  .first_frame=2U*BSP_AUDIO_HALF_FRAMES,.session=1U,.controlled=true,.sound_enabled=true
+ };
+ AudioCapture_SetSoundBoundary(&boundary);
+ snapshot.observed_frames=2U*BSP_AUDIO_HALF_FRAMES;snapshot.last_callback_ms=1170;
+ ++snapshot.callback_count;available=true;Tone(1024);
+ Process(1170,true);SoundDetectorService_GetSnapshot(&state);
+ CHECK(ends==ends_before+1 && state.valid_blocks==1 && state.pending==0);
+ snapshot.observed_frames=3U*BSP_AUDIO_HALF_FRAMES;snapshot.last_callback_ms=1340;
+ ++snapshot.callback_count;available=true;Tone(1024);
+ Process(1340,true);SoundDetectorService_GetSnapshot(&state);
+ CHECK(ends==ends_before+2 && state.valid_blocks==2 && state.candidates==2);
+ puts("PASS mode boundary preserves Begin/End and admits only complete post-boundary blocks");
  puts("PASS summary time race: second snapshot cannot falsely report stalled audio");
  puts("PASS IRQ time race: fresh tick after Begin and after snapshot preserves valid candidates");
  puts("PASS real capture integration: one Begin/End, no pre-End output, post-End PCM erased, DHT gate and failed-End evidence reset");return 0;

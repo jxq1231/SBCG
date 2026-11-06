@@ -4,7 +4,8 @@
  * @details     B端先检查250ms结果时效及100ms交换历时，再交给纯C伺服。相位动作在写时钟前撤销旧时域
  *              配对、锚点及模型；成功且相位连续的调频保留声音队列与采锚节拍，仅按已知频率差扩大
  *              跨界时间误差界；调频失败或未知时钟变化仍撤销。随后立即向伺服提交有界BSP结果。
- *              B瞬态故障后每至少一秒核验已知硬件状态，撤销旧消费者并重新获取；A只推进协议，不运行伺服或写时钟。
+ *              B瞬态故障后每至少一秒核验已知硬件状态，撤销旧消费者并重新获取；恢复成功还必须先在故障后
+ *              收到250ms内的新鲜四时刻，避免无数据时“恢复—再故障”的自激循环。A只推进协议，不运行伺服或写时钟。
  * @note        仅NO_SYS串行前台，放行信号为false时整次返回。旧服务须先安装，新服务须先卸载；SYNC固定为0，
  *              内部锁定仅是闭环观测状态，不代表独立精度验收。无新的IRQ/DMA/缓存配置。
  */
@@ -37,9 +38,39 @@
 #define CONTROL_LOG_PERIOD_MS 1000U
 #define CONTROL_LINE_CAPACITY 256U
 #define RECOVERY_RETRY_MS 1000U
-#define OBSERVATION_STALL_MS 3000U
+/*
+ * 观测停滞看门狗不得短于板间协议的6s静默窗（GUARD_MS=6000）：协议在启动、链路恢复和对端静默后
+ * 会故意丢弃6s报文，阈值更短会把正常静默误判为故障并触发一次假恢复；判定处再用
+ * PtpBoardSync_GuardDone() 门控，静默窗未结束时即使累计时间到也不判故障。
+ */
+#define OBSERVATION_STALL_MS 6000U
+
+/** @brief $SYNC_CTRL,FR= 的故障原因码，供现场区分FAULT触发源。 */
+enum
+{
+    SYNC_FAULT_NONE = 0,          /**< 未锁存故障。 */
+    SYNC_FAULT_OBSERVATION_STALL, /**< 四时刻完成数停滞（无新交换样本）。 */
+    SYNC_FAULT_PPS_REVOKE,        /**< PPS撤销或安全停止失败。 */
+    SYNC_FAULT_CONSUMERS,         /**< 时间/音频消费者无法撤销。 */
+    SYNC_FAULT_LOCAL_CLOCK,       /**< 本地读时失败、代际未知或频率回读不一致。 */
+    SYNC_FAULT_PEER_LINK,         /**< 对端重置或参考链路断开。 */
+    SYNC_FAULT_ACTION,            /**< 调频/相位命令未确认提交。 */
+    SYNC_FAULT_SERVO              /**< 伺服已FAULT但协调器尚未锁存。 */
+};
+/** @brief $SYNC_RECOVERY,REASON= 的恢复受阻原因码。 */
+enum
+{
+    SYNC_RECOVERY_REASON_NONE = 0,    /**< 恢复成功或无附加原因。 */
+    SYNC_RECOVERY_REASON_NO_SAMPLE,   /**< 故障后未收到EXCHANGE_MAX_AGE内的新鲜四时刻。 */
+    SYNC_RECOVERY_REASON_LOCAL_CLOCK, /**< TxClean或已知频率读取失败。 */
+    SYNC_RECOVERY_REASON_PPS_REVOKE,  /**< PPS输出无法确认停止。 */
+    SYNC_RECOVERY_REASON_CONSUMERS,   /**< 消费者撤销失败。 */
+    SYNC_RECOVERY_REASON_OUT_OF_RANGE /**< InitKnown拒绝已确认频率。 */
+};
 
 static bool configured, faulted;
+static uint32_t fault_reason;
+static bool recovery_sample_seen;
 static BoardRole board_role;
 static ClockServo servo;
 static uint32_t cached_epoch, cached_revision, last_log_ms, rejected_samples, errors;
@@ -74,7 +105,7 @@ void TimeSync_GetSnapshot(uint32_t now_ms, TimeSyncSnapshot *out)
 _Static_assert(sizeof("$SYNC_CTRL,ROLE=B,STATE=LOCKED_INTERNAL,INTERNAL_LOCK=1,SYNC=0,"
     "OFFSET_X2_NS=-8589934591999999998,DELAY_X2_NS=4000000,DRIFT_PPB=-2147483648,"
     "FREQ_PPB=-100000,EPOCH=4294967295,RATE_REV=4294967295,VALID=4294967295,"
-    "REJECT=4294967295,ERRORS=4294967295\r\n") <= CONTROL_LINE_CAPACITY,
+    "REJECT=4294967295,ERRORS=4294967295,FR=9\r\n") <= CONTROL_LINE_CAPACITY,
     "control log exceeds application queue capacity");
 
 /**
@@ -128,15 +159,18 @@ static void Emit(int length)
 }
 
 /**
- * @brief   在不写硬件的情况下锁存协调故障。
+ * @brief   在不写硬件的情况下锁存协调故障并记录原因码。
  * @param   now_ms 当前单调毫秒值。
+ * @param   reason 故障原因码（SYNC_FAULT_*），仅随日志输出，不改变恢复流程。
  * @return  无返回值。
- * @note    B使用失败的NONE提交进入核心FAULT，保留已确认频率并开始恢复退避；A不调用伺服。重复故障不重复计数或续延退避。
+ * @note    B使用失败的NONE提交进入核心FAULT，保留已确认频率并开始恢复退避；A不调用伺服。
+ *          重复故障保留首次原因，不重复计数或续延退避；新故障清空恢复样本证据。
  */
-static void Fault(uint32_t now_ms)
+static void Fault(uint32_t now_ms,unsigned reason)
 {
     if (faulted) { return; }
-    faulted=true; last_recovery_ms=now_ms; Increment(&errors);
+    faulted=true; fault_reason=reason; recovery_sample_seen=false;
+    last_recovery_ms=now_ms; Increment(&errors);
 #ifdef SBCG_USE_PPS
     (void)PpsService_Invalidate(now_ms);
 #endif
@@ -244,7 +278,8 @@ static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
         if (action->kind==CLOCK_SERVO_STEP)
         {
 #ifdef SBCG_USE_PPS
-            if (!PpsService_Invalidate(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
+            /* 已锁存FAULT时PPS输出已被撤销；RevokeOutput确认Stop成功即允许相位写入。 */
+            if (!PpsService_RevokeOutput(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
             else
 #endif
             { issued=true; status=BSP_PTP_Step(action->phase_ns); }
@@ -268,14 +303,15 @@ static void ApplyAction(uint32_t now_ms,const ClockServoAction *action)
     {
         /* 调频失败或实际未执行：硬件速率状态不确定，已保留的旧模型必须撤销。 */
         if (frequency_model_retained) { (void)InvalidateConsumers(now_ms); }
-        faulted=true; last_recovery_ms=now_ms; Increment(&errors);
+        faulted=true; fault_reason=SYNC_FAULT_ACTION; recovery_sample_seen=false;
+        last_recovery_ms=now_ms; Increment(&errors);
     }
     if (issued) { PublishClockGeneration(); }
     if (BSP_PTP_GetFrequencyPpb()!=servo.frequency_ppb)
     {
         /* 回读与提交不一致属于未知时钟变化，保留中的声音模型同样撤销。 */
         if (frequency_model_retained && status==BSP_PTP_OK) { (void)InvalidateConsumers(now_ms); }
-        Fault(now_ms);
+        Fault(now_ms,SYNC_FAULT_LOCAL_CLOCK);
     }
     char phase[22]; SignedDecimal(action->phase_ns,phase);
     Emit(snprintf(line,sizeof line,
@@ -301,9 +337,9 @@ static void CheckClockGeneration(uint32_t now_ms)
         SoundEventTime_Invalidate(SOUND_TIME_CLOCK);
 #endif
 #ifdef SBCG_USE_PPS
-        if (!PpsService_Invalidate(now_ms)) { Fault(now_ms); return; }
+        if (!PpsService_Invalidate(now_ms)) { Fault(now_ms,SYNC_FAULT_PPS_REVOKE); return; }
 #endif
-        if (!InvalidateConsumers(now_ms)) { Fault(now_ms); return; }
+        if (!InvalidateConsumers(now_ms)) { Fault(now_ms,SYNC_FAULT_CONSUMERS); return; }
         cached_epoch=epoch; cached_revision=revision;
         if (board_role==BOARD_ROLE_B) { ClockServo_Invalidate(&servo,now_ms); }
     }
@@ -311,7 +347,7 @@ static void CheckClockGeneration(uint32_t now_ms)
     {
         BSP_PtpTime sample;
         if (BSP_PTP_Read(&sample)!=BSP_PTP_OK || BSP_PTP_GetFrequencyPpb()!=servo.frequency_ppb)
-        { Fault(now_ms); }
+        { Fault(now_ms,SYNC_FAULT_LOCAL_CLOCK); }
     }
 }
 
@@ -336,11 +372,13 @@ static void RecoverReference(uint32_t now_ms)
     if (status==BSP_PTP_OK)
     {
         cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
-        faulted=false; a_recovery_pending=false; Increment(&recoveries);
+        faulted=false; fault_reason=SYNC_FAULT_NONE;
+        a_recovery_pending=false; Increment(&recoveries);
     }
     else
     {
-        faulted=true; a_recovery_pending=true; last_recovery_ms=now_ms;
+        faulted=true; fault_reason=SYNC_FAULT_LOCAL_CLOCK;
+        a_recovery_pending=true; last_recovery_ms=now_ms;
     }
     Emit(snprintf(line,sizeof line,
         "$SYNC_RECOVERY,ROLE=A,STATUS=%u,ATTEMPTS=%" PRIu32 ",RECOVERIES=%" PRIu32
@@ -366,11 +404,12 @@ static void LogControl(uint32_t now_ms)
     Emit(snprintf(line,sizeof line,
         "$SYNC_CTRL,ROLE=%s,STATE=%s,INTERNAL_LOCK=%u,SYNC=0,OFFSET_X2_NS=%s,DELAY_X2_NS=%s,"
         "DRIFT_PPB=%" PRId32 ",FREQ_PPB=%" PRId32 ",EPOCH=%" PRIu32 ",RATE_REV=%" PRIu32
-        ",VALID=%" PRIu32 ",REJECT=%" PRIu32 ",ERRORS=%" PRIu32 "\r\n",
+        ",VALID=%" PRIu32 ",REJECT=%" PRIu32 ",ERRORS=%" PRIu32 ",FR=%u\r\n",
         is_b ? "B" : "A",faulted ? "FAULT" : (is_b ? ClockServo_StateName(&servo) : "REFERENCE"),
         is_b && !faulted && servo.internal_locked ? 1U : 0U,offset,delay,
         is_b ? servo.drift_ppb : 0,BSP_PTP_GetFrequencyPpb(),BSP_PTP_GetEpoch(),
-        BSP_PTP_GetRateRevision(),is_b ? servo.valid_samples : 0U,rejected_samples,errors));
+        BSP_PTP_GetRateRevision(),is_b ? servo.valid_samples : 0U,rejected_samples,errors,
+        (unsigned)fault_reason));
 }
 
 /**
@@ -384,7 +423,7 @@ static void RejectMeasurement(uint32_t now_ms)
     Increment(&rejected_samples);
     ClockServo_RejectMeasurement(&servo,now_ms);
 #ifdef SBCG_USE_PPS
-    if (!PpsService_Invalidate(now_ms)) { Fault(now_ms); }
+    if (!PpsService_Invalidate(now_ms)) { Fault(now_ms,SYNC_FAULT_PPS_REVOKE); }
 #endif
 }
 
@@ -431,6 +470,7 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
     board_role=profile->role; read_tick=tick; emit_line=log;
     cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
     last_log_ms=now_ms; rejected_samples=errors=0U; faulted=false; configured=true;
+    fault_reason=SYNC_FAULT_NONE; recovery_sample_seen=false;
     last_recovery_ms=now_ms; recovery_attempts=recoveries=0U;
     observation_count=PtpBoardSync_GetCompletedCount(); observation_ms=now_ms; observation_seen=false;
     a_recovery_pending=false;
@@ -460,7 +500,7 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
         if (a_link_seen && !link_usable)
         {
             /* A的参考资格依赖可用链路；仅在链路曾经可用后断开时撤销REFERENCE。 */
-            a_recovery_pending=true; Fault(now_ms);
+            a_recovery_pending=true; Fault(now_ms,SYNC_FAULT_PEER_LINK);
         }
         else if (link_usable)
         {
@@ -486,46 +526,74 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
             observation_count=completed; observation_ms=now_ms; observation_seen=true;
         }
         else if (observation_seen && !faulted && servo.state!=CLOCK_SERVO_FAULT &&
-                 (uint32_t)(now_ms-observation_ms)>=OBSERVATION_STALL_MS)
+                 (uint32_t)(now_ms-observation_ms)>=OBSERVATION_STALL_MS &&
+                 PtpBoardSync_GuardDone())
         {
-            /* 四时刻完成数长时间不增长说明同步观测已停滞，走既有重获取流程。 */
-            Fault(now_ms);
+            /* 完成数停滞且协议静默窗已结束才判故障，避免每次启动/链路恢复都制造一次假FAULT。 */
+            Fault(now_ms,SYNC_FAULT_OBSERVATION_STALL);
         }
     }
     if (board_role==BOARD_ROLE_B && (faulted || servo.state==CLOCK_SERVO_FAULT))
     {
-        if (!faulted) { Fault(now_ms); }
+        if (!faulted) { Fault(now_ms,SYNC_FAULT_SERVO); }
+        /*
+         * 故障期间仍持续消费最新四时刻：只有EXCHANGE_MAX_AGE内的样本才算恢复证据，过期样本
+         * 直接丢弃并释放协议单槽，使后续SYNC能继续形成新的四时刻。
+         */
+        SyncExchange probe;
+        uint32_t probe_ms;
+        if (PtpBoardSync_TakeExchange(&probe,&probe_ms) &&
+            (uint32_t)(now_ms-probe_ms)<=EXCHANGE_MAX_AGE_MS)
+        {
+            recovery_sample_seen=true;
+        }
         if ((uint32_t)(now_ms-last_recovery_ms)>=RECOVERY_RETRY_MS)
         {
             last_recovery_ms=now_ms; Increment(&recovery_attempts);
             int32_t frequency_ppb=0;
-            BSP_PtpStatus status=BSP_PTP_TxClean();
-            if (status==BSP_PTP_OK) { status=BSP_PTP_ReadKnownFrequency(&frequency_ppb); }
-#ifdef SBCG_USE_PPS
-            if (status==BSP_PTP_OK && !PpsService_Invalidate(now_ms)) { status=BSP_PTP_BAD_CONFIG; }
-#endif
-            if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms)) { status=BSP_PTP_NOT_READY; }
-            if (status==BSP_PTP_OK)
+            BSP_PtpStatus status=BSP_PTP_OK;
+            unsigned reason=SYNC_RECOVERY_REASON_NONE;
+            if (!recovery_sample_seen)
             {
-                /* InitKnown清除旧偏差与待执行动作，累计样本诊断仍属于本次启动，不能因恢复倒退。 */
-                const uint32_t valid_samples=servo.valid_samples, rejected=servo.rejected_samples;
-                const bool initialized=ClockServo_InitKnown(&servo,now_ms,frequency_ppb);
-                servo.valid_samples=valid_samples; servo.rejected_samples=rejected;
-                if (initialized)
+                /* 没有新鲜交换时只记“样本缺失”，不执行本地恢复、不清FAULT、也不复位停滞看门狗。 */
+                status=BSP_PTP_NOT_READY; reason=SYNC_RECOVERY_REASON_NO_SAMPLE;
+            }
+            else
+            {
+                status=BSP_PTP_TxClean();
+                if (status==BSP_PTP_OK) { status=BSP_PTP_ReadKnownFrequency(&frequency_ppb); }
+                if (status!=BSP_PTP_OK) { reason=SYNC_RECOVERY_REASON_LOCAL_CLOCK; }
+#ifdef SBCG_USE_PPS
+                /* 已FAULT时PPS输出应已停；RevokeOutput只把Stop失败当硬失败，不因锁存而阻断恢复。 */
+                if (status==BSP_PTP_OK && !PpsService_RevokeOutput(now_ms))
+                { status=BSP_PTP_BAD_CONFIG; reason=SYNC_RECOVERY_REASON_PPS_REVOKE; }
+#endif
+                if (status==BSP_PTP_OK && !InvalidateConsumers(now_ms))
+                { status=BSP_PTP_NOT_READY; reason=SYNC_RECOVERY_REASON_CONSUMERS; }
+                if (status==BSP_PTP_OK)
                 {
-                    cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
-                    faulted=false; Increment(&recoveries);
-                    observation_count=PtpBoardSync_GetCompletedCount(); observation_ms=now_ms;
+                    /* InitKnown清除旧偏差与待执行动作，累计样本诊断仍属于本次启动，不能因恢复倒退。 */
+                    const uint32_t valid_samples=servo.valid_samples, rejected=servo.rejected_samples;
+                    const bool initialized=ClockServo_InitKnown(&servo,now_ms,frequency_ppb);
+                    servo.valid_samples=valid_samples; servo.rejected_samples=rejected;
+                    if (initialized)
+                    {
+                        cached_epoch=BSP_PTP_GetEpoch(); cached_revision=BSP_PTP_GetRateRevision();
+                        faulted=false; fault_reason=SYNC_FAULT_NONE; Increment(&recoveries);
+                        observation_count=PtpBoardSync_GetCompletedCount(); observation_ms=now_ms;
+                    }
+                    else { status=BSP_PTP_OUT_OF_RANGE; reason=SYNC_RECOVERY_REASON_OUT_OF_RANGE; }
                 }
-                else { status=BSP_PTP_OUT_OF_RANGE; }
+                /* 本轮未成功：下轮必须再收到一次新鲜交换才允许重试，避免只靠本地状态反复“恢复”。 */
+                if (status!=BSP_PTP_OK) { recovery_sample_seen=false; }
             }
             Emit(snprintf(line,sizeof line,
                 "$SYNC_RECOVERY,ROLE=B,STATUS=%u,ATTEMPTS=%" PRIu32 ",RECOVERIES=%" PRIu32
-                ",FREQ_PPB=%" PRId32 ",EPOCH=%" PRIu32 ",RATE_REV=%" PRIu32 ",SYNC=0\r\n",
+                ",FREQ_PPB=%" PRId32 ",EPOCH=%" PRIu32 ",RATE_REV=%" PRIu32 ",REASON=%u,SYNC=0\r\n",
                 (unsigned)status,recovery_attempts,recoveries,BSP_PTP_GetFrequencyPpb(),
-                BSP_PTP_GetEpoch(),BSP_PTP_GetRateRevision()));
+                BSP_PTP_GetEpoch(),BSP_PTP_GetRateRevision(),reason));
         }
-        /* 本次即使恢复也不消费旧交换；从下一轮开始只接受重新形成的四时刻。 */
+        /* 恢复当轮只消费探测样本，不把旧交换交给伺服；从下一轮开始只接受重新形成的四时刻。 */
         LogControl(now_ms);
         return;
     }
@@ -534,9 +602,10 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
     {
 #ifdef SBCG_USE_PPS
         /* 对端重启撤销B的同步资格；A本地参考时间未改变，参考PPS保持。 */
-        if (board_role==BOARD_ROLE_B && !PpsService_Invalidate(now_ms)) { Fault(now_ms); }
+        if (board_role==BOARD_ROLE_B && !PpsService_Invalidate(now_ms))
+        { Fault(now_ms,SYNC_FAULT_PPS_REVOKE); }
 #endif
-        if (!InvalidateConsumers(now_ms)) { Fault(now_ms); }
+        if (!InvalidateConsumers(now_ms)) { Fault(now_ms,SYNC_FAULT_CONSUMERS); }
         if (board_role==BOARD_ROLE_B) { ClockServo_Invalidate(&servo,now_ms); }
     }
     if (board_role==BOARD_ROLE_B && !peer_changed)
@@ -559,7 +628,7 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
                     {
                         Increment(&rejected_samples);
 #ifdef SBCG_USE_PPS
-                        if (!PpsService_Invalidate(now_ms)) { Fault(now_ms); }
+                        if (!PpsService_Invalidate(now_ms)) { Fault(now_ms,SYNC_FAULT_PPS_REVOKE); }
 #endif
                     }
                     else

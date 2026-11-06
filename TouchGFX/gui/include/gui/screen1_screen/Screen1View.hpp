@@ -1,7 +1,7 @@
 /**
  * @file Screen1View.hpp
  * @brief TouchGFX测距、击掌、波形和设置四页导航视图。
- * @details 测距与击掌独立绑定服务副本，波形只绘CPU快照，设置页经二次确认提交标定动作。
+ * @details 测距与击掌独立绑定服务副本，波形只绘CPU快照，设置页驱动标定采集与确认。
  * @note 所有控件定容，不消费音频或改变测距；生成基类保持原样。
  */
 #ifndef SCREEN1VIEW_HPP
@@ -67,9 +67,9 @@ protected:
     static int8_t navigationAt(int16_t x, int16_t y);
     /** @brief 查找设置页已启用按钮。@param x 横坐标像素。@param y 纵坐标像素。@return 0..2或-1，不产生业务动作。 */
     int8_t settingAt(int16_t x, int16_t y) const;
-    /** @brief 更新标定状态、按钮资格及确认页；只读业务副本。@return 无返回值。 */
+    /** @brief 从控制快照更新标定阶段和按钮资格。@return 无返回值。 */
     void refreshCalibration();
-    /** @brief 处理设置页确认/取消或打开确认。@param index 本类命中的0..2按钮索引。@return 无返回值，最多提交一条请求。 */
+    /** @brief 处理当前阶段的设置页按钮。@param index 本类命中的0..2按钮索引。@return 无返回值，最多提交一条请求。 */
     void selectSetting(uint8_t index);
     /** @brief 取得约1Hz服务文本，仅变化字段触发重绘。@return 无返回值。 */
     void refreshStatus();
@@ -77,12 +77,17 @@ protected:
     void refreshClap();
     /** @brief 可见时刷新波形CPU快照及共同窗状态。@return 无返回值。 */
     void refreshWaveform();
+    /** @brief 刷新本地页/请求模式/生效模式的顶部两行状态。@return 无返回值。 */
+    void refreshMode();
+    /** @brief 当前本地页对应的生效模式是否已激活。@param page 本地页面。@return 已激活或未登记代次为true。 */
+    bool pageModeActive(Page page) const;
     uint32_t lastGeneration;
     bool haveGeneration;
     Page activePage;
     int8_t pressedControl;
     CalibrationAction confirmation;
-    MeasurementCalibrationSample confirmationSample;
+    CalibrationPhase calibrationPhase; /**< 上次刷新标定区的采集阶段。 */
+    uint32_t calibrationCompleted; /**< 上次刷新所见控制器状态变更计数。 */
     bool settingEnabled[3];
     bool requestRejected;
     touchgfx::Box navigationBackground;

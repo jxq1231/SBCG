@@ -50,7 +50,8 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,
  * @param   processing_allowed 本次前台是否允许处理；false不发送协议、不估计、不写时钟。
  * @return  无返回值。
  * @note    A不运行伺服或写时钟。B校正失败进入FAULT；每至少1000ms在TX空闲、fine硬件已知且无未决命令时
- *          撤销旧消费者并重新获取，不初始化时钟。恢复本身不产生有效偏差，实际关闭时钟保持FAULT；SYNC始终为0。
+ *          撤销旧消费者并重新获取，不初始化时钟；恢复成功还要求故障后收到250ms内的新鲜四时刻，避免
+ *          无数据时反复“恢复—再故障”。恢复本身不产生有效偏差，实际关闭时钟保持FAULT；SYNC始终为0。
  */
 void TimeSync_Process(uint32_t now_ms,bool processing_allowed);
 #endif

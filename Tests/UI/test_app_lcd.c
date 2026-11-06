@@ -20,7 +20,7 @@ const BoardIdentityProfile *BSP_BoardIdentity_Get(void){return &identity;}
 bool TimeSync_Deinit(void){return true;}
 bool TimeSync_Init(uint32_t n,const BoardIdentityProfile*p,uint32_t(*tick)(void),void(*log)(const char*,int))
 {assert(n==tick_ms&&p&&tick&&log);return true;}
-void TimeSync_Process(uint32_t n,bool allowed){assert(n==tick_ms&&allowed==!temperature_low);}
+void TimeSync_Process(uint32_t n,bool allowed){assert(n==tick_ms&&allowed);}
 bool AudioTimeAnchor_TakeObservation(AudioTimeAnchorObservation*out){*out=(AudioTimeAnchorObservation){0};return true;}
 void AudioTimeMapMonitor_Observe(uint32_t n,const AudioTimeAnchorObservation*out){assert(n==tick_ms&&out);}
 void SoundEventTime_Init(void(*log)(const char*,int)){assert(log);}

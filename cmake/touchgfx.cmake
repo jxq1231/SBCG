@@ -56,9 +56,18 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/BSP/bsp_touch.c
     App/Calibration/calibration_control.c
     App/UI/touchgfx_service.c App/UI/status_snapshot.c App/UI/status_view.c)
+set(SBCG_CALIBRATION_CAPTURE_MS 20000 CACHE STRING "Calibration capture timeout in milliseconds")
+set(SBCG_CALIBRATION_CONFIRM_MS 20000 CACHE STRING "Calibration confirmation timeout in milliseconds")
+foreach(_calibration_ms IN ITEMS SBCG_CALIBRATION_CAPTURE_MS SBCG_CALIBRATION_CONFIRM_MS)
+    if(NOT "${${_calibration_ms}}" MATCHES "^[1-9][0-9]*$" OR "${${_calibration_ms}}" GREATER_EQUAL 2147483647)
+        message(FATAL_ERROR "${_calibration_ms} must be a positive timeout below 2147483647 ms")
+    endif()
+endforeach()
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     SBCG_USE_LCD=1 SBCG_USE_TOUCHGFX=1 SBCG_USE_CALIBRATION_CONTROL=1
-    SBCG_USE_ADVANCED_UI=1)
+    SBCG_USE_ADVANCED_UI=1
+    SBCG_CALIBRATION_CAPTURE_MS=${SBCG_CALIBRATION_CAPTURE_MS}U
+    SBCG_CALIBRATION_CONFIRM_MS=${SBCG_CALIBRATION_CONFIRM_MS}U)
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     App/Measure/clap_ranging.c App/Network/clap_wire.c App/UI/waveform_service.c)
 # A 侧静音时 MakePlan 仍会执行周期搜索；Debug -O0 的耗时超过音频半块时限。
@@ -73,6 +82,8 @@ foreach(_target IN ITEMS ${CMAKE_PROJECT_NAME} TouchGFX)
     set_property(TARGET ${_target} PROPERTY CXX_STANDARD 17)
     set_property(TARGET ${_target} PROPERTY CXX_STANDARD_REQUIRED ON)
 endforeach()
+# 用户View与App共用模式观测接口：GUI库目标也需同一编译开关，否则模式状态行被条件编译掉。
+target_compile_definitions(TouchGFX PRIVATE SBCG_USE_MODE_OBSERVATION=1)
 # Both generated target CPP and Designer frontend CPP consume App interfaces.
 target_include_directories(stm32cubemx INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/App")
 

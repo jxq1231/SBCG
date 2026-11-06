@@ -7,6 +7,7 @@
 #include "touchgfx_service.h"
 #include "status_snapshot.h"
 #include "BSP/bsp_touchgfx_display.h"
+#include "BSP/bsp_touch.h"
 #include "BSP/bsp_console.h"
 #include <inttypes.h>
 #include <stddef.h>
@@ -14,6 +15,7 @@
 #include <stdio.h>
 
 #define UI_REFRESH_MS 1000U
+#define TOUCH_REPORT_IDLE_MS 5000U
 _Static_assert(ATOMIC_INT_LOCK_FREE == 2, "Display notifications require lock-free word atomics");
 _Static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "Display notifications require lock-free flag atomics");
 extern void MX_TouchGFX_Init(void);
@@ -22,12 +24,50 @@ static UI_TouchGFXSnapshot state;
 static UI_StatusText prepared_text;
 static bool attempted;
 static uint32_t last_update_ms, last_report_ms;
+/** 最近一次已上报的触控诊断；计数变化或空闲5秒才再输出，避免每秒刷屏。 */
+static BSP_TouchSnapshot touch_reported;
+static bool touch_have;
+static uint32_t touch_report_ms;
 /** UI_TouchGFX_Process入口到各返回路径的最大HAL毫秒；不含Report()日志格式化/发送。 */
 static uint32_t max_update_ms;
 static void (*emit_line)(const char *, int);
 static _Atomic(uint32_t) completed_buffer_mask;
 static _Atomic(bool) invalid_visible_address;
 static _Atomic(uint32_t) pending_visible_address;
+
+/** @brief 比较触控诊断是否变化；只比较真实字段，不依赖结构体填充。 */
+static bool TouchChanged(const BSP_TouchSnapshot *a, const BSP_TouchSnapshot *b)
+{
+    return a->ready != b->ready || a->sample_valid != b->sample_valid ||
+        a->pressed != b->pressed || a->x != b->x || a->y != b->y ||
+        a->reads != b->reads || a->io_errors != b->io_errors ||
+        a->busy_skips != b->busy_skips || a->id_mismatches != b->id_mismatches ||
+        a->last_hal_error != b->last_hal_error || a->max_read_ms != b->max_read_ms;
+}
+
+/** @brief 按变化或5秒空闲输出一次$TOUCH诊断，区分触摸未派发与握手未推进。 */
+static void ReportTouch(uint32_t now_ms)
+{
+    BSP_TouchSnapshot touch;
+    BSP_Touch_GetSnapshot(&touch);
+    if (touch_have && !TouchChanged(&touch, &touch_reported) &&
+        (uint32_t)(now_ms - touch_report_ms) < TOUCH_REPORT_IDLE_MS)
+    {
+        return;
+    }
+    char line[192];
+    const int length = snprintf(line, sizeof line,
+        "$TOUCH,READY=%u,VALID=%u,PRESSED=%u,X=%u,Y=%u,READS=%" PRIu32
+        ",IO_ERR=%" PRIu32 ",BUSY=%" PRIu32 ",ID_BAD=%" PRIu32
+        ",LAST_ERR=%" PRIu32 ",MAX_MS=%" PRIu32 "\r\n",
+        touch.ready ? 1U : 0U, touch.sample_valid ? 1U : 0U, touch.pressed ? 1U : 0U,
+        (unsigned)touch.x, (unsigned)touch.y, touch.reads, touch.io_errors,
+        touch.busy_skips, touch.id_mismatches, touch.last_hal_error, touch.max_read_ms);
+    if (length > 0 && (size_t)length < sizeof line) { emit_line(line, length); }
+    touch_reported = touch;
+    touch_have = true;
+    touch_report_ms = now_ms;
+}
 
 /** @brief 记录UI前台入口begin_ms到当前的饱和最大HAL毫秒耗时；无返回值，仅前台。 */
 static void RecordUpdateTime(uint32_t begin_ms)
@@ -64,6 +104,7 @@ static void Report(uint32_t now_ms, const BSP_TouchGFXDisplaySnapshot *lcd)
 {
     if (emit_line == NULL || (uint32_t)(now_ms - last_report_ms) < UI_REFRESH_MS) { return; }
     last_report_ms = now_ms;
+    ReportTouch(now_ms);
     const char *name = lcd->status == BSP_TOUCHGFX_RUNNING ? "RUNNING" :
         lcd->status == BSP_TOUCHGFX_READY ? "READY" : lcd->status == BSP_TOUCHGFX_ERROR ? "ERROR" : "OFF";
     const bool valid = state.data_generation != 0U && state.page.temperature_valid;

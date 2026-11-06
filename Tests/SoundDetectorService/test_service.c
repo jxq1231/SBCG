@@ -50,7 +50,7 @@ static void TestCommit(void)
  unsigned before=all_logs;SoundDetectorService_Process(1000,&health);CHECK(all_logs==before && Snap().candidates==0);
  borrowed=false;CHECK(SoundDetectorService_Complete(true));CHECK(Snap().candidates==1 && Snap().pending==1);
  memset(pcm,0,sizeof pcm);SoundDetectorService_Process(250,&health);
- CHECK(candidate_logs==1 && strstr(last_candidate,",FIRST=8,CONFIRMED=15,E_AC=64,PEAK=8,CLIP=0,LOCAL=1,SYNC=0,TOA_US=NA\r\n"));
+ CHECK(candidate_logs==1 && strstr(last_candidate,",FIRST=8,CONFIRMED=15,E_AC=64,PEAK=8,CLIP=0,CAND=0,LOCAL=1,SYNC=0,TOA_US=NA\r\n"));
  Setup(0,0);Tone(8188,8192,0);CHECK(Deliver(0,true));CHECK(Snap().candidates==0);
  block.first_frame=8192;block.completed_ms=170;health.last_callback_ms=170;Tone(0,8192,0);CHECK(Deliver(170,true));
  SoundDetectorService_Process(250,&health);CHECK(candidate_logs==1 && strstr(last_candidate,"FIRST=8188,CONFIRMED=8195,"));

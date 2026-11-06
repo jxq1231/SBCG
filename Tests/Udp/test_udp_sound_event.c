@@ -3,9 +3,11 @@
  * @brief       在主机桩网络边界验证真实声音事件UDP服务与配对核心。
  * @details     覆盖右锚发布延迟、域撤销、等待边界、回绕、容量和歧义拒绝；
  *              成功配对提供确定PCM走真实相关，另测缺窗/低相关拒绝与1m/2m恢复。
+ *              模式观测构建另验证MDP1格式、双板角色和UDP端点限制。
  * @note        仅替换LwIP收发，不替换UDP服务或配对算法，不代表实物网络验收。
  */
 #include "Network/udp_sound_event.h"
+#include "Network/business_wire.h"
 #include "Network/temperature_wire.h"
 #include "Network/sound_event_wire.h"
 #include "lwip/udp.h"
@@ -26,8 +28,12 @@ static udp_recv_fn receive_cb;
 static void *receive_arg;
 /** 发送缓冲需容纳RST2/温度等小包和WFR1波形包(24+512*2=1048字节)。 */
 static unsigned char sent[1200];
+static unsigned char sent_ring[4][1200];
+static unsigned short sent_ring_len[4];
 static unsigned char wave_sent[1048];
 static unsigned int wave_sends;
+static unsigned int wave_pcm_writes;
+static bool fail_wave_pcm_write;
 static unsigned char rx_payload[SOUND_EVENT_WIRE_BYTES];
 static unsigned int sends, allocs, frees;
 static SoundPairResult paired;
@@ -55,16 +61,63 @@ struct pbuf *pbuf_alloc(pbuf_layer layer, u16_t len, pbuf_type type)
 { (void)layer;(void)type; ++allocs; fake_pbuf.tot_len=len; fake_pbuf.payload=sent; return &fake_pbuf; }
 err_t pbuf_take(struct pbuf *p, const void *data, u16_t len)
 { assert(p==&fake_pbuf); memcpy(p->payload,data,len); return ERR_OK; }
+/**
+ * @brief 模拟pbuf偏移写入，并支持仅对WFR1 PCM阶段注入故障。
+ * @param p 非NULL且为测试发送缓冲。
+ * @param data 非NULL只读数据，调用期间借用。
+ * @param len 字节数，须在缓冲范围内。
+ * @param offset 写入偏移，单位字节。
+ * @return 注入失败时ERR_MEM，否则ERR_OK。
+ */
+err_t pbuf_take_at(struct pbuf *p, const void *data, u16_t len, u16_t offset)
+{
+    assert(p==&fake_pbuf && (unsigned)offset+len<=p->tot_len);
+    if(len==1024U && (offset==24U || offset==BUSINESS_WIRE_HEADER_BYTES+24U))
+    {
+        ++wave_pcm_writes;
+        if(fail_wave_pcm_write)return ERR_MEM;
+    }
+    memcpy((unsigned char*)p->payload+offset,data,len);
+    return ERR_OK;
+}
 u8_t pbuf_free(struct pbuf *p) { (void)p; ++frees; return 1U; }
 err_t udp_sendto(struct udp_pcb *p, struct pbuf *buf, const ip_addr_t *dest, u16_t port)
 {
     (void)p;(void)dest;assert(port==5009U); ++sends;
     if (buf->tot_len == sizeof wave_sent)
     { memcpy(wave_sent, buf->payload, sizeof wave_sent); ++wave_sends; }
+    {
+        const unsigned slot=(sends-1U)&3U;
+        memcpy(sent_ring[slot], buf->payload, buf->tot_len);
+        sent_ring_len[slot]=buf->tot_len;
+    }
     return ERR_OK;
 }
+/**
+ * @brief 模拟跨pbuf片段读取，短链仅返回实际字节数。
+ * @param p 非NULL测试报文，只读。
+ * @param data 非NULL输出，调用方持有。
+ * @param len 请求读取的字节数。
+ * @param offset 从报文头起算的字节偏移。
+ * @return 已复制的字节数。
+ */
 u16_t pbuf_copy_partial(const struct pbuf *p, void *data, u16_t len, u16_t offset)
-{ assert(p!=NULL); assert(offset==0U && len<=p->tot_len); memcpy(data,(const uint8_t*)p->payload,len); return len; }
+{
+    assert(p!=NULL && (unsigned)offset<=p->tot_len && len<=p->tot_len-offset);
+    u16_t copied=0U;
+    for(;p!=NULL && copied<len;p=p->next)
+    {
+        const u16_t size=p->len==0U?p->tot_len:p->len;
+        if(offset>=size){offset=(u16_t)(offset-size);continue;}
+        const u16_t available=(u16_t)(size-offset);
+        const u16_t remaining=(u16_t)(len-copied);
+        const u16_t take=available<remaining?available:remaining;
+        memcpy((uint8_t*)data+copied,(const uint8_t*)p->payload+offset,take);
+        copied=(u16_t)(copied+take);
+        offset=0U;
+    }
+    return copied;
+}
 /** @brief 记录波形证据拒绝日志是否出现，不修改服务状态。 */
 static void Log(const char *line,int length)
 { (void)length;if(strstr(line,"STATUS=WAVE_UNAVAILABLE,")!=NULL)saw_wave_rejection=true; }
@@ -98,6 +151,26 @@ static void ReceiveBytes(const uint8_t *wire,uint16_t length)
     packet.tot_len=length;
     receive_cb(receive_arg,&fake_pcb,&packet,&peer_ip,5009U);
 }
+/**
+ * @brief 把报文作为三段pbuf送入真实接收回调。
+ * @param wire 非NULL完整报文，调用期间借用。
+ * @param length 报文字节数，至少41。
+ * @param short_tail 为true时最后一个分段少一字节。
+ * @return 无返回值；断言接收回调恰好释放一次。
+ */
+static void ReceiveSplit(const uint8_t *wire,uint16_t length,bool short_tail)
+{
+    assert(length>41U);
+    struct pbuf tail={.payload=(void*)(wire+40U),.len=(u16_t)(length-40U-(short_tail?1U:0U)),
+                      .tot_len=(u16_t)(length-40U)};
+    struct pbuf middle={.next=&tail,.payload=(void*)(wire+17U),.len=23U,
+                        .tot_len=(u16_t)(length-17U)};
+    struct pbuf first={.next=&middle,.payload=(void*)wire,.len=17U,.tot_len=length};
+    const unsigned before=frees;
+    receive_cb(receive_arg,&fake_pcb,&first,&peer_ip,5009U);
+    assert(frees==before+1U);
+}
+
 /**
  * @brief 生成确定的宽带PCM；两端相同输入通过真实互相关，非替换配对结果。
  * @param pcm 非NULL可写1408点缓冲，调用方持有。
@@ -140,7 +213,7 @@ static void ReceiveCapturedWire(const uint8_t *wire)
     const uint64_t start=event.time_ns+UINT64_C(10666667);
     for(unsigned i=0U;i<8U;++i)wave[12U+i]=(uint8_t)(start>>(8U*(7U-i)));
     wave[20]=2U;memcpy(wave+24U,pcm+512U,1024U);
-    ReceiveBytes(wave,sizeof wave);
+    ReceiveSplit(wave,sizeof wave,false);
     ReceiveBytes(wire,SOUND_EVENT_WIRE_BYTES);
 }
 
@@ -487,6 +560,15 @@ static void TestWaveWindowCut(void)
     assert(start_ns == UINT64_C(1010661458));
     const uint16_t expected_offset = (uint16_t)(event.frame + 512U - slice.first_frame);
     assert(memcmp(wave_sent + 24U, pcm + expected_offset, 1024U) == 0);
+    const unsigned before_sends=sends, before_allocs=allocs, before_frees=frees;
+    const unsigned before_writes=wave_pcm_writes;
+    fail_wave_pcm_write=true;
+    ++event.sequence;
+    assert(SendCapturedEvent(tick_ms,&event));
+    fail_wave_pcm_write=false;
+    /* PCM失败的窗口不能发送，原SEVT仍照常提交，两份pbuf均释放。 */
+    assert(wave_pcm_writes==before_writes+1U && wave_sends==1U);
+    assert(sends==before_sends+1U && allocs==before_allocs+2U && frees==before_frees+2U);
 }
 /**
  * @brief 缺失/低相关波形必须拒绝，成功的1m/2m波形不受320mm初始参考影响。
@@ -500,18 +582,18 @@ static void TestWaveformEvidence(const BoardIdentityProfile *profile)
     SoundEventRecord remote=local;remote.side=SOUND_SIDE_B;
     remote.time_ns=UINT64_C(1002915452);remote.toa_candidate_count=2U;
     remote.toa_candidate_q16[0]=-6236500;remote.toa_candidate_q16[1]=0;
-    for(unsigned failure=0U;failure<3U;++failure)
+    for(unsigned failure=0U;failure<4U;++failure)
     {
         InitService(profile,100U);saw_wave_rejection=false;
         const unsigned before=pair_count;
         if(failure==0U)assert(UDPSoundEvent_Send(100U,&local)); /* 无本板捕获。 */
         else assert(SendCapturedEvent(100U,&local));
-        if(failure==2U)
+        if(failure>=2U)
         {
-            /* 合法WFR1头，但全零PCM不能通过相关，禁止退回候选齿。 */
+            /* 全零或最后一字节缺失均不得产生有效波形证据。 */
             uint8_t wave[1048]={0};memcpy(wave,"WFR1",4U);wave[4]=1U;wave[5]=SOUND_SIDE_B;
             wave[11]=71U;wave[12+7]=1U;wave[20]=2U;
-            ReceiveBytes(wave,sizeof wave);
+            ReceiveSplit(wave,sizeof wave,failure==3U);
         }
         assert(SoundEventWire_Encode(&remote,rx_payload,sizeof rx_payload)==SOUND_EVENT_WIRE_OK);
         ReceiveBytes(rx_payload,sizeof rx_payload);UDPSoundEvent_Process(101U);
@@ -533,6 +615,516 @@ static void TestWaveformEvidence(const BoardIdentityProfile *profile)
     puts("PASS waveform evidence: missing local/remote and low correlation reject; real NCC 1m/2m recover");
 }
 /** @brief 运行真实UDP集成场景；无参数，成功返回0，失败由断言终止。 */
+#ifdef SBCG_USE_MODE_OBSERVATION
+static const uint8_t mode_ready_wire[MODE_CONTROL_WIRE_BYTES]={
+    'M','D','P','1',1U,3U,2U,2U,
+    0x01U,0x23U,0x45U,0x67U,0x89U,0xabU,0xcdU,0xefU,
+    0x10U,0x32U,0x54U,0x76U,0x98U,0xbaU,0xdcU,0xfeU,
+    0,0,0,0,0,0,0,7U,0,0,0,0,0,0,0,0
+};
+static ModeControlMessage received_mode;
+static unsigned mode_count;
+
+/**
+ * @brief 保存MDP1接收回调副本并累计调用次数。
+ * @param message 非NULL只读消息，仅本次借用。
+ * @return 无返回值。
+ */
+static void ModeControlSink(const ModeControlMessage *message)
+{
+    received_mode=*message;
+    ++mode_count;
+}
+
+/**
+ * @brief 用独立字节向量验证大端布局及非法字段拒绝。
+ * @return 无返回值，失败时终止测试。
+ */
+static void TestModeControlWire(void)
+{
+    ModeControlMessage message;
+    assert(ModeControlWire_Decode(mode_ready_wire,sizeof mode_ready_wire,&message));
+    assert(message.op==MODE_CONTROL_READY && message.mode==MODE_CLAP &&
+           message.role==BOARD_ROLE_B && message.mode_seq==7U && message.probe_id==0U);
+    assert(message.a_boot==UINT64_C(0x0123456789abcdef) &&
+           message.b_boot==UINT64_C(0x1032547698badcfe));
+    uint8_t wire[MODE_CONTROL_WIRE_BYTES];
+    assert(ModeControlWire_Encode(&message,wire,sizeof wire));
+    assert(memcmp(wire,mode_ready_wire,sizeof wire)==0);
+    assert(!ModeControlWire_Decode(wire,sizeof wire-1U,&message));
+
+    const struct { uint8_t offset; uint8_t value; } invalid[]={
+        {0U,'X'},{4U,2U},{5U,0xffU},{6U,0U},{6U,5U},{7U,1U},{7U,0U},{31U,0U},{39U,1U}
+    };
+    for(size_t i=0U;i<sizeof invalid/sizeof invalid[0];++i)
+    {
+        memcpy(wire,mode_ready_wire,sizeof wire);
+        wire[invalid[i].offset]=invalid[i].value;
+        assert(!ModeControlWire_Decode(wire,sizeof wire,&message));
+        assert(message.op==MODE_CONTROL_READY && message.mode_seq==7U);
+    }
+
+    ModeControlMessage hello={
+        .op=MODE_CONTROL_HELLO,.mode=MODE_NONE,.role=BOARD_ROLE_B,.b_boot=3U
+    };
+    assert(ModeControlWire_Encode(&hello,wire,sizeof wire));
+    assert(ModeControlWire_Decode(wire,sizeof wire,&message) && message.a_boot==0U);
+    hello.b_boot=0U;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire) && wire[23]==3U);
+    hello.b_boot=3U;
+    hello.mode=MODE_RANGE;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire));
+    hello.mode=MODE_NONE;
+    hello.mode_seq=1U;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire));
+    hello.mode_seq=0U;
+    hello.probe_id=1U;
+    assert(!ModeControlWire_Encode(&hello,wire,sizeof wire));
+
+    ModeControlMessage ping={
+        .op=MODE_CONTROL_PING,.mode=MODE_WAVE,.role=BOARD_ROLE_A,
+        .a_boot=1U,.b_boot=3U,.mode_seq=4U,.probe_id=UINT64_MAX
+    };
+    assert(ModeControlWire_Encode(&ping,wire,sizeof wire));
+    assert(ModeControlWire_Decode(wire,sizeof wire,&message) && message.probe_id==UINT64_MAX);
+    ping.op=MODE_CONTROL_PONG;
+    ping.role=BOARD_ROLE_B;
+    assert(ModeControlWire_Encode(&ping,wire,sizeof wire));
+    ping.probe_id=0U;
+    assert(!ModeControlWire_Encode(&ping,wire,sizeof wire));
+    ping.probe_id=1U;
+    ping.a_boot=0U;
+    assert(!ModeControlWire_Encode(&ping,wire,sizeof wire));
+}
+
+/**
+ * @brief 检查真实UDP分派、端点拒绝、发送角色及pbuf归还。
+ * @param profile 非NULL只读A板身份，由测试入口提供，仅本次借用。
+ * @return 无返回值，失败时终止测试。
+ */
+static void TestModeControlTransport(const BoardIdentityProfile *profile)
+{
+    const ModeControlMessage prepare={
+        .op=MODE_CONTROL_PREPARE,.mode=MODE_CLAP,.role=BOARD_ROLE_A,
+        .a_boot=UINT64_C(0x0123456789abcdef),.b_boot=UINT64_C(0x1032547698badcfe),
+        .mode_seq=7U
+    };
+    assert(UDPSoundEvent_Init(0U,profile,Tick,Log));
+    UDPSoundEvent_SetModeControlSink(ModeControlSink);
+    assert(!UDPSoundEvent_SendModeControl(&prepare));
+    UDPSoundEvent_Process(0U);
+
+    const unsigned before_send=sends,before_alloc=allocs,before_free=frees;
+    assert(UDPSoundEvent_SendModeControl(&prepare));
+    assert(sends==before_send+1U && allocs==before_alloc+1U && frees==before_free+1U);
+    assert(fake_pbuf.tot_len==MODE_CONTROL_WIRE_BYTES);
+    uint8_t prepare_wire[MODE_CONTROL_WIRE_BYTES];
+    memcpy(prepare_wire,mode_ready_wire,sizeof prepare_wire);
+    prepare_wire[5]=2U;
+    prepare_wire[7]=1U;
+    assert(memcmp(sent,prepare_wire,sizeof prepare_wire)==0);
+
+    const unsigned before_rx_free=frees;
+    ReceiveBytes(mode_ready_wire,sizeof mode_ready_wire);
+    assert(mode_count==1U && received_mode.op==MODE_CONTROL_READY &&
+           received_mode.b_boot==prepare.b_boot && received_mode.mode_seq==7U);
+    ReceiveBytes(prepare_wire,sizeof prepare_wire); /* 自身角色报文 */
+    ReceiveBytes(mode_ready_wire,sizeof mode_ready_wire-1U); /* 长度不符 */
+    uint8_t malformed[MODE_CONTROL_WIRE_BYTES];
+    memcpy(malformed,mode_ready_wire,sizeof malformed);
+    malformed[4]=0U;
+    ReceiveBytes(malformed,sizeof malformed);
+    struct pbuf packet={0};
+    packet.payload=(void *)mode_ready_wire;
+    packet.tot_len=sizeof mode_ready_wire;
+    receive_cb(receive_arg,&fake_pcb,&packet,&peer_ip,5008U);
+    ip_addr_t unknown_ip;
+    IP_ADDR4(&unknown_ip,192,168,10,3);
+    receive_cb(receive_arg,&fake_pcb,&packet,&unknown_ip,5009U);
+
+    uint32_t rx_ok,rx_bad,foreign;
+    UDPSoundEvent_GetSnapshot(NULL,NULL,NULL,&rx_ok,&rx_bad,&foreign);
+    assert(rx_ok==1U && rx_bad==3U && foreign==2U);
+    assert(mode_count==1U && frees==before_rx_free+6U);
+    assert(!UDPSoundEvent_SendModeControl(&received_mode)); /* 对端角色 */
+    gnetif.flags=NETIF_FLAG_UP;
+    assert(!UDPSoundEvent_SendModeControl(&prepare));
+    gnetif.flags=NETIF_FLAG_UP|NETIF_FLAG_LINK_UP;
+    assert(sends==before_send+1U && allocs==before_alloc+1U);
+
+    BoardIdentityProfile board_b=*profile;
+    board_b.role=BOARD_ROLE_B;
+    assert(UDPSoundEvent_Init(0U,&board_b,Tick,Log));
+    UDPSoundEvent_Process(0U);
+    ReceiveBytes(prepare_wire,sizeof prepare_wire);
+    assert(mode_count==1U); /* 初始化清掉前一个消费者 */
+    UDPSoundEvent_SetModeControlSink(ModeControlSink);
+    ReceiveBytes(prepare_wire,sizeof prepare_wire);
+    assert(mode_count==2U && received_mode.op==MODE_CONTROL_PREPARE &&
+           received_mode.role==BOARD_ROLE_A);
+    assert(!UDPSoundEvent_SendModeControl(&prepare));
+}
+
+/* ==================== MDB1业务封装 ==================== */
+static UDPSoundEvent_BusinessContext test_business_context;
+static bool test_business_enabled;
+
+/** @brief 读取最近第back个已发送载荷。 @param back 0为最后一个。 @param length 非NULL输出长度。 @return 只读环形槽。 */
+static const uint8_t *RecentSent(unsigned back,uint16_t *length)
+{
+    const unsigned slot=(sends>=1U+back)?((sends-1U-back)&3U):0U;
+    if(length!=NULL)*length=sent_ring_len[slot];
+    return sent_ring[slot];
+}
+
+/** @brief 测试用闸门提供者；关闭时模拟未登记代次的阶段一兼容路径。 @param out 上下文输出。 @return 启用且填写成功为true。 */
+static bool TestBusinessProvider(UDPSoundEvent_BusinessContext *out)
+{
+    if(!test_business_enabled)return false;
+    *out=test_business_context;
+    return true;
+}
+/** @brief 配置测试闸门上下文。 @param role 本板角色。 @param a_boot/b_boot/mode_seq 世代元组。 @param allowed 是否允许业务。 @return 无返回值。 */
+static void EnableBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
+                           uint64_t mode_seq,bool allowed)
+{
+    test_business_context=(UDPSoundEvent_BusinessContext){
+        true,allowed,false,false,role,a_boot,b_boot,mode_seq};
+    test_business_enabled=true;
+}
+/** @brief 配置CLAP闸门上下文：只有clap_allowed，测距类型关闭。 @return 无返回值。 */
+static void EnableClapBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
+                               uint64_t mode_seq)
+{
+    test_business_context=(UDPSoundEvent_BusinessContext){
+        true,false,true,false,role,a_boot,b_boot,mode_seq};
+    test_business_enabled=true;
+}
+/** @brief 配置WAVE闸门上下文：只有wave_allowed，其他模式关闭。 @return 无返回值。 */
+static void EnableWaveBusiness(BoardRole role,uint64_t a_boot,uint64_t b_boot,
+                               uint64_t mode_seq)
+{
+    test_business_context=(UDPSoundEvent_BusinessContext){
+        true,false,false,true,role,a_boot,b_boot,mode_seq};
+    test_business_enabled=true;
+}
+/** @brief 按给定世代封装一条内层报文。 @return 封装后的总字节数。 */
+static uint16_t WrapBusiness(const uint8_t *inner,uint16_t inner_len,BoardRole role,
+                             uint64_t a_boot,uint64_t b_boot,uint64_t mode_seq,
+                             uint8_t *out)
+{
+    const BusinessWireMessage message={role,inner_len,a_boot,b_boot,mode_seq,inner};
+    assert(BusinessWire_Encode(&message,out,BUSINESS_WIRE_MAX_BYTES));
+    return (uint16_t)(BUSINESS_WIRE_HEADER_BYTES+inner_len);
+}
+/**
+ * @brief 验证MDB1对RST2/RAK2的封装、世代拒绝、原始旧包拒绝和模式阻断。
+ * @return 无返回值，失败由断言终止。
+ */
+static void TestBusinessRangingGate(void)
+{
+    BoardIdentityProfile a={0},b={0};
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    RangingStatusMessage status={0};
+    status.state=RANGING_STATE_ACQUIRING;status.domain=1U;
+    status.authority_clock_epoch=3U;status.state_revision=10U;status.sound_speed_mm_s=343000U;
+    uint8_t status_inner[RANGING_STATUS_WIRE_BYTES];
+    assert(RangingStatusWire_Encode(&status,status_inner,sizeof status_inner)==
+           RANGING_STATUS_WIRE_OK);
+    RangingStatusAck ack={RANGING_STATUS_ACK_OK,7U,3U,10U,0U};
+    uint8_t ack_inner[RANGING_STATUS_ACK_BYTES];
+    assert(RangingStatusAck_Encode(&ack,ack_inner,sizeof ack_inner)==RANGING_STATUS_WIRE_OK);
+    static uint8_t wrapped[BUSINESS_WIRE_MAX_BYTES];
+
+    /* B：接收A的RST2，发送RAK2。 */
+    assert(UDPSoundEvent_Init(0U,&b,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetRangingStatusSink(RangingSink);
+    EnableBusiness(BOARD_ROLE_B,11U,22U,3U,true);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    const unsigned status_before=ranging_count;
+    uint16_t length=WrapBusiness(status_inner,sizeof status_inner,BOARD_ROLE_A,
+                                 11U,22U,3U,wrapped);
+    ReceiveBytes(wrapped,length);
+    assert(ranging_count==status_before+1U && received_ranging.state==RANGING_STATE_ACQUIRING);
+    UDPSoundEvent_BusinessCounters counters;
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_ok==1U && counters.rx_blocked==0U);
+
+    length=WrapBusiness(status_inner,sizeof status_inner,BOARD_ROLE_A,11U,22U,4U,wrapped);
+    ReceiveBytes(wrapped,length);
+    assert(ranging_count==status_before+1U);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_blocked==1U);
+
+    ReceiveBytes(status_inner,sizeof status_inner); /* 原始旧RST2不得写入状态。 */
+    assert(ranging_count==status_before+1U);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_unwrapped==1U);
+
+    unsigned send_before=sends;
+    assert(UDPSoundEvent_SendRangingAck(1U,&ack));
+    assert(sends==send_before+1U);
+    uint16_t sent_length=0U;
+    const uint8_t *packet=RecentSent(0U,&sent_length);
+    assert(sent_length==BUSINESS_WIRE_HEADER_BYTES+sizeof ack_inner);
+    BusinessWireMessage decoded;
+    assert(BusinessWire_Decode(packet,sent_length,&decoded));
+    assert(decoded.role==BOARD_ROLE_B && decoded.a_boot==11U && decoded.b_boot==22U &&
+           decoded.mode_seq==3U && memcmp(decoded.inner,ack_inner,sizeof ack_inner)==0);
+
+    EnableBusiness(BOARD_ROLE_B,11U,22U,3U,false); /* 非ACTIVE模式阻断。 */
+    send_before=sends;
+    assert(!UDPSoundEvent_SendRangingAck(1U,&ack));
+    assert(sends==send_before);
+    const unsigned blocked_count=ranging_count;
+    length=WrapBusiness(status_inner,sizeof status_inner,BOARD_ROLE_A,11U,22U,3U,wrapped);
+    ReceiveBytes(wrapped,length);
+    assert(ranging_count==blocked_count);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.tx_blocked==1U && counters.rx_blocked==2U);
+
+    test_business_enabled=false; /* 未登记代次：保持阶段一原始兼容。 */
+    ReceiveBytes(status_inner,sizeof status_inner);
+    assert(ranging_count==blocked_count+1U);
+
+    /* A：接收B的RAK2，发送RST2。 */
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetRangingAckSink(RangingAckSink);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,3U,true);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    const unsigned ack_before=ranging_ack_count;
+    length=WrapBusiness(ack_inner,sizeof ack_inner,BOARD_ROLE_B,11U,22U,3U,wrapped);
+    ReceiveBytes(wrapped,length);
+    assert(ranging_ack_count==ack_before+1U && received_ranging_ack.state_revision==10U);
+    send_before=sends;
+    assert(UDPSoundEvent_SendRangingStatus(1U,&status));
+    assert(sends==send_before+1U);
+    packet=RecentSent(0U,&sent_length);
+    assert(sent_length==BUSINESS_WIRE_HEADER_BYTES+sizeof status_inner);
+    assert(BusinessWire_Decode(packet,sent_length,&decoded));
+    assert(decoded.role==BOARD_ROLE_A && memcmp(decoded.inner,status_inner,
+                                                sizeof status_inner)==0);
+    puts("PASS MDB1 ranging: RST2/RAK2 wrapped, stale generation/raw packet rejected, mode block");
+}
+
+/**
+ * @brief 验证B板SEV2与WFR1均以MDB1封装发送且内层逐字节保留。
+ * @return 无返回值，失败由断言终止。
+ */
+static void TestBusinessSoundWaveGate(void)
+{
+    BoardIdentityProfile b={0};
+    b.role=BOARD_ROLE_B;
+    b.peer_ip[0]=192U;b.peer_ip[1]=168U;b.peer_ip[2]=10U;b.peer_ip[3]=1U;
+    assert(UDPSoundEvent_Init(100U,&b,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=100U;UDPSoundEvent_Process(100U);
+    EnableBusiness(BOARD_ROLE_B,11U,22U,3U,true);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    SoundEventRecord event={true,SOUND_EVENT_CHIRP,80U,SOUND_SIDE_B,1U,1U,5U,
+                            UINT64_C(1000000000),0U,0U,0U,{0,0,0,0}};
+    const unsigned before=sends;
+    const unsigned before_writes=wave_pcm_writes;
+    assert(SendCapturedEvent(100U,&event));
+    assert(sends==before+2U && wave_pcm_writes==before_writes+1U);
+    uint16_t wave_length=0U,event_length=0U;
+    const uint8_t *event_packet=RecentSent(0U,&event_length);
+    const uint8_t *wave_packet=RecentSent(1U,&wave_length);
+    BusinessWireMessage decoded;
+    assert(wave_length==BUSINESS_WIRE_HEADER_BYTES+1048U);
+    assert(BusinessWire_Decode(wave_packet,wave_length,&decoded));
+    assert(decoded.role==BOARD_ROLE_B && decoded.inner_length==1048U &&
+           decoded.a_boot==11U && decoded.b_boot==22U && decoded.mode_seq==3U &&
+           memcmp(decoded.inner,"WFR1",4U)==0);
+    assert(event_length==BUSINESS_WIRE_HEADER_BYTES+SOUND_EVENT_WIRE_BYTES);
+    assert(BusinessWire_Decode(event_packet,event_length,&decoded));
+    assert(decoded.inner_length==SOUND_EVENT_WIRE_BYTES &&
+           memcmp(decoded.inner,"SEVT",4U)==0);
+
+    uint8_t wave_wire[BUSINESS_WIRE_HEADER_BYTES+1048U];
+    uint8_t event_wire[BUSINESS_WIRE_HEADER_BYTES+SOUND_EVENT_WIRE_BYTES];
+    memcpy(wave_wire,wave_packet,sizeof wave_wire);
+    memcpy(event_wire,event_packet,sizeof event_wire);
+    BoardIdentityProfile a=b;
+    a.role=BOARD_ROLE_A;
+    a.peer_ip[3]=2U;
+    InitService(&a,100U);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,3U,true);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    SoundEventRecord local=event;
+    local.side=SOUND_SIDE_A;
+    local.time_ns-=UINT64_C(900000);
+    assert(SendCapturedEvent(100U,&local));
+    ReceiveSplit(wave_wire,sizeof wave_wire,false);
+    ReceiveBytes(event_wire,sizeof event_wire);
+    const unsigned pairs_before=pair_count;
+    UDPSoundEvent_Process(101U);
+    assert(pair_count==pairs_before+1U && paired.valid && paired.waveform_refined);
+    puts("PASS MDB1 sound/wave: exact WFR1 bytes and refinement after chained receive");
+}
+
+static uint8_t aux_rx[128];
+static uint16_t aux_rx_length;
+static unsigned aux_rx_count;
+/** @brief 保存MDB1解封后的CLP1/CLA1内层，供角色/世代测试断言。 */
+static void AuxSink(const uint8_t *data,uint16_t length)
+{
+    if(length>sizeof aux_rx)return;
+    memcpy(aux_rx,data,length);aux_rx_length=length;++aux_rx_count;
+}
+/**
+ * @brief 验证CLP1/CLA1在CLAP模式下的MDB1封装、方向/世代/原始旧包拒绝。
+ * @return 无返回值，失败由断言终止。
+ */
+static void TestBusinessShortGate(void)
+{
+    BoardIdentityProfile a={0},b={0};
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    static uint8_t clp1[80],cla1[24],wrapped[BUSINESS_WIRE_MAX_BYTES];
+    memset(clp1,0,sizeof clp1);memcpy(clp1,"CLP1",4U);
+    memset(cla1,0,sizeof cla1);memcpy(cla1,"CLA1",4U);
+    UDPSoundEvent_BusinessCounters counters;
+    BusinessWireMessage decoded;
+
+    /* A在CLAP模式发送CLP1，必须带MDB1外头且内层逐字节保留。 */
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableClapBusiness(BOARD_ROLE_A,11U,22U,5U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    unsigned before=sends;
+    assert(UDPSoundEvent_SendProtectedShort(clp1,sizeof clp1));
+    assert(sends==before+1U);
+    uint16_t length=0U;
+    const uint8_t *packet=RecentSent(0U,&length);
+    assert(length==BUSINESS_WIRE_HEADER_BYTES+sizeof clp1);
+    assert(BusinessWire_Decode(packet,length,&decoded));
+    assert(decoded.role==BOARD_ROLE_A && decoded.inner_length==sizeof clp1 &&
+           decoded.a_boot==11U && decoded.b_boot==22U && decoded.mode_seq==5U &&
+           memcmp(decoded.inner,clp1,sizeof clp1)==0);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,5U,true); /* 测距模式不能发送CLP1。 */
+    before=sends;
+    assert(!UDPSoundEvent_SendProtectedShort(clp1,sizeof clp1));
+    assert(sends==before);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.tx_blocked==1U);
+
+    /* B在CLAP模式接收封装CLP1并交付辅助消费者。 */
+    assert(UDPSoundEvent_Init(0U,&b,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableClapBusiness(BOARD_ROLE_B,11U,22U,5U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    uint16_t wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_A,11U,22U,5U,wrapped);
+    aux_rx_count=0U;
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U && aux_rx_length==sizeof clp1 &&
+           memcmp(aux_rx,clp1,sizeof clp1)==0);
+    wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_A,11U,22U,6U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* 旧世代 */
+    assert(aux_rx_count==1U);
+    ReceiveBytes(clp1,sizeof clp1); /* 原始旧包 */
+    assert(aux_rx_count==1U);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_blocked==1U && counters.rx_unwrapped==1U);
+    EnableBusiness(BOARD_ROLE_B,11U,22U,5U,true); /* 测距模式不能接收CLP1。 */
+    wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_A,11U,22U,5U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U);
+
+    /* B发送CLA1，A接收；错误方向被拒绝。 */
+    EnableClapBusiness(BOARD_ROLE_B,11U,22U,5U);
+    before=sends;
+    assert(UDPSoundEvent_SendProtectedShort(cla1,sizeof cla1));
+    assert(sends==before+1U);
+    packet=RecentSent(0U,&length);
+    assert(length==BUSINESS_WIRE_HEADER_BYTES+sizeof cla1);
+    assert(BusinessWire_Decode(packet,length,&decoded));
+    assert(decoded.role==BOARD_ROLE_B && memcmp(decoded.inner,cla1,sizeof cla1)==0);
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableClapBusiness(BOARD_ROLE_A,11U,22U,5U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    aux_rx_count=0U;
+    wrapped_length=WrapBusiness(cla1,sizeof cla1,BOARD_ROLE_B,11U,22U,5U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U && aux_rx_length==sizeof cla1 && memcmp(aux_rx,cla1,4U)==0);
+    wrapped_length=WrapBusiness(clp1,sizeof clp1,BOARD_ROLE_B,11U,22U,5U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* A不接受B发来的CLP1方向。 */
+    assert(aux_rx_count==1U);
+    puts("PASS MDB1 short: CLP1/CLA1 wrapped, direction/generation/raw/mode gates enforced");
+}
+/**
+ * @brief 验证WVP2在WAVE模式下封装为88字节，且原始/错世代/错方向/错模式被拒绝。
+ * @return 无返回值，失败由断言终止。
+ */
+static void TestBusinessWaveGate(void)
+{
+    BoardIdentityProfile a={0},b={0};
+    a.role=BOARD_ROLE_A;b.role=BOARD_ROLE_B;
+    a.peer_ip[0]=b.peer_ip[0]=192U;a.peer_ip[1]=b.peer_ip[1]=168U;
+    a.peer_ip[2]=b.peer_ip[2]=10U;a.peer_ip[3]=b.peer_ip[3]=2U;
+    static uint8_t wvp2[56],wrapped[BUSINESS_WIRE_MAX_BYTES];
+    memset(wvp2,0,sizeof wvp2);memcpy(wvp2,"WVP2",4U);
+    BusinessWireMessage decoded;
+    UDPSoundEvent_BusinessCounters counters;
+
+    assert(UDPSoundEvent_Init(0U,&a,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableWaveBusiness(BOARD_ROLE_A,11U,22U,7U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    unsigned before=sends;
+    assert(UDPSoundEvent_SendProtectedWave(wvp2,sizeof wvp2));
+    assert(sends==before+1U);
+    uint16_t length=0U;
+    const uint8_t *packet=RecentSent(0U,&length);
+    assert(length==BUSINESS_WIRE_HEADER_BYTES+sizeof wvp2);
+    assert(length==88U);
+    assert(BusinessWire_Decode(packet,length,&decoded));
+    assert(decoded.role==BOARD_ROLE_A && decoded.inner_length==sizeof wvp2 &&
+           decoded.a_boot==11U && decoded.b_boot==22U && decoded.mode_seq==7U &&
+           memcmp(decoded.inner,wvp2,sizeof wvp2)==0);
+    EnableBusiness(BOARD_ROLE_A,11U,22U,7U,true); /* 测距模式不能发WVP2 */
+    before=sends;
+    assert(!UDPSoundEvent_SendProtectedWave(wvp2,sizeof wvp2));
+    assert(sends==before);
+
+    assert(UDPSoundEvent_Init(0U,&b,Tick,Log));
+    UDPSoundEvent_SetTimeDomain(1U);tick_ms=0U;UDPSoundEvent_Process(0U);
+    UDPSoundEvent_SetAuxiliarySink(AuxSink);
+    EnableWaveBusiness(BOARD_ROLE_B,11U,22U,7U);
+    UDPSoundEvent_SetBusinessContextProvider(TestBusinessProvider);
+    uint16_t wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_A,11U,22U,7U,wrapped);
+    aux_rx_count=0U;
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U && aux_rx_length==sizeof wvp2 &&
+           memcmp(aux_rx,wvp2,sizeof wvp2)==0);
+    wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_A,11U,22U,8U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* 旧世代 */
+    assert(aux_rx_count==1U);
+    ReceiveBytes(wvp2,sizeof wvp2); /* 原始旧包 */
+    assert(aux_rx_count==1U);
+    EnableBusiness(BOARD_ROLE_B,11U,22U,7U,true); /* 测距模式不能收WVP2 */
+    wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_A,11U,22U,7U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length);
+    assert(aux_rx_count==1U);
+    UDPSoundEvent_GetBusinessCounters(&counters);
+    assert(counters.rx_blocked>=1U && counters.rx_unwrapped>=1U);
+    EnableWaveBusiness(BOARD_ROLE_B,11U,22U,7U);
+    wrapped_length=WrapBusiness(wvp2,sizeof wvp2,BOARD_ROLE_B,11U,22U,7U,wrapped);
+    ReceiveBytes(wrapped,wrapped_length); /* B只接受A计划 */
+    assert(aux_rx_count==1U);
+    puts("PASS MDB1 wave: WVP2 56-byte inner wrapped to 88, raw/old/direction/mode rejected");
+}
+#endif
+
 int main(void)
 {
     BoardIdentityProfile profile;
@@ -606,6 +1198,15 @@ int main(void)
     TestPairingLimits(&profile);
     TestWaveWindowCut();
     TestWaveformEvidence(&profile);
+#ifdef SBCG_USE_MODE_OBSERVATION
+    TestModeControlWire();
+    TestModeControlTransport(&profile);
+    puts("PASS MDP1: wire layout, malformed fields, roles, endpoint and pbuf handling");
+    TestBusinessRangingGate();
+    TestBusinessSoundWaveGate();
+    TestBusinessShortGate();
+    TestBusinessWaveGate();
+#endif
     puts("PASS udp sound event: pairing bounds, DOMN/RAK2/RSC2 same-length dispatch, RST2 and no-value ACK");
     return 0;
 }

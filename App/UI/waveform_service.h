@@ -119,6 +119,11 @@ void WaveformService_ProcessPeriod(void);
 void WaveformService_StageBlock(const BSP_AudioBlock *block);
 /** @brief 原有End结束后提交或丢弃stage。 @param accepted 必须为真实End结果。 @param now_ms 当前HAL毫秒。 @return 无返回值。 */
 void WaveformService_CompleteBlock(bool accepted, uint32_t now_ms);
+#ifdef SBCG_MODE_TEST_CONTROL
+/** @brief 复制已验证的同会话左声道历史；窗不完整返回false且不写输出。 */
+bool WaveformService_CopyVerifiedPcm(uint32_t session, uint64_t first_frame,
+                                     uint16_t frames, int16_t *out);
+#endif
 /** @brief 扇出既有锚点副本，不消费锚点单槽。 @param observation 非NULL只读观测；失效清模型。 @return 无返回值。 */
 void WaveformService_ObserveAnchor(const AudioTimeAnchorObservation *observation);
 /** @brief 复制CPU快照。 @param out 可NULL，非空写完整副本。 @return 无返回值。 */

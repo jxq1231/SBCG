@@ -9,7 +9,7 @@ out = ROOT / "Logs/Waveform"
 out.mkdir(parents=True, exist_ok=True)
 for optimization in ("-O0", "-O2"):
     for name, extra, macros in [
-        ("waveform", [], []),
+        ("waveform", [], ["-DSBCG_MODE_TEST_CONTROL=1"]),
         ("audio_capture", ["App/Audio/audio_capture.c", "App/Audio/audio_statistics.c"],
          ["-DSBCG_USE_ADVANCED_UI=1"]),
     ]:

@@ -74,6 +74,18 @@ int main(void)
     assert(Has("$SOUND_TOA_TIME,SEQ=1") && Has("STATUS=CLOCK") && !Has("EST_NS="));
     assert(!SoundEventTime_TakeEvent(&event));
 
+    /* Mode boundaries discard both queues without forcing the audio model to re-anchor. */
+    Init();Pair();p=Position(71999U,0U);
+    assert(SoundEventTime_SubmitToa(2000,1,&c,&p));Process(2250);
+    assert(SoundEventTime_SubmitToa(2250,2,&c,&p));
+    SoundEventTime_DiscardPending();
+    assert(!SoundEventTime_TakeEvent(&event));
+    Process(2500);
+    assert(!Has("$SOUND_TOA_TIME,SEQ=2,"));
+    assert(SoundEventTime_SubmitToa(2500,3,&c,&p));Process(2750);
+    assert(SoundEventTime_TakeEvent(&event) && event.sequence==3U);
+    puts("PASS mode boundary clears pending TOA and ready events while retaining anchors");
+
     /* Queue capacity and null position remain explicit errors. */
     Init();Pair();for(uint32_t i=1U;i<=4U;++i)assert(SoundEventTime_SubmitToa(2000,i,&c,&p));
     assert(!SoundEventTime_SubmitToa(2000,5,&c,&p));

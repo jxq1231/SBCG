@@ -3,12 +3,15 @@
  * @brief 检查真实TimeSync在硬件动作及故障恢复时交接PPS资格，保留原协调测试。
  * @note 主机替代PPS和硬件，不证明真实脉冲精度。
  */
+/* 本文件自行实现PPS替身，抑制被包含测试提供的默认撤销入口。 */
+#define SBCG_TEST_PPS_MOCKS 1
 #define main previous_controller_tests
 #include "../SyncController/test_time_sync.c"
 #undef main
 #include "Sync/pps_service.h"
 static unsigned pps_inits,pps_deinits,pps_observations,pps_invalidations,pps_before,pps_after,pps_requalifies;
-static bool pps_init_ok=true,pps_stop_ok=true,pps_before_ok=true,pps_saw_lock,track_hooks;
+static unsigned pps_revokes;
+static bool pps_init_ok=true,pps_stop_ok=true,pps_before_ok=true,pps_saw_lock,track_hooks,pps_latched_fault;
 static char pps_stage;
 /** @brief 模拟PPS初始化。 @param now 当前毫秒。 @param role A/B。 @param log 可空日志。 @return 预置结果。 */
 bool PpsService_Init(uint32_t now,BoardRole role,void(*log)(const char*,int))
@@ -25,13 +28,15 @@ void PpsService_Process(uint32_t now,bool allowed) { (void)now;(void)allowed;ass
  */
 void PpsService_Observe(uint32_t now,uint32_t ms,bool locked,bool drift_valid,int64_t offset,int64_t delay,int32_t drift)
 { assert(now==now_tick && ms==captured && offset==last_offset && delay==last_delay);(void)drift_valid;(void)drift;++pps_observations;pps_saw_lock=locked;if(track_hooks)pps_stage='O'; }
-/** @brief 记录同步撤资格。 @param now 当前毫秒。 @return 预置停止结果。 */
-bool PpsService_Invalidate(uint32_t now) { assert(now==now_tick);++pps_invalidations;if(track_hooks)pps_stage='I';return pps_stop_ok; }
+/** @brief 记录同步撤资格。 @param now 当前毫秒。 @return 锁存FAULT或Stop失败时为false。 */
+bool PpsService_Invalidate(uint32_t now) { assert(now==now_tick);++pps_invalidations;if(track_hooks)pps_stage='I';return pps_stop_ok&&!pps_latched_fault; }
+/** @brief 记录恢复/相位路径的撤销输出。 @param now 当前毫秒。 @return 预置停止结果；FAULT锁存不影响返回值。 */
+bool PpsService_RevokeOutput(uint32_t now) { assert(now==now_tick);++pps_revokes;++pps_invalidations;if(track_hooks)pps_stage='I';return pps_stop_ok; }
 /** @brief 模拟A链路恢复后重建PPS资格。 @param now 当前毫秒。 @return 预置初始化结果。 */
 bool PpsService_RequalifyReference(uint32_t now) { assert(now==now_tick);++pps_requalifies;return pps_init_ok; }
 /** @brief 检查频率动作前交接。 @param now 当前毫秒。 @param previous 已知硬件ppb。 @param next 目标ppb。 @return 预置许可。 */
 bool PpsService_BeforeFrequency(uint32_t now,int32_t previous,int32_t next)
-{ assert(now==now_tick && previous==hardware_frequency && next==requested.frequency_ppb);++pps_before;if(track_hooks){assert(pps_stage=='O');pps_stage='B';}return pps_before_ok; }
+{ assert(now==now_tick && previous==hardware_frequency && next==requested.frequency_ppb);++pps_before;if(track_hooks){assert(pps_stage=='O');pps_stage='B';}return pps_before_ok&&(!pps_latched_fault||pps_stop_ok); }
 /** @brief 检查真实频率结果之后交接。 @param now 当前毫秒。 @param success 真实结果。 @return 无返回值。 */
 void PpsService_AfterFrequency(uint32_t now,bool success)
 { assert(now==now_tick);++pps_after;if(track_hooks){assert(pps_stage==(success?'W':'B')||!success);pps_stage='A';} }
@@ -66,7 +71,7 @@ int main(void)
  unsigned observations_before=pps_observations,stops_before=pps_invalidations;
  read_status=BSP_PTP_OK;pps_stop_ok=false;now_tick+=1000U;TimeSync_Process(now_tick,true);
  assert(active_servo->state==CLOCK_SERVO_FAULT && pps_observations==observations_before);
- pps_stop_ok=true;now_tick+=1000U;TimeSync_Process(now_tick,true);
+ pps_stop_ok=true;now_tick+=1000U;have_exchange=true;captured=now_tick;TimeSync_Process(now_tick,true);
  assert(active_servo->state==CLOCK_SERVO_ACQUIRING && pps_invalidations>stops_before);
  assert(pps_observations==observations_before && clock_writes==0U);
  TimeSyncSnapshot recovered;TimeSync_GetSnapshot(now_tick,&recovered);
@@ -74,6 +79,18 @@ int main(void)
  requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10};Sample();
  assert(pps_observations==observations_before+1U && !pps_saw_lock);
  puts("PASS PPS recovery: stop failure blocks reacquisition; successful recovery waits for new Observe without old qualification");
+ /* PPS已锁存FAULT但输出可停：不得阻断伺服恢复与后续变频；Stop仍失败时保持FAULT。 */
+ Reset();Init(BOARD_ROLE_B);read_status=BSP_PTP_HAL_ERROR;Sample();
+ read_status=BSP_PTP_OK;pps_latched_fault=true;pps_stop_ok=false;pps_revokes=0U;
+ now_tick+=1000U;TimeSync_Process(now_tick,true);
+ assert(active_servo->state==CLOCK_SERVO_FAULT && pps_revokes==1U);
+ pps_stop_ok=true;now_tick+=1000U;have_exchange=true;captured=now_tick;
+ TimeSync_Process(now_tick,true);
+ assert(active_servo->state==CLOCK_SERVO_ACQUIRING && pps_revokes==2U);
+ requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10};Sample();
+ assert(active_servo->state==CLOCK_SERVO_TRACKING && clock_writes==1U);
+ pps_latched_fault=false;
+ puts("PASS PPS fault-latch: stopped output allows servo recovery and frequency handoff; Stop failure still blocks");
  Reset();unsigned init_count=pps_inits;pps_init_ok=false;BoardIdentityProfile p={.role=BOARD_ROLE_A};
  assert(!TimeSync_Init(now_tick,&p,Tick,Log) && pps_inits==init_count+1U);pps_init_ok=true;
  puts("PASS PPS integration: before-commit lock, pre-step stop, frequency handoff, stop-failure no clock write, invalidation and lifecycle");return 0;

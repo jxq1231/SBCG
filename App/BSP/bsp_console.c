@@ -1,10 +1,10 @@
 /**
  * @file        bsp_console.c
- * @brief       USART1 控制台同步发送及中断接收队列适配。
- * @details     前台同步发送日志；USART1 IRQ 将单字节写入环形队列并标记丢失，前台读取 BYTE/GAP/NONE 和统计，再
- *          交给命令层解析。
- * @note        依赖 CubeMX 已初始化的 huart1 和 HAL tick；发送禁止 ISR，接收无需 DMA。环形数组 256 字节，其中
- *          一个槽留空，实际可排队 255 字节。
+ * @brief       USART1 控制台发送（DMA 优先、同步回退）及中断接收队列适配。
+ * @details     发送采用前台环形缓冲 + USART1_TX DMA 续传，前台只做入队与启动，不再等待整行发送；若 CubeMX
+ *          尚未链接 TX DMA，则退回原同步发送以保持功能。接收仍由 USART1 IRQ 单字节入队并统计。
+ * @note        依赖 CubeMX 已初始化的 huart1、USART1_TX DMA（DMA2 Stream7）与 HAL tick；DMA 缓冲为 CPU 专用
+ *          .bss，当前未启用 D-Cache，无需额外维护；接收环形数组 256 字节，发送环形数组 1024 字节。
  */
 
 #include "bsp_console.h"
@@ -17,6 +17,7 @@ extern UART_HandleTypeDef huart1;
 #define CONSOLE_TX_TIMEOUT_MS 25U
 #define CONSOLE_RX_CAPACITY 256U
 #define CONSOLE_RX_RETRY_MS 10U
+#define CONSOLE_TX_CAPACITY 1024U
 
 /* Single IRQ producer / main consumer. Brief PRIMASK sections preserve the
  * caller's mask and protect pop/flush/rearm, never a UART wait or TX operation.
@@ -27,6 +28,16 @@ static volatile bool rx_lost, rx_armed, rx_enabled;
 static uint8_t rx_byte;
 static uint32_t rx_retry_ms;
 static volatile BSP_ConsoleRxStats rx_stats;
+
+/* 前台入队、DMA 完成中断出队；tx_head/tx_tail 更新使用短 PRIMASK 临界区。 */
+static uint8_t tx_bytes[CONSOLE_TX_CAPACITY];
+static volatile uint32_t tx_head, tx_tail;
+static volatile uint16_t tx_inflight;
+static volatile bool tx_active;
+static volatile BSP_ConsoleTxStats tx_stats;
+
+/** @brief 启动下一段 DMA（或回退同步发送）；调用方保证尚未在途。 */
+static void TxKick(void);
 
 /**
  * @brief   将控制台统计计数饱和递增，避免回绕。
@@ -171,7 +182,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *uart)
  */
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
-    if (uart != &CONSOLE_UART_HANDLE || !rx_enabled) { return; }
+    if (uart != &CONSOLE_UART_HANDLE) { return; }
+    if (tx_active)
+    {
+        /* 发送错误：丢弃在途段并尝试续传，避免日志队列永久卡住。 */
+        saturate(&tx_stats.write_errors);
+        tx_tail = (tx_tail + tx_inflight) % CONSOLE_TX_CAPACITY;
+        tx_inflight = 0U;
+        tx_active = false;
+        TxKick();
+    }
+    if (!rx_enabled) { return; }
     saturate(&rx_stats.errors);
     rx_lost = true;
     /* Blocking ORE ends reception before this callback. For a nonblocking
@@ -206,19 +227,100 @@ void BSP_Console_GetInfo(BSP_ConsoleInfo *info)
 }
 
 /**
- * @brief   通过控制台 UART 同步发送给定字节序列。
- * @param   data 调用者拥有的只读发送缓冲；须满足 HAL_UART_Transmit 的有效指针要求，返回前保持有效，函数不保存
- *          指针。
+ * @brief   启动下一段控制台 TX。
+ * @return  无返回值。
+ * @note   前台入队后或 DMA 完成中断调用；每次只提交一段连续缓冲，环形回绕由下一次完成续传。
+ *         若 huart1 尚未链接 TX DMA（CubeMX 未配置），退回原同步发送，保持日志功能。
+ */
+static void TxKick(void)
+{
+    if (tx_active || tx_tail == tx_head) { return; }
+    const uint32_t chunk = (tx_head > tx_tail) ? (tx_head - tx_tail) :
+        (CONSOLE_TX_CAPACITY - tx_tail);
+    if (chunk == 0U) { return; }
+    tx_inflight = (uint16_t)chunk;
+    if (CONSOLE_UART_HANDLE.hdmatx == NULL)
+    {
+        if (HAL_UART_Transmit(&CONSOLE_UART_HANDLE, &tx_bytes[tx_tail],
+                              (uint16_t)chunk, CONSOLE_TX_TIMEOUT_MS) != HAL_OK)
+        {
+            saturate(&tx_stats.write_errors);
+        }
+        saturate(&tx_stats.fallbacks);
+        tx_tail = (tx_tail + chunk) % CONSOLE_TX_CAPACITY;
+        tx_inflight = 0U;
+        TxKick();
+        return;
+    }
+    tx_active = true;
+    if (HAL_UART_Transmit_DMA(&CONSOLE_UART_HANDLE, &tx_bytes[tx_tail],
+                              (uint16_t)chunk) != HAL_OK)
+    {
+        tx_active = false;
+        tx_inflight = 0U;
+        saturate(&tx_stats.dma_errors);
+    }
+}
+
+/**
+ * @brief   DMA 发送完成：推进读指针并继续发送。
+ * @param   uart HAL 借用的 UART 句柄；仅处理控制台 huart1。
+ * @return  无返回值。
+ * @note   DMA2 Stream7 IRQ 上下文；只做指针/计数与下一次 HAL 提交，不打印、不等待。
+ */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart)
+{
+    if (uart != &CONSOLE_UART_HANDLE || !tx_active) { return; }
+    tx_tail = (tx_tail + tx_inflight) % CONSOLE_TX_CAPACITY;
+    tx_inflight = 0U;
+    tx_active = false;
+    TxKick();
+}
+
+/**
+ * @brief   复制控制台发送统计。
+ * @param   out 调用者拥有的输出；NULL 时直接返回，不清零。
+ * @return  无返回值。
+ * @note   仅前台读取；复制时短暂屏蔽中断，计数为饱和值，high_water 单位为字节。
+ */
+void BSP_Console_GetTxStats(BSP_ConsoleTxStats *out)
+{
+    if (out == NULL) { return; }
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    *out = tx_stats;
+    __set_PRIMASK(mask);
+}
+
+/**
+ * @brief   将一行日志入队到控制台发送环形缓冲并启动 DMA。
+ * @param   data 调用者拥有的只读发送缓冲；本次调用内复制，不保存指针。
  * @param   length 要发送的字节数，uint16_t；不会自动补换行或 NUL。
- * @return  true 表示 HAL_UART_Transmit 返回 HAL_OK；false 表示 HAL 失败，不内部重试。
- * @note    仅主循环，禁止 ISR；25 ms 为 HAL 传输参数，依赖运行中的 HAL tick。同步调用返回后无 DMA/IRQ 持有缓
- *          冲，上层负责记录失败和重试策略。
+ * @return  true 表示已全部入队；false 表示参数非法或环形缓冲剩余空间不足（整行丢弃）。
+ * @note   仅主循环调用；返回时数据可能仍在 DMA 发送中，调用方不得复用 data。
  */
 bool BSP_Console_Write(const char *data, uint16_t length)
 {
-    /* HAL consumes the stack buffer before returning. No DMA/IRQ owns it.
-       At 115200 8N1, a 255-byte line takes less than 23 ms.
-       The timeout relies on the existing SysTick; never call from an ISR. */
-    return HAL_UART_Transmit(&CONSOLE_UART_HANDLE, (const uint8_t *)data,
-                             length, CONSOLE_TX_TIMEOUT_MS) == HAL_OK;
+    if (data == NULL || length == 0U) { return false; }
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    const uint32_t used = (tx_head + CONSOLE_TX_CAPACITY - tx_tail) % CONSOLE_TX_CAPACITY;
+    const uint32_t free_bytes = CONSOLE_TX_CAPACITY - 1U - used;
+    if ((uint32_t)length > free_bytes)
+    {
+        saturate(&tx_stats.dropped);
+        __set_PRIMASK(mask);
+        return false;
+    }
+    for (uint32_t i = 0U; i < length; ++i)
+    {
+        tx_bytes[tx_head] = (uint8_t)data[i];
+        tx_head = (tx_head + 1U) % CONSOLE_TX_CAPACITY;
+    }
+    saturate(&tx_stats.enqueued);
+    const uint32_t used_now = (tx_head + CONSOLE_TX_CAPACITY - tx_tail) % CONSOLE_TX_CAPACITY;
+    if (used_now > tx_stats.high_water) { tx_stats.high_water = used_now; }
+    __set_PRIMASK(mask);
+    TxKick();
+    return true;
 }

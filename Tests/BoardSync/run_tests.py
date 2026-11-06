@@ -26,10 +26,16 @@ if not status and (root/'Tests/BoardSync/test_ptp_board_sync.c').exists():
     for directory in ['LWIP/Target','Middlewares/Third_Party/LwIP/src/include','Middlewares/Third_Party/LwIP/system']:
         command+=['-I',str(root/directory)]
     command += [str(root/p) for p in ['Tests/BoardSync/test_ptp_board_sync.c','App/Network/ptp_wire.c','App/Network/ptp_board_sync.c','App/BSP/board_identity.c','App/Sync/ptp_rx.c','App/Sync/ptp_tx.c']]
-    command+=['-o',str(out/'test_ptp_board_sync.exe')]
-    status=run(command)
-    if not status:
-        status=run([str(out/'test_ptp_board_sync.exe')])
+    for trace in (False, True):
+        mode = 'on' if trace else 'off'
+        flags = ['-DSBCG_PTP_EVENT_TRACE'] if trace else []
+        executable = str(out/f'test_ptp_board_sync_trace_{mode}.exe')
+        print(f'BoardSync trace {mode}')
+        status = run(command+flags+['-o',executable])
+        if not status:
+            status = run([executable])
+        if status:
+            break
 if not status:
     status=run(common+[str(root/'Tests/BoardSync/test_time_domain.c'),str(root/'App/Sync/time_domain.c'),'-o',str(out/'test_time_domain.exe')])
 if not status:

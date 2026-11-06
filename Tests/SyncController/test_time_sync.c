@@ -15,6 +15,9 @@
 #include "Sync/sync_observation.h"
 #include "Audio/audio_time_anchor.h"
 #include "Audio/audio_time_map_monitor.h"
+#ifdef SBCG_USE_PPS
+#include "Sync/pps_service.h"
+#endif
 #include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -23,7 +26,7 @@
 static uint32_t now_tick, epoch, revision, captured, protocol_calls, observe_calls, tick_calls;
 static uint32_t commit_calls, invalidate_calls, clock_writes, estimator_calls, notify_calls;
 static bool deinit_ok, install_ok, udp_clear_ok, have_exchange, peer_reset, observe_ok;
-static bool link_usable, link_recovery;
+static bool link_usable, link_recovery, guard_done;
 static uint32_t completed_count, process_advance_ms, read_calls;
 static bool capture_on_process;
 static BSP_PtpStatus read_status, clean_status, write_status;
@@ -38,6 +41,16 @@ static unsigned trace_length;
 static uint64_t last_reference;
 static int64_t last_offset, last_delay;
 
+#if defined(SBCG_USE_PPS) && !defined(SBCG_TEST_PPS_MOCKS)
+/**
+ * @brief 为复用本测试但未实现新撤销入口的既有夹具补齐PPS替身。
+ * @param now 当前测试毫秒。
+ * @return 与PpsService_Invalidate替身相同的停止结果。
+ * @note SoundEventTime等旧夹具只覆盖原有PPS接口；此处提供同义默认实现，避免修改允许范围外的文件。
+ *       需要模拟FAULT锁存语义的集成测试定义SBCG_TEST_PPS_MOCKS并自行实现。
+ */
+bool PpsService_RevokeOutput(uint32_t now) { return PpsService_Invalidate(now); }
+#endif
 /** @brief 记录依赖调用顺序。 @param c 单字节事件。 @return 无返回值。 */
 static void Event(char c) { assert(trace_length+1U < sizeof trace); trace[trace_length++]=c; trace[trace_length]='\0'; }
 /** @brief 返回测试毫秒。 @return 当前毫秒值。 @note 不隐式推进时间。 */
@@ -101,6 +114,8 @@ bool PtpBoardSync_LinkUsable(void) { return link_usable; }
 bool PtpBoardSync_TakeLinkRecovery(void) { bool result=link_recovery; link_recovery=false; return result; }
 /** @brief 返回模拟完整四时刻完成计数。 @return 预置值。 */
 uint32_t PtpBoardSync_GetCompletedCount(void) { return completed_count; }
+/** @brief 返回模拟协议静默窗状态。 @return 静默窗已结束为true。 */
+bool PtpBoardSync_GuardDone(void) { return guard_done; }
 /** @brief 记录旧UDP清队检查。 @return 当前回调空闲允许标志。 @note false应阻止时钟写入。 */
 bool UDPTimeExchange_NotifyClockChange(void) { Event('U'); return udp_clear_ok; }
 /** @brief 记录本地PTP观察器失效通知。 @return 无返回值。 */
@@ -256,7 +271,7 @@ static void Reset(void)
     protocol_calls=observe_calls=tick_calls=commit_calls=invalidate_calls=clock_writes=estimator_calls=notify_calls=0U;
     read_calls=0U;
     deinit_ok=install_ok=udp_clear_ok=observe_ok=true; have_exchange=peer_reset=false;
-    link_usable=true; link_recovery=false; completed_count=0U;
+    link_usable=true; link_recovery=false; completed_count=0U; guard_done=true;
     read_status=clean_status=write_status=BSP_PTP_OK; estimate_status=SYNC_ESTIMATOR_OK;
     recovery_status=BSP_PTP_OK; recovery_checks=0U;
     hardware_frequency=0; requested=(ClockServoAction){CLOCK_SERVO_NONE,0,0}; active_servo=NULL;
@@ -270,6 +285,13 @@ static void Init(BoardRole role)
 static void Sample(void) { have_exchange=true; captured=now_tick; TimeSync_Process(now_tick,true); }
 /** @brief 清理事件串以独立检查下一次调用。 @return 无返回值。 */
 static void ClearTrace(void) { trace_length=0U; trace[0]='\0'; }
+/** @brief 统计累积日志中子串出现次数。 @param needle 非NULL子串。 @return 出现次数。 @note 只读logs。 */
+static unsigned CountText(const char *needle)
+{
+    unsigned count=0U; const char *p=logs;
+    while ((p=strstr(p,needle))!=NULL) { ++count; p+=strlen(needle); }
+    return count;
+}
 
 /** @brief 执行生命周期和真实调用顺序断言。 @return 全部通过为0。 */
 int main(void)
@@ -428,16 +450,18 @@ int main(void)
     assert(recovery_checks==1U && active_servo->state==CLOCK_SERVO_FAULT);
     now_tick+=999U; TimeSync_Process(now_tick,true); assert(recovery_checks==1U);
     ++now_tick; TimeSync_Process(now_tick,false); assert(recovery_checks==1U);
-    recovery_status=BSP_PTP_OK; TimeSync_Process(now_tick,true);
+    recovery_status=BSP_PTP_OK; have_exchange=true; captured=now_tick;
+    TimeSync_Process(now_tick,true);
     assert(recovery_checks==2U && active_servo->state==CLOCK_SERVO_ACQUIRING && clock_writes==0U);
     puts("PASS: busy/unknown clock stays faulted; retry is bounded to 1000ms and obeys processing gate");
 
     Reset(); Init(BOARD_ROLE_B); read_status=BSP_PTP_HAL_ERROR; Sample();
     now_tick+=1000U; TimeSync_Process(now_tick,true);
     assert(recovery_checks==1U && active_servo->state==CLOCK_SERVO_FAULT);
-    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    now_tick+=1000U; have_exchange=true; captured=now_tick; TimeSync_Process(now_tick,true);
     assert(recovery_checks==2U && active_servo->state==CLOCK_SERVO_FAULT);
-    read_status=BSP_PTP_OK; now_tick+=1000U; TimeSync_Process(now_tick,true);
+    read_status=BSP_PTP_OK; now_tick+=1000U; have_exchange=true; captured=now_tick;
+    TimeSync_Process(now_tick,true);
     assert(recovery_checks==3U && active_servo->state==CLOCK_SERVO_ACQUIRING);
     assert(strstr(logs,"RECOVERIES=1")!=NULL && clock_writes==0U);
     puts("PASS: repeated local-read failures never move the retry deadline or starve eventual recovery");
@@ -446,22 +470,24 @@ int main(void)
     clean_status=BSP_PTP_NOT_READY; Sample();
     now_tick+=1000U; TimeSync_Process(now_tick,true);
     assert(active_servo->state==CLOCK_SERVO_FAULT && recovery_checks==0U && clock_writes==0U);
-    clean_status=BSP_PTP_OK; now_tick+=1000U; TimeSync_Process(now_tick,true);
+    clean_status=BSP_PTP_OK; now_tick+=1000U; have_exchange=true; captured=now_tick;
+    TimeSync_Process(now_tick,true);
     assert(active_servo->state==CLOCK_SERVO_ACQUIRING && active_servo->pending.kind==CLOCK_SERVO_NONE && recovery_checks==1U);
-    puts("PASS: unissued correction blocked by TX busy can reacquire after TX becomes idle");
+    puts("PASS: unissued correction blocked by TX busy can reacquire after TX becomes idle and a fresh quartet");
 
     Reset(); Init(BOARD_ROLE_B); read_status=BSP_PTP_HAL_ERROR; Sample();
     read_status=BSP_PTP_OK; udp_clear_ok=false; now_tick+=1000U; TimeSync_Process(now_tick,true);
-    assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==0U);
-    udp_clear_ok=true; now_tick+=1000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==0U && recovery_checks==1U);
+    udp_clear_ok=true; now_tick+=1000U; have_exchange=true; captured=now_tick;
+    TimeSync_Process(now_tick,true);
     assert(active_servo->state==CLOCK_SERVO_ACQUIRING && recovery_checks==2U);
     puts("PASS: recovery must revoke consumers successfully before clearing the fault");
 
     Reset(); Init(BOARD_ROLE_B); requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10};
     write_status=BSP_PTP_UPDATE_TIMEOUT; Sample(); recovery_status=BSP_PTP_NOT_READY;
     now_tick+=1000U; TimeSync_Process(now_tick,true);
-    assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==1U);
-    assert(strstr(logs,"RECOVERIES=0")!=NULL);
+    assert(active_servo->state==CLOCK_SERVO_FAULT && clock_writes==1U && recovery_checks==0U);
+    assert(strstr(logs,"RECOVERIES=0")!=NULL && strstr(logs,"REASON=1")!=NULL);
     puts("PASS: update timeout with disabled hardware never becomes a software-only recovery");
 
     Reset(); Init(BOARD_ROLE_A); ++epoch; udp_clear_ok=false; TimeSync_Process(now_tick,true);
@@ -493,20 +519,37 @@ int main(void)
     assert(!a_after.faulted);
     puts("PASS: A stays REFERENCE until its link was seen, then faults on link loss and reinitializes after recovery");
 
+    Reset(); Init(BOARD_ROLE_B); completed_count=2U; TimeSync_Process(now_tick,true);
+    guard_done=false; now_tick+=7000U; TimeSync_Process(now_tick,true);
+    assert(active_servo->state!=CLOCK_SERVO_FAULT);
+    guard_done=true; TimeSync_Process(now_tick,true);
+    assert(active_servo->state==CLOCK_SERVO_FAULT);
+    puts("PASS: B stall watchdog is gated by the protocol six-second guard window");
+
     Reset(); Init(BOARD_ROLE_B); now_tick+=3000U;
     TimeSync_Process(now_tick,true); assert(active_servo->state!=CLOCK_SERVO_FAULT);
     Reset(); Init(BOARD_ROLE_B); completed_count=5U; TimeSync_Process(now_tick,true);
-    now_tick+=2999U; TimeSync_Process(now_tick,true);
+    now_tick+=5999U; TimeSync_Process(now_tick,true);
     assert(active_servo->state!=CLOCK_SERVO_FAULT);
     ++now_tick; TimeSync_Process(now_tick,true);
     assert(active_servo->state==CLOCK_SERVO_FAULT);
-    now_tick+=1000U; TimeSync_Process(now_tick,true);
+    /* 无新交换时只记“样本缺失”：不清FAULT、不做本地恢复、也不复位停滞看门狗。 */
+    for (unsigned i=0U;i<6U;++i) { now_tick+=1000U; TimeSync_Process(now_tick,true); }
+    assert(active_servo->state==CLOCK_SERVO_FAULT && recovery_checks==0U);
+    assert(CountText("$SYNC_RECOVERY,ROLE=B")==6U && CountText("REASON=1")==6U);
+    assert(CountText("RECOVERIES=1")==0U);
+    /* 数据恢复后只恢复一次并重新进入获取/跟踪。 */
+    now_tick+=1000U; have_exchange=true; captured=now_tick; TimeSync_Process(now_tick,true);
     assert(active_servo->state==CLOCK_SERVO_ACQUIRING && recovery_checks==1U);
-    puts("PASS: B observation watchdog ignores startup and triggers bounded recovery only after a completed exchange stalls");
+    assert(CountText("RECOVERIES=1")==1U);
+    requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,20}; Sample();
+    assert(active_servo->state==CLOCK_SERVO_TRACKING && clock_writes==1U);
+    puts("PASS: B stall watchdog waits for the guard, faults once without data, and recovers once when a fresh quartet returns");
 
     assert(TimeSync_Init(now_tick,&(BoardIdentityProfile){.role=BOARD_ROLE_B},Tick,NULL));
+    const unsigned writes_before=clock_writes;
     requested=(ClockServoAction){CLOCK_SERVO_FREQUENCY,0,10}; Sample();
-    assert(clock_writes==1U && active_servo->frequency_ppb==10);
+    assert(clock_writes==writes_before+1U && active_servo->frequency_ppb==10);
     assert(!TimeSync_Init(now_tick,NULL,Tick,Log));
     assert(!TimeSync_Init(now_tick,&(BoardIdentityProfile){.role=BOARD_ROLE_UNCONFIGURED},Tick,Log));
     assert(!TimeSync_Init(now_tick,&(BoardIdentityProfile){.role=BOARD_ROLE_B},NULL,Log));

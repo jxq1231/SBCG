@@ -92,6 +92,15 @@ void SoundEventTime_Init(void (*log)(const char *, int))
     memset(pending, 0, sizeof pending);
     memset(toa_events, 0, sizeof toa_events);
 }
+/**
+ * @brief 模式切换时丢弃待解析候选和已解析事件，保留锚点、流和序号历史。
+ * @return 无返回值。
+ */
+void SoundEventTime_DiscardPending(void)
+{
+    count = 0U;
+    toa_event_count = 0U;
+}
 /** @brief 按公开reason撤销旧模型；无返回值，不输出日志，队列中的身份保留供失败报告。 */
 void SoundEventTime_Invalidate(SoundTimeReset reason)
 {

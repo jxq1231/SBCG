@@ -87,6 +87,8 @@ void SoundEventTime_Observe(uint32_t now_ms,const AudioTimeAnchorObservation *ob
  * @note 成功且相位连续的调频不调用本接口，改用SoundEventTime_NotifyFrequencyChange。
  */
 void SoundEventTime_Invalidate(SoundTimeReset reason);
+/** @brief 前台模式切换时清空候选与事件队列，保留锚点和时间模型。 @return 无返回值。 */
+void SoundEventTime_DiscardPending(void);
 /**
  * @brief 记录一次成功且相位连续的绝对频率修订，不撤销声音队列与锚点。
  * @param delta_ppb 新绝对频率减旧绝对频率，单位ppb，可正可负；调用方在写硬件前按已知修订量通报。

@@ -1,4 +1,4 @@
-"""Real A/B processes: packet faults, stream recovery and calibration requests.
+"""Real A/B processes: packet faults, stream recovery, calibration and mode observation.
 
 Only HAL/audio/PTP and LwIP I/O are replaced. JSON done records delimit each
 command; the reader thread only writes to Queue, and the main thread owns the
@@ -15,13 +15,14 @@ CHECKS=0
 
 class Board:
     """One real application process with one completed command at a time."""
-    def __init__(self,role,start_ms,common_ns):
+    def __init__(self,role,start_ms,common_ns,boot_id=1,record_label=None):
         self.role=role
+        self.record_label=record_label or role
         self.messages=queue.Queue()
         self.packets=[]
         self.history=[]
         self.records=[]
-        self.proc=subprocess.Popen([str(EXE),role,str(start_ms),str(common_ns)],
+        self.proc=subprocess.Popen([str(EXE),role,str(start_ms),str(common_ns),str(boot_id)],
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
             text=True,encoding='utf-8')
         self.reader=threading.Thread(target=self._read,daemon=True)
@@ -47,7 +48,7 @@ class Board:
             if kind=='packet':
                 self.packets.append(item)
                 self.history.append(item)
-            elif kind=='snapshot':
+            elif kind in ('snapshot','mode','mode_reply'):
                 snapshot=item
             elif kind in ('error','eof'):
                 raise AssertionError(f'{self.role}: child failed: {item}')
@@ -67,11 +68,11 @@ class Board:
             self.proc.wait()
         self.reader.join(timeout=5)
         self.proc.stdout.close()
-        (OUT/f'native_{self.role}.jsonl').write_text(
+        (OUT/f'native_{self.record_label}.jsonl').write_text(
             ''.join(json.dumps(record)+'\n' for record in self.records),encoding='utf-8')
         assert self.proc.returncode==0, (self.role,self.proc.returncode)
 
-def drain(a,b,drop_acks=False,drop_clap_acks=False):
+def drain(a,b,drop_acks=False,drop_clap_acks=False,route=None):
     """Forward completed-command packets; failed sends never reach the peer."""
     for source,destination in ((a,b),(b,a)):
         pending,source.packets=source.packets,[]
@@ -82,7 +83,9 @@ def drain(a,b,drop_acks=False,drop_clap_acks=False):
                 continue
             if drop_clap_acks and packet['hex'].startswith('434c4131'):
                 continue
-            destination.cmd('RX '+packet['hex'])
+            forwarded=(packet['hex'],) if route is None else route(packet['hex'])
+            for payload in forwarded:
+                destination.cmd('RX '+payload)
 
 def snap(a,b,label):
     sa=a.cmd('SNAP');sb=b.cmd('SNAP')
@@ -112,6 +115,510 @@ def group_status_packets(packets):
         groups.setdefault(key,[]).append(packet)
     return groups
 
+def run_mode_tests():
+    """Run real MDP1 through the same receive callback as existing business packets."""
+    none,range_mode,clap,wave,calibration=0,1,2,3,4
+    startup,active=0,3
+    hello,prepare,ready,commit,committed,ping,pong=1,2,3,4,5,6,7
+    mode_magic='4d445031'
+    a=Board('A',0,0,boot_id=0,record_label='mode_A_initial')
+    b=Board('B',0,0,boot_id=0,record_label='mode_B_initial')
+    origins={'A':0,'B':0}
+    wall_ms=0
+
+    def step(route=None,sequence=0,partition=False,drop_cla1=False):
+        nonlocal wall_ms
+        wall_ms+=50
+        common_ns=1_000_000_000+wall_ms*1_000_000
+        a.cmd(f'STEP {wall_ms-origins["A"]} {common_ns} {sequence} {common_ns}')
+        b.cmd(f'STEP {wall_ms-origins["B"]} {common_ns} {sequence} {common_ns+900_000}')
+        def forward(payload):
+            if partition:
+                return ()
+            if route is not None and payload.startswith(mode_magic):
+                return route(payload)
+            if drop_cla1 and payload.startswith('4d444231'):
+                data=bytes.fromhex(payload)
+                if len(data)>=36 and data[32:36]==b'CLA1':
+                    return ()
+            return (payload,)
+        drain(a,b,route=forward)
+
+    def observe():
+        return a.cmd('MODE_SNAP'),b.cmd('MODE_SNAP')
+
+    def key(snapshot):
+        return tuple(snapshot[field] for field in ('a_boot','b_boot','mode_seq'))
+
+    def converge(mode,a_boot,b_boot,after=0,route=None):
+        for _ in range(120):
+            step(route)
+            sa,sb=observe()
+            if (sa['state']==sb['state']==active and sa['effective']==sb['effective']==mode
+                    and key(sa)==key(sb) and key(sa)[:2]==(a_boot,b_boot) and sa['mode_seq']>after):
+                return key(sa)
+        raise AssertionError(f'mode {mode} did not converge: A={sa} B={sb}')
+
+    def mode_packets(board,operation,mode):
+        return [packet['hex'] for packet in board.history
+                if packet['hex'].startswith(mode_magic)
+                and bytes.fromhex(packet['hex'])[5:7]==bytes((operation,mode))]
+
+    def raw_packets(prefix,since=0):
+        """Collect raw (unprotected) packets with one magic prefix after a tick."""
+        return [p['hex'] for board in (a,b) for p in board.history
+                if p['tick_ms']>=since and p['hex'].startswith(prefix)]
+
+    def business_packets(inner,since=0):
+        """Collect MDB1-wrapped packets whose inner magic matches after a tick."""
+        return [p['hex'] for board in (a,b) for p in board.history
+                if p['tick_ms']>=since and p['hex'].startswith('4d444231')
+                and bytes.fromhex(p['hex'])[32:36]==inner]
+
+    def replay(source_packets,destination):
+        for payload in source_packets:
+            destination.cmd('RX '+payload)
+
+    try:
+        sa,sb=observe()
+        check(sa['role']==1 and sb['role']==2 and sa['state']==sb['state']==startup
+              and sa['effective']==sb['effective']==none,
+              'A/B UID roles stay separate and STARTUP has no mode without assigned boots')
+        check(a.cmd('MODE_BOOT 0')['accepted']==0,'zero boot ID is rejected')
+        check(a.cmd('MODE_BOOT 100')['accepted']==1 and b.cmd('MODE_BOOT 200')['accepted']==1,
+              'each process accepts one injected nonzero boot ID')
+        check(a.cmd('MODE_BOOT 101')['accepted']==0 and b.cmd('MODE_BOOT 200')['accepted']==0,
+              'the running boot ID cannot be replaced or registered twice')
+        check(b.cmd(f'MODE_REQUEST {clap}')['accepted']==0,
+              'B cannot request a mode change')
+        sa,sb=observe()
+        check(sa['requested']==range_mode and sa['effective']==sb['effective']==none,
+              'A requests RANGE at boot; neither board reports it effective without a handshake')
+
+        to_drop={prepare,ready,commit,committed}
+        def drop_first_handshake_attempt(payload):
+            op=bytes.fromhex(payload)[5]
+            if op in to_drop:
+                to_drop.remove(op)
+                return ()
+            return (payload,)
+
+        range_key=converge(range_mode,100,200,route=drop_first_handshake_attempt)
+        check(not to_drop and range_key[2]>0,
+              'default RANGE converges after dropping the first PREPARE, READY, COMMIT and COMMITTED')
+        old_prepare=mode_packets(a,prepare,range_mode)[-1]
+        old_commit=mode_packets(a,commit,range_mode)[-1]
+        old_ready=mode_packets(b,ready,range_mode)[-1]
+        old_committed=mode_packets(b,committed,range_mode)[-1]
+        old_hello=mode_packets(b,hello,none)[-1]
+        reordered=False
+        def reorder_and_duplicate(payload):
+            nonlocal reordered
+            op,mode=bytes.fromhex(payload)[5:7]
+            if not reordered and (op,mode)==(prepare,clap):
+                reordered=True
+                return payload,old_commit,old_prepare,payload
+            return (payload,)
+
+        # Phase 2 admission: the first RANGE generation runs real CHIRP business and
+        # keeps its MDB1-wrapped packets for stale replay after mode transitions.
+        for index in range(160):
+            step(sequence={39:1,79:2,119:3}.get(index,0))
+        sa,sb=snap(a,b,'first gated RANGE business')
+        check(sa['advanced']==sb['advanced']==1,'real A/B App builds enable advanced dispatch')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
+              'gated RANGE runs real CHIRP pairing and publishes authoritative RST2 on both boards')
+        first_id=sa['id']
+        old_business=[]
+        for board in (a,b):
+            for packet in board.history:
+                payload=packet['hex']
+                if payload.startswith('4d444231') and \
+                   bytes.fromhex(payload)[32:36] in (b'SEVT',b'WFR1',b'RST2',b'RAK2'):
+                    old_business.append(payload)
+        check(len(old_business)>=4,'gated RANGE business uses MDB1 wrappers for events and status')
+        old_raw=[payload[64:] for payload in old_business]
+
+        # Stay in the same mode generation long enough to exceed B's old four-event queue.
+        for event_number in range(4,9):
+            step(sequence=event_number)
+            for _ in range(39):
+                step()
+            sa,sb=snap(a,b,f'gated RANGE event {event_number}')
+            check(sa['has']==sb['has']==1 and sa['id']==sb['id']>first_id,
+                  f'gated RANGE event {event_number} publishes a fresh result on both boards')
+            first_id=sa['id']
+
+        check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A accepts the CLAP request')
+        clap_key=converge(clap,100,200,after=range_key[2],route=reorder_and_duplicate)
+        replay((old_ready,old_committed),a)
+        step()
+        sa,sb=observe()
+        check(reordered and key(sa)==key(sb)==clap_key and sa['effective']==sb['effective']==clap,
+              'old phases reordered around duplicate PREPARE cannot roll back confirmed CLAP')
+        clap_wall=wall_ms
+        for index in range(40):
+            step(sequence=0)
+        sa,sb=snap(a,b,'CLAP mode without RANGE business')
+        check(sa['has']==sb['has']==0,
+              'leaving RANGE withdraws the authoritative display on both boards')
+        check(not business_packets(b'RST2',clap_wall) and
+              not business_packets(b'WFR1',clap_wall),
+              'CLAP mode blocks swept-ranging RST2/WFR1 traffic at the mode gate')
+
+        # Phase 3 CLAP admission: real CLAP events pair on A, protected CLP1/CLA1
+        # exchange results, and a lost CLA1 triggers the existing 500ms retry.
+        a.cmd('CLASS 2');b.cmd('CLASS 2')
+        a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
+        clap_business_wall=wall_ms
+        step(sequence=9)
+        # From the first publication onward ACKs are dropped: A must keep retrying.
+        for _ in range(40):
+            step(drop_cla1=True)
+        sa,sb=snap(a,b,'CLAP mode real clap result')
+        check(sa['clap_has']==sb['clap_has']==1 and
+              sa['clap_id']==sb['clap_id']!=0 and sa['clap_mm']==sb['clap_mm'],
+              'CLAP mode pairs a real clap and mirrors the authoritative result on B')
+        clp_retries=len(business_packets(b'CLP1',clap_business_wall))
+        check(clp_retries>=3,
+              'lost CLA1 makes A retry CLP1 at the preserved 500ms cadence')
+        check(bool(business_packets(b'CLP1',clap_business_wall)),
+              'CLAP mode protects CLP1 with the MDB1 wrapper')
+        for _ in range(40):
+            step()
+        clp_after_ack=len(business_packets(b'CLP1',clap_business_wall))
+        for _ in range(20):
+            step()
+        check(bool(business_packets(b'CLA1',clap_business_wall)) and
+              len(business_packets(b'CLP1',clap_business_wall))==clp_after_ack,
+              'matching CLA1 stops CLP1 retransmission')
+        last_clap_id=sa['clap_id']
+        for event_number in range(2,9):
+            step(sequence=8+event_number)
+            for _ in range(39):
+                step()
+            sa,sb=snap(a,b,f'gated CLAP event {event_number}')
+            check(sa['clap_has']==sb['clap_has']==1 and
+                  sa['clap_id']==sb['clap_id']>last_clap_id,
+                  f'gated CLAP event {event_number} publishes a fresh result on both boards')
+            last_clap_id=sa['clap_id']
+        a.cmd('CLASS 1');b.cmd('CLASS 1')
+        a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
+
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A accepts the WAVE request')
+        wave_key=converge(wave,100,200,after=clap_key[2])
+        check(wave_key[2]>clap_key[2],'both boards confirm WAVE with a new mode sequence')
+        wave_wall=wall_ms
+        for index in range(160):
+            step(sequence={39:17,79:18,119:19}.get(index,0))
+        sa,sb=snap(a,b,'WAVE blocks RANGE business')
+        check(sa['has']==sb['has']==0,
+              'WAVE mode does not establish a RANGE measurement from new sounds')
+        check(not business_packets(b'RST2',wave_wall) and
+              not business_packets(b'SEVT',wave_wall) and
+              not business_packets(b'WFR1',wave_wall),
+              'WAVE mode blocks SEV2/WFR1/RST2 traffic at the mode gate')
+        a.cmd('CLASS 2');b.cmd('CLASS 2')
+        a.cmd('CAPTURE 0');b.cmd('CAPTURE 0')
+        clap_business_before=len(business_packets(b'CLP1',wave_wall))
+        for index in range(25):
+            step(sequence=20 if index==1 else 0)
+        sa,sb=snap(a,b,'WAVE blocks CLAP business')
+        check(sa['clap_has']==sb['clap_has']==0 and
+              len(business_packets(b'CLP1',wave_wall))==clap_business_before,
+              'WAVE mode keeps CLAP business off until its own phase')
+        a.cmd('CLASS 1');b.cmd('CLASS 1')
+        a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
+
+        check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,'A accepts the CALIBRATION request')
+        cal_key=converge(calibration,100,200,after=wave_key[2])
+        a.cmd(f'CURSOR {20*96000+1408}')
+        a.cmd('CAL START')
+        step()
+        sa,sb=snap(a,b,'calibration waiting without tracking')
+        started_ns=sa['common_ns']
+        calibration_fields=('cal_saved','cal_enabled','cal_offset_mm','cal_version')
+        initial_calibration=tuple(sa[field] for field in calibration_fields)
+        check(sa['cal_phase']==1 and sa['control_result']==9 and sa['fresh']==0 and
+              sa['cal_candidate_id']==0 and sa['cal_remaining_ms']>=14000,
+              'A starts waiting without a current TRACKING sample')
+        for _ in range(140):
+            step()
+        sa,sb=snap(a,b,'calibration seven seconds without playback')
+        check(sa['cal_phase']==1 and sa['cal_candidate_id']==0 and
+              sa['cal_heard_chirp']==0 and sa['cal_remaining_ms']>0,
+              'seven quiet seconds leave the collection window open')
+        for index in range(160):
+            step(sequence={39:21,79:22,119:23}.get(index,0))
+        sa,sb=snap(a,b,'gated CALIBRATION business')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['id']>first_id,
+              'CALIBRATION mode admits RANGE business with a fresh measurement')
+        check(sa['cal_phase']==2 and sa['control_result']==10 and
+              sa['cal_candidate_id']==sa['id'] and sa['cal_candidate_raw_mm']==sa['mm'] and
+              sa['cal_candidate_source_ns']>started_ns and
+              tuple(sa[field] for field in calibration_fields)==initial_calibration,
+              'delayed playback freezes an eligible post-START source without changing calibration')
+        candidate_fields=('cal_candidate_id','cal_candidate_raw_mm','cal_candidate_source_ns')
+        candidate=tuple(sa[field] for field in candidate_fields)
+        saved_offset=500-sa['cal_candidate_raw_mm']
+        step(sequence=24)
+        for _ in range(29):
+            step()
+        sa,sb=snap(a,b,'calibration frozen while live measurement refreshes')
+        check(sa['id']==sb['id'] and sa['id']>candidate[0] and sa['fresh']==sb['fresh']==1 and
+              sa['cal_phase']==2 and tuple(sa[field] for field in candidate_fields)==candidate,
+              'a subsequent valid A/B measurement does not replace the frozen candidate')
+        for _ in range(170):
+            step()
+        sa,sb=snap(a,b,'calibration candidate after ten more seconds')
+        check(sa['cal_phase']==2 and sa['cal_remaining_ms']>0 and sa['fresh']==0 and
+              tuple(sa[field] for field in candidate_fields)==candidate and
+              tuple(sa[field] for field in calibration_fields)==initial_calibration,
+              'the frozen candidate survives ten seconds and ordinary measurement expiry')
+        a.cmd('CAL CONFIRM')
+        step()
+        sa,sb=snap(a,b,'calibration explicitly confirmed')
+        check(sa['cal_phase']==0 and sa['control_result']==2 and
+              sa['cal_saved']==sa['cal_enabled']==1 and sa['cal_offset_mm']==saved_offset,
+              'CONFIRM applies 500-minus-raw from the frozen candidate')
+        for index in range(160):
+            step(sequence={39:25,79:26,119:27}.get(index,0))
+        sa,sb=snap(a,b,'calibration enabled')
+        check(sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
+              sb['applied_offset_mm']==saved_offset,
+              'enabled compensation is published to both boards in CALIBRATION')
+        saved_calibration=tuple(sa[field] for field in calibration_fields)
+        old_source_ns=sa['source_ns']
+        a.cmd(f'CURSOR {27*96000+1408}')
+        a.cmd('CAL START')
+        step()
+        sa,sb=snap(a,b,'calibration ignores existing fresh source')
+        check(sa['fresh']==1 and sa['source_ns']==old_source_ns and
+              sa['cal_phase']==1 and sa['cal_candidate_id']==0 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'a fresh TRACKING sample from before START cannot be selected')
+        a.cmd('CAL CANCEL')
+        step()
+        sa,sb=snap(a,b,'calibration cancelled')
+        check(sa['cal_phase']==0 and sa['control_result']==11 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'CANCEL leaves the existing enabled calibration and version unchanged')
+        a.cmd('CAL START')
+        step()
+        sa=a.cmd('SNAP')
+        for _ in range(1+(sa['cal_remaining_ms']+49)//50):
+            step()
+        sa,sb=snap(a,b,'calibration quiet collection timeout')
+        check(sa['cal_phase']==0 and sa['control_result']==4 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'a completely quiet collection window times out without changing calibration')
+        a.cmd('CAL START')
+        step()
+        a.cmd(f'CHIRP {27*96000+48000}')
+        step()
+        sa,sb=snap(a,b,'calibration heard chirp without TOA')
+        check(sa['cal_phase']==1 and sa['cal_heard_chirp']==1 and sa['cal_candidate_id']==0,
+              'a classified CHIRP without TOA is recognized while collection continues')
+        for _ in range(1+(sa['cal_remaining_ms']+49)//50):
+            step()
+        sa,sb=snap(a,b,'calibration heard chirp but no eligible measurement')
+        check(sa['cal_phase']==0 and sa['control_result']==5 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'CHIRP without a qualified sample times out with its own reason and preserves calibration')
+
+        check(a.cmd(f'MODE_REQUEST {range_mode}')['accepted']==1,'A accepts the return to RANGE')
+        range_key=converge(range_mode,100,200,after=cal_key[2])
+        check(range_key[2]>cal_key[2],'the second RANGE has a fresh mode sequence')
+        for index in range(160):
+            step(sequence={39:28,79:29,119:30}.get(index,0))
+        sa,sb=snap(a,b,'compensation after leaving CALIBRATION')
+        check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and
+              sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
+              sb['applied_offset_mm']==saved_offset,
+              'enabled compensation continues after leaving CALIBRATION')
+        a.cmd('CAL DISABLE')
+        for _ in range(10):
+            step()
+        sa,sb=snap(a,b,'calibration rejected outside CALIBRATION')
+        check(sa['control_result']==8 and sa['cal_enabled']==1 and
+              sa['applied_offset_mm']==saved_offset,
+              'calibration action outside CALIBRATION is rejected without disabling compensation')
+        sa_before,sb_before=snap(a,b,'before stale replay')
+        for payload in old_business+old_raw[:12]:
+            a.cmd('RX '+payload)
+            b.cmd('RX '+payload)
+        for _ in range(20):
+            step()
+        sa,sb=snap(a,b,'after stale replay')
+        # 时间推进允许 freshness/state/revision 自然变化；身份、距离和来源不能被旧包改写。
+        stable_fields=('has','id','mm','direction','source_ns')
+        check(all(sa[field]==sa_before[field] for field in stable_fields),
+              'old-generation wrapped and raw business cannot change A measurement identity or distance')
+        check(all(sb[field]==sb_before[field] for field in stable_fields),
+              'old-generation wrapped and raw business cannot change B display identity or distance')
+
+        old_to_b=tuple(mode_packets(a,op,range_mode)[-1] for op in (prepare,commit,ping,pong))
+        old_to_a=tuple(mode_packets(b,op,range_mode)[-1] for op in (ready,committed,ping,pong))
+        for _ in range(60):
+            step(partition=True)
+        sa,sb=observe()
+        check(sa['effective']==sb['effective']==none and sa['state']!=active and sb['state']!=active,
+              'packet loss with carrier still up expires both leases')
+        replay(old_to_a,a);replay(old_to_b,b)
+        step(partition=True)
+        sa,sb=observe()
+        check(sa['effective']==sb['effective']==none,
+              'old confirmations and probes cannot renew an expired lease')
+        range_key=converge(range_mode,100,200,after=range_key[2])
+        check(range_key[2]>0,'restored delivery establishes a new mode sequence')
+
+        b.stop()
+        b=Board('B',0,1_000_000_000+wall_ms*1_000_000,boot_id=201,record_label='mode_B_restart')
+        origins['B']=wall_ms
+        replay(old_to_b,b);replay(old_to_a,a)
+        step()
+        check(b.cmd('MODE_SNAP')['effective']==none,
+              'B restart with a higher boot rejects retained A packets addressed to the old boot')
+        b_key=converge(range_mode,100,201,after=range_key[2])
+        replay((old_hello,),a)
+        step()
+        sa,sb=observe()
+        check(key(sa)==key(sb)==b_key and sa['effective']==sb['effective']==range_mode,
+              'both boards recover from B-only restart and reject an older B HELLO')
+
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A requests WAVE before A-only restart')
+        converge(wave,100,201,after=b_key[2])
+        old_a_boot_packets=tuple(mode_packets(a,op,wave)[-1] for op in (prepare,commit))
+        old_b_confirmations=tuple(mode_packets(b,op,wave)[-1] for op in (ready,committed))
+        a.stop()
+        a=Board('A',0,1_000_000_000+wall_ms*1_000_000,boot_id=101,record_label='mode_A_restart')
+        origins['A']=wall_ms
+        replay(old_b_confirmations,a)
+        step()
+        check(a.cmd('MODE_SNAP')['effective']==none,'A restart does not recover the old committed mode')
+        a_key=converge(range_mode,101,201)
+        replay(old_a_boot_packets,b)
+        step()
+        sa,sb=observe()
+        check(key(sa)==key(sb)==a_key and sa['effective']==sb['effective']==range_mode,
+              'A-only restart defaults to RANGE and an old A boot cannot restore WAVE')
+
+        control=[bytes.fromhex(packet['hex']) for board in (a,b) for packet in board.history
+                 if packet['hex'].startswith(mode_magic)]
+        check(control and all(len(data)==40 and data[4]==1 for data in control),
+              'mode observation uses separate fixed-size versioned MDP1 datagrams')
+
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A requests WAVE before testing sound sources')
+        wave_key=converge(wave,101,201,after=a_key[2])
+        for _ in range(100):
+            step()
+        def sound_counts():
+            return len(business_packets(b'SEVT')),len(business_packets(b'WFR1'))
+
+        old_counts=sound_counts()
+        step(sequence=1)
+        old_notice_tick=wall_ms
+        for board in (a,b):
+            board.cmd('CURSOR 192000')
+        check(a.cmd(f'MODE_REQUEST {range_mode}')['accepted']==1,'A requests RANGE with a pending WAVE notice')
+        range_key=converge(range_mode,101,201,after=wave_key[2])
+        check(wall_ms-old_notice_tick<700,'RANGE activates before the old notice is due')
+
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'queued WAVE sound after RANGE activation')
+        check(sound_counts()==old_counts and sa['has']==sb['has']==0,
+              'a WAVE notice cannot publish under the new RANGE sequence')
+        step(sequence=2)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'late TOA from PCM before the RANGE frame floor')
+        check(sound_counts()==old_counts and sa['has']==sb['has']==0,
+              'late TOA from a half-block that crosses the mode boundary is rejected')
+        step(sequence=3)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete RANGE event')
+        check(sound_counts()==(old_counts[0]+2,old_counts[1]+1) and
+              sa['has']==sb['has']==1 and sa['id']==sb['id']!=0,
+              'the first complete RANGE event produces a fresh result on both boards')
+
+        # RANGE and CALIBRATION both allow CHIRP, but they are distinct generations.
+        old_counts=sound_counts()
+        step(sequence=4)
+        for board in (a,b):
+            board.cmd('CURSOR_FAIL 475136')
+        check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,
+              'A requests CALIBRATION with a pending RANGE notice')
+        cal_key=converge(calibration,101,201,after=range_key[2])
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'pending RANGE event after CALIBRATION activation')
+        check(sound_counts()==old_counts and sa['has']==sb['has']==0,
+              'CALIBRATION rejects an older RANGE notice even though both admit CHIRP')
+        step(sequence=5)
+        for _ in range(17):
+            step()
+        check(sound_counts()==old_counts,
+              'without a trustworthy cursor, the active half-block is conservatively rejected')
+        step(sequence=6)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete CALIBRATION event after cursor fallback')
+        check(sound_counts()==(old_counts[0]+2,old_counts[1]+1) and
+              sa['has']==sb['has']==1 and sa['id']==sb['id']!=0,
+              'CALIBRATION recovers when a complete post-boundary block arrives')
+
+        for board in (a,b):
+            board.cmd('CLASS 2')
+            board.cmd('CAPTURE 0')
+        check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A requests CLAP to test its sound boundary')
+        clap_key=converge(clap,101,201,after=cal_key[2])
+        old_counts=sound_counts()
+        old_clp=len(business_packets(b'CLP1'))
+        step(sequence=7)
+        check(a.cmd(f'MODE_REQUEST {wave}')['accepted']==1,'A leaves CLAP with a pending notice')
+        wave_key=converge(wave,101,201,after=clap_key[2])
+        for board in (a,b):
+            board.cmd('CURSOR 768000')
+        check(a.cmd(f'MODE_REQUEST {clap}')['accepted']==1,'A re-enters CLAP')
+        clap_key=converge(clap,101,201,after=wave_key[2])
+        step(sequence=8)
+        for _ in range(17):
+            step()
+        check(sound_counts()==old_counts and len(business_packets(b'CLP1'))==old_clp,
+              'CLAP re-entry rejects its pending notice and late TOA before the new boundary')
+        step(sequence=9)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete CLAP event after re-entry')
+        check(sa['clap_has']==sb['clap_has']==1 and sa['clap_id']==sb['clap_id']!=0,
+              'CLAP publishes the first complete event after re-entry')
+
+        for _ in range(60):
+            step(partition=True)
+        sa,sb=observe()
+        check(sa['effective']==sb['effective']==none,'CLAP leases expire during a partition')
+        for board in (a,b):
+            board.cmd('CURSOR 960000')
+        converge(clap,101,201,after=clap_key[2])
+        old_counts=sound_counts()
+        step(sequence=10)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'late CLAP after lease recovery')
+        check(sound_counts()==old_counts and sa['clap_has']==sb['clap_has']==0,
+              'a new lease rejects sound from before its frame boundary')
+        step(sequence=11)
+        for _ in range(17):
+            step()
+        sa,sb=snap(a,b,'first complete CLAP after lease recovery')
+        check(sa['clap_has']==sb['clap_has']==1 and sa['clap_id']==sb['clap_id']!=0,
+              'CLAP publishes a complete fresh event after lease recovery')
+    finally:
+        a.stop()
+        b.stop()
+
 def main():
     gcc=shutil.which('gcc')
     if gcc is None: print('gcc not found',file=sys.stderr); sys.exit(2)
@@ -121,7 +628,7 @@ def main():
          '-DSBCG_USE_AUDIO_ANCHOR=1','-DSBCG_USE_AUDIO_MAP=1',
          '-DSBCG_USE_SOUND_TIME=1','-DSBCG_USE_BOARD_SYNC=1','-DSBCG_USE_BOARD_IDENTITY=1',
          '-DSBCG_USE_CALIBRATION_CONTROL=1',
-         '-DSBCG_USE_ADVANCED_UI=1',
+         '-DSBCG_USE_ADVANCED_UI=1','-DSBCG_USE_MODE_OBSERVATION=1',
          '-I',str(ROOT), '-I',str(ROOT/'Tests/App'), '-I',str(ROOT/'App'), '-I',str(ROOT/'Tests/App/stubs'),
          '-I',str(ROOT/'Middlewares/Third_Party/LwIP/src/include'),
          '-I',str(ROOT/'Middlewares/Third_Party/LwIP/system'), '-I',str(ROOT/'LWIP/Target'),
@@ -134,6 +641,8 @@ def main():
          str(ROOT/'App/Calibration/calibration.c'),str(ROOT/'App/Sync/time_domain.c'),
          str(ROOT/'App/Calibration/calibration_control.c'),
          str(ROOT/'App/Network/udp_sound_event.c'),str(ROOT/'App/Network/ranging_session.c'),
+         str(ROOT/'App/Network/mode_wire.c'),str(ROOT/'App/Mode/mode_service.c'),
+         str(ROOT/'App/Network/business_wire.c'),
          str(ROOT/'App/Network/domain_wire.c'),str(ROOT/'App/Network/measurement_wire.c'),
          str(ROOT/'App/Network/measurement_ack.c'),str(ROOT/'App/Network/ranging_status_wire.c'),
          str(ROOT/'App/Network/temperature_wire.c'),str(ROOT/'App/Network/sound_event_wire.c'),
@@ -148,8 +657,9 @@ def main():
     build=subprocess.run(cmd,capture_output=True,text=True,timeout=120)
     if build.returncode: print(build.stdout+build.stderr); sys.exit(build.returncode)
 
-
-    a=Board('A',0,0);b=Board('B',0,0)
+    # 基线业务用例运行在未登记启动代次的兼容路径（阶段一语义），不启用MDB1闸门；
+    # 模式用例使用显式boot_id验证封装与世代隔离。
+    a=Board('A',0,0,boot_id=0);b=Board('B',0,0,boot_id=0)
     delta_ns=900_000
     def step(at,sequence=0,drop_acks=False,drop_clap_acks=False):
         a.cmd(f'STEP {at} {at*1_000_000} {sequence} {at*1_000_000}')
@@ -295,30 +805,35 @@ def main():
         check(sa['has']==sb['has']==0,
               'continued rejected sounds cannot keep an old distance alive')
 
-        original_checks=CHECKS
-        a.cmd('CLOCK 0');a.cmd('CAL CAPTURE')
+        a.cmd('CLOCK 0');a.cmd('CAL START')
         step(64650);step(64700)
         sa,sb=snap(a,b,'calibration-invalid-context')
-        check(sa['control_result']==4 and sa['control_completed']==1 and
+        check(sa['cal_phase']==0 and sa['control_result']==13 and sa['control_completed']==1 and
               sa['cal_saved']==sa['cal_enabled']==sa['cal_version']==0,
-              'CAPTURE with invalid actual clock is rejected without creating calibration')
+              'START with invalid actual clock is rejected without creating calibration')
         a.cmd('CLOCK 1');a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
-        for t in range(64750,70801,50):step(t,{66000:27,68000:28,70000:29}.get(t,0))
+        for t in range(64750,65951,50):step(t)
+        a.cmd(f'CURSOR {26*96000+1408}')
+        a.cmd('CAL START')
+        for t in range(66000,70801,50):step(t,{66000:27,68000:28,70000:29}.get(t,0))
         sa,sb=snap(a,b,'calibration-ready')
         check(sa['state']==sb['state']==2 and sa['has']==sb['has']==1 and
               sa['fresh']==sb['fresh']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
               'new waveforms rebuild fresh A/B TRACKING before calibration')
-        raw_mm=sa['mm'];saved_offset=500-raw_mm;previous=sa
+        check(sa['cal_phase']==2 and sa['cal_candidate_id']==sa['id'] and
+              sa['cal_candidate_raw_mm']==sa['mm'] and sa['cal_saved']==0,
+              'A has a frozen candidate and has yet to change its calibration')
+        raw_mm=sa['cal_candidate_raw_mm'];saved_offset=500-raw_mm;previous=sa
 
-        a.cmd('CAL CAPTURE');step(70850);step(70900)
-        sa,sb=snap(a,b,'calibration-captured-withdrawn')
-        check(sa['control_result']==2 and sa['control_completed']==2 and
+        a.cmd('CAL CONFIRM');step(70850);step(70900)
+        sa,sb=snap(a,b,'calibration-confirmed-withdrawn')
+        check(sa['cal_phase']==0 and sa['control_result']==2 and
               sa['cal_saved']==sa['cal_enabled']==1 and sa['cal_offset_mm']==saved_offset,
-              'CAPTURE saves 500-minus-raw from the current actual source and enables it')
+              'CONFIRM saves 500-minus-raw from the frozen actual source and enables it')
         check(sa['has']==sb['has']==0 and sa['rev']==sb['rev'] and sa['rev']>previous['rev'] and
               sa['applied_offset_mm']==sb['applied_offset_mm']==saved_offset and
               sa['applied_version']==sb['applied_version']==sa['cal_version'],
-              'capture withdraws the old A/B value and publishes the same changed calibration contract')
+              'confirmation withdraws the old A/B value and publishes the same changed calibration contract')
         for t in range(70950,76801,50):step(t,{72000:30,74000:31,76000:32}.get(t,0))
         sa,sb=snap(a,b,'calibration-new-sounds-500mm')
         check(sa['state']==sb['state']==2 and sa['fresh']==sb['fresh']==1 and
@@ -362,7 +877,7 @@ def main():
 
         stable_fields=('id','rev','source_ns','mm','cal_saved','cal_enabled','cal_offset_mm','cal_version',
                        'applied_offset_mm','applied_version')
-        for index,action in enumerate(('CAPTURE','ENABLE','DISABLE','CLEAR')):
+        for index,action in enumerate(('START','ENABLE','DISABLE','CLEAR')):
             b.cmd('CAL '+action);step(88850+index*100);step(88900+index*100)
             sa,sb=snap(a,b,'B-calibration-rejected-'+action.lower())
             check(sb['control_result']==3 and sb['control_completed']==index+1 and
@@ -377,16 +892,22 @@ def main():
         for t in range(89250,91551,50):step(t)
         sa,sb=snap(a,b,'calibration-stale-source')
         check(sa['state']==sb['state']==3 and sa['has']==sb['has']==1 and sa['fresh']==sb['fresh']==0,
-              'calibration stale-source rejection begins with explicit A/B HOLD values')
+              'calibration with a stale source begins with explicit A/B HOLD values')
         previous=sa
-        a.cmd('CAL CAPTURE');step(91600);step(91650)
-        sa,sb=snap(a,b,'calibration-stale-capture-rejected')
-        check(sa['control_result']==4 and sa['control_completed']==previous['control_completed']+1 and
+        a.cmd(f'CURSOR {38*96000+1408}')
+        a.cmd('CAL START');step(91600)
+        sa,sb=snap(a,b,'calibration-waits-with-stale-source')
+        check(sa['cal_phase']==1 and sa['control_result']==9 and sa['cal_candidate_id']==0 and
               all(sa[field]==previous[field] for field in stable_fields),
-              'stale CAPTURE cannot replace or disable the saved active coefficient')
+              'starting with a stale result leaves the saved active coefficient unchanged')
         check(sa['id']==sb['id'] and sa['mm']==sb['mm'] and
               sa['applied_offset_mm']==sb['applied_offset_mm']==saved_offset,
-              'rejected stale calibration leaves the existing A/B source and applied offset unchanged')
+              'waiting for a new source preserves the existing A/B result and applied offset')
+        a.cmd('CAL CANCEL');step(91650)
+        sa,sb=snap(a,b,'calibration-cancelled-with-stale-source')
+        check(sa['cal_phase']==0 and sa['control_result']==11 and
+              all(sa[field]==previous[field] for field in stable_fields),
+              'cancelling the wait preserves the saved coefficient and A/B result')
 
         a.cmd('CAL CLEAR');step(91700);step(91750)
         sa,sb=snap(a,b,'calibration-cleared-withdrawn')
@@ -543,6 +1064,9 @@ def main():
         a.stop();b.stop()
     print(f'RESULT PASS ({CHECKS} checks: {baseline_checks-1} preserved baseline + '
           f'{CHECKS-baseline_checks+1} advanced; native_A.jsonl/native_B.jsonl retained)')
+    before_mode=CHECKS
+    run_mode_tests()
+    print(f'MODE RESULT PASS ({CHECKS-before_mode} checks; native_mode_*.jsonl retained)')
 
 if __name__=='__main__':
     main()

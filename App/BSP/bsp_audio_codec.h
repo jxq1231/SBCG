@@ -2,7 +2,7 @@
  * @file        bsp_audio_codec.h
  * @brief       WM8994 身份读取和 MIC2 输入通路的同步 I2C 访问。
  * @details     声明 I2C 地址/预期标识、操作状态、身份读取结果和配置结果；read_ms 为耗时毫秒，寄存器/标识为 16
- *          位，hal_error 保留 HAL 原始错误位。
+ *          位，hal_error 保留 HAL 原始错误位。诊断构建还支持读回及临时调整 MIC2 数字增益。
  * @note        主循环/启动上下文专用；采集配置前需 SAI 主时钟，调用者串行管理共享 I2C3，不重初始化 MCU 外设，
  *          不进行总线恢复。
  */
@@ -82,5 +82,32 @@ BSP_AudioCodecStatus BSP_AudioCodec_ReadId(BSP_AudioCodecResult *result);
  *          包含一次 50 ms 延时；会复位编解码器寄存器，失败可能留下部分配置，调用方不能继续启动 DMA。
  */
 BSP_AudioCodecStatus BSP_AudioCodec_ConfigureMic2(BSP_AudioCodecSetupResult *result);
+
+#ifdef SBCG_MODE_TEST_CONTROL
+/** @brief 诊断用 MIC2 增益操作：读回、设为 0 dB、恢复启动设置。 */
+typedef enum
+{
+    BSP_CODEC_GAIN_READ,
+    BSP_CODEC_GAIN_LOW,
+    BSP_CODEC_GAIN_DEFAULT
+} BSP_AudioCodecGainAction;
+
+/** @brief WM8994 AIF1 ADC2 左右声道数字增益寄存器的低 8 位。 */
+typedef struct
+{
+    uint8_t left;
+    uint8_t right;
+} BSP_AudioCodecMic2Gain;
+
+/**
+ * @brief   读回 MIC2 数字增益，或同步更新左右声道后读回校验。
+ * @param   action 读回、设为 0 dB 或恢复启动设置。
+ * @param   gain 调用者拥有的输出，不可为 NULL；仅返回 OK 时可用。
+ * @return  OK 表示读回成功或修改已确认；修改失败会尝试恢复原值并报告错误。
+ * @note    仅在 MIC2 配置成功后由前台诊断命令调用，I2C3 须由调用方串行访问。
+ */
+BSP_AudioCodecStatus BSP_AudioCodec_DiagnoseMic2Gain(BSP_AudioCodecGainAction action,
+                                                    BSP_AudioCodecMic2Gain *gain);
+#endif
 
 #endif

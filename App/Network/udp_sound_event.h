@@ -1,7 +1,8 @@
 /**
  * @file        udp_sound_event.h
  * @brief       两板声音事件UDP发布、接收与配对结果输出（仅NO_SYS前台）。
- * @details     使用固定36字节事件线协议，校验来源、事件侧和当前有效域；撤域或换域清旧队列。
+ * @details     按版本解码声音事件，校验来源、事件侧和当前有效域；撤域或换域清旧队列。
+ *              可选模式观测使用同一端口收发固定对端MDP1控制消息。
  * @note        事件时间必须是本地PTP模型时间；共同时间域由上层同步状态提供，调用方不得伪造。
  */
 #ifndef SBCG_UDP_SOUND_EVENT_H
@@ -16,6 +17,9 @@
 #include "Network/ranging_status_wire.h"
 #include "Network/ranging_session.h"
 #include "BSP/board_identity.h"
+#ifdef SBCG_USE_MODE_OBSERVATION
+#include "Network/mode_wire.h"
+#endif
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -91,6 +95,94 @@ void UDPSoundEvent_SetRangingSessionSink(UDPSoundEvent_RangingSessionSink sink);
 /** @brief 通过原5009端口发送RSC2；now_ms只作接口一致性，失败返回false。 */
 bool UDPSoundEvent_SendRangingSession(uint32_t now_ms,const RangingSessionMessage *message);
 
+#ifdef SBCG_USE_MODE_OBSERVATION
+/** @brief 固定对端MDP1消费者；只在前台接收回调内借用消息。 */
+typedef void (*UDPSoundEvent_ModeControlSink)(const ModeControlMessage *message);
+
+/**
+ * @brief MDB1业务闸门上下文；由应用在前台查询模式状态后填写。
+ * @note configured=false表示未登记启动代次，保持阶段一原始未封装收发作为兼容路径；
+ *       configured=true时受保护报文必须封装且世代匹配，禁止原始旧包写入业务状态。
+ */
+typedef struct
+{
+    bool configured;
+    bool allowed;        /**< RANGE/CALIBRATION：CHIRP/WFR1/RST2/RAK2准入。 */
+    bool clap_allowed;   /**< CLAP：CLAP事件与CLP1/CLA1准入。 */
+    bool wave_allowed;   /**< WAVE：WVP2计划准入。 */
+    BoardRole role;
+    uint64_t a_boot;
+    uint64_t b_boot;
+    uint64_t mode_seq;
+} UDPSoundEvent_BusinessContext;
+
+/**
+ * @brief 业务闸门上下文提供者；前台网络回调与发送路径同步调用。
+ * @param out 非NULL输出，仅本次调用有效；返回false表示业务闸门未启用。
+ * @return 已登记启动代次并填好上下文为true。
+ */
+typedef bool (*UDPSoundEvent_BusinessContextProvider)(UDPSoundEvent_BusinessContext *out);
+
+/** @brief 安装业务闸门上下文提供者；NULL恢复阶段一未封装兼容路径。 @param provider 可NULL。 @return 无返回值。 */
+void UDPSoundEvent_SetBusinessContextProvider(UDPSoundEvent_BusinessContextProvider provider);
+
+/** @brief MDB1业务通道计数，用于周期性诊断输出。 */
+typedef struct
+{
+    uint32_t tx_ok;
+    uint32_t tx_blocked;
+    uint32_t tx_err;
+    uint32_t rx_ok;
+    uint32_t rx_blocked;
+    uint32_t rx_unwrapped;
+    uint32_t rx_bad;
+} UDPSoundEvent_BusinessCounters;
+
+/** @brief 复制MDB1业务计数；NULL参数不操作。 @param out 调用方输出。 @return 无返回值。 */
+void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out);
+
+/**
+ * @brief   读取自初始化以来成功交付的 UDP 收包累计数。
+ * @return  成功解码并分派的声音事件、模式控制等报文的累计计数；uint32_t 自然回绕，
+ *          内部计数饱和于 UINT32_MAX。
+ * @note    仅供前台只读健康观测（ETH 链路守护的收包增量），不改变接收语义、
+ *          不重置计数、不触发网络收发。
+ */
+uint32_t UDPSoundEvent_GetRxOkCount(void);
+
+/**
+ * @brief 发送受保护的CLAP短报文（CLP1/CLA1）；未登记代次时按原字节未封装发送。
+ * @param inner 非NULL已编码CLP1/CLA1内层字节，仅本次借用。
+ * @param length 内层字节数（CLP1为80，CLA1为24）。
+ * @return 已提交UDP为true；模式闸门拒绝、编码/网络失败为false。
+ * @note 仅原5009端口；登记代次后CLAP模式才允许封装，其他模式计入业务阻断。
+ */
+bool UDPSoundEvent_SendProtectedShort(const uint8_t *inner, uint16_t length);
+
+/**
+ * @brief 发送受保护的WAVE计划（WVP2内层56字节，封装后88字节）。
+ * @param inner 非NULL已编码WVP2内层字节，仅本次借用。
+ * @param length 内层字节数，固定56。
+ * @return 已提交UDP为true；模式闸门拒绝、编码/网络失败为false。
+ * @note 仅A在WAVE模式发送；登记代次后原始WVP2不再被B接受。
+ */
+bool UDPSoundEvent_SendProtectedWave(const uint8_t *inner, uint16_t length);
+
+/**
+ * @brief 设置MDP1前台接收消费者。
+ * @param sink 可为NULL，NULL表示不交付，非NULL须在注册期间保持有效。
+ * @return 无返回值。
+ */
+void UDPSoundEvent_SetModeControlSink(UDPSoundEvent_ModeControlSink sink);
+
+/**
+ * @brief 通过原5009端口向固定对端发送本板的MDP1消息。
+ * @param message 非NULL只读消息，仅本次借用，发送角色须与本板一致。
+ * @return UDP发送成功为true，字段或网络条件不满足以及发送失败为false。
+ */
+bool UDPSoundEvent_SendModeControl(const ModeControlMessage *message);
+#endif
+
 /** @brief 初始化本地身份、配对配置并清空統計；实际UDP PCB在Process懒创建。 */
 bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,
                         uint32_t (*tick)(void), UDPSoundEvent_Log log);
@@ -102,6 +194,13 @@ bool UDPSoundEvent_Init(uint32_t now_ms, const BoardIdentityProfile *profile,
  * @note 仅NO_SYS串行前台调用；同一非零域重复同步保留候选，流边界须先传0。
  */
 void UDPSoundEvent_SetTimeDomain(uint32_t id);
+
+/**
+ * @brief 清空配对候选、未消费结果和波形储备，保留计数和网络绑定。
+ * @return 无返回值；未初始化时不操作。
+ * @note 由前台在模式代次变化时调用，旧PCM槽通过有效标志撤销。
+ */
+void UDPSoundEvent_ResetPairing(void);
 
 /** @brief 重试绑定、推进配对并限速输出结果/状态；主循环调用。 */
 void UDPSoundEvent_Process(uint32_t now_ms);

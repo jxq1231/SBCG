@@ -147,14 +147,18 @@ int main(void)
  Reset(0U,true);temperature_low=true;
 #ifdef SBCG_USE_SOUND_TIME
  const unsigned capacity=32U;
+ /* 事件时间构建使用软上限8行，最坏排空时延控制在一个音频半块内。 */
+ const unsigned soft=8U;
 #else
  const unsigned capacity=16U;
+ const unsigned soft=capacity;
 #endif
- for(unsigned i=0U;i<capacity+2U;++i)time_log("$TEST\r\n",7);
- temperature_low=false;for(unsigned i=0U;i<capacity;++i)App_Process();
+ (void)capacity;
+ for(unsigned i=0U;i<soft+2U;++i)time_log("$TEST\r\n",7);
+ temperature_low=false;for(unsigned i=0U;i<soft;++i)App_Process();
  tick_ms=1000U;App_Process();
  char expected[160];snprintf(expected,sizeof expected,
-     "TX_ERRORS=2,LOG_FULL=2,LOG_WRITE=0,LOG_BAD=0,LOG_Q=0,LOG_HWM=%u",capacity);
+     "TX_ERRORS=2,LOG_FULL=2,LOG_WRITE=0,LOG_BAD=0,LOG_Q=0,LOG_HWM=%u",soft);
  assert(strstr(last_line,expected)!=NULL);
  /* A2同循环归因字段只在CHIRP心跳追加，原字段仍可核对。 */
  assert(strstr(last_line,",LOOP_MS=")!=NULL && strstr(last_line,",AUDIO_MS=")!=NULL);

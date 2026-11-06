@@ -1,3 +1,9 @@
+/**
+ * @file        test_codec_setup.c
+ * @brief       验证 WM8994 MIC2 启动序列与诊断增益操作。
+ * @details     通过主机 I2C 桩验证寄存器地址、字节序、成对更新及失败回退。
+ * @note        本测试只模拟 I2C 事务，增益生效与 PCM 幅度由实机另行验证。
+ */
 #include "BSP/bsp_audio_codec.h"
 #include "main.h"
 #include <stdio.h>
@@ -34,6 +40,9 @@ static uint32_t injected_error;
 static unsigned read_bytes;
 static int busy_after_read, busy_after_delay;
 static uint16_t written[EXPECTED_WRITES][2];
+static uint8_t gain_left, gain_right;
+static bool gain_test, bad_gain_readback;
+static unsigned gain_read_fail_at;
 
 HAL_I2C_StateTypeDef HAL_I2C_GetState(const I2C_HandleTypeDef *handle)
 {
@@ -53,11 +62,33 @@ void HAL_Delay(uint32_t delay_ms)
     tick_ms += delay_ms;
     if (busy_after_delay) { hi2c3.flags = I2C_FLAG_BUSY; }
 }
+/**
+ * @brief   模拟芯片标识或增益寄存器读回，并校验传输参数。
+ * @param   handle 测试用 I2C3 句柄。
+ * @param   address 带读写位占位的编解码器 I2C 地址。
+ * @param   reg 目标 WM8994 寄存器地址。
+ * @param   width 寄存器地址宽度标记。
+ * @param   bytes 调用者提供的读缓冲，至少可写 count 字节。
+ * @param   count 读取字节数。
+ * @param   timeout_ms 调用方传入的超时毫秒数。
+ * @return  当前用例配置的 HAL 状态。
+ */
 HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *handle, uint16_t address,
     uint16_t reg, uint16_t width, uint8_t *bytes, uint16_t count, uint32_t timeout_ms)
 {
-    CHECK(handle == &hi2c3 && address == 0x34U && reg == 0U);
+    CHECK(handle == &hi2c3 && address == 0x34U);
     CHECK(width == I2C_MEMADD_SIZE_16BIT && count == 2U && timeout_ms == 2U);
+    if (gain_test)
+    {
+        CHECK(reg == 0x0404U || reg == 0x0405U);
+        ++read_calls;
+        if (read_calls == gain_read_fail_at) { return HAL_ERROR; }
+        bytes[0] = 1U; /* The test also requires masking off VU. */
+        bytes[1] = reg == 0x0404U ? gain_left : gain_right;
+        if (bad_gain_readback && read_calls == 4U) { bytes[1] ^= 1U; }
+        return HAL_OK;
+    }
+    CHECK(reg == 0U);
     CHECK(read_calls == 0U && write_calls == 0U && delay_calls == 0U);
     ++read_calls;
     if (read_bytes > 0U) { bytes[0] = (uint8_t)(chip_id >> 8U); }
@@ -66,11 +97,37 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *handle, uint16_t address,
     if (busy_after_read) { hi2c3.state = HAL_I2C_STATE_BUSY_RX; }
     return read_status;
 }
+/**
+ * @brief   校验并记录配置或增益写入，按测试参数注入失败。
+ * @param   handle 测试用 I2C3 句柄。
+ * @param   address 带读写位占位的编解码器 I2C 地址。
+ * @param   reg 目标 WM8994 寄存器地址。
+ * @param   width 寄存器地址宽度标记。
+ * @param   bytes 调用者提供的寄存器数据，只读，含 count 字节。
+ * @param   count 写入字节数。
+ * @param   timeout_ms 调用方传入的超时毫秒数。
+ * @return  注入的 HAL 状态，未注入时返回 HAL_OK。
+ */
 HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *handle, uint16_t address,
     uint16_t reg, uint16_t width, uint8_t *bytes, uint16_t count, uint32_t timeout_ms)
 {
     CHECK(handle == &hi2c3 && address == 0x34U);
     CHECK(width == I2C_MEMADD_SIZE_16BIT && count == 2U && timeout_ms == 2U);
+    if (gain_test)
+    {
+        CHECK(write_calls < EXPECTED_WRITES);
+        CHECK(read_calls >= 2U);
+        const bool left = write_calls % 2U == 0U;
+        CHECK(reg == (left ? 0x0404U : 0x0405U));
+        CHECK(bytes[0] == (left ? 0U : 1U));
+        written[write_calls][0] = reg;
+        written[write_calls][1] = (uint16_t)(((uint16_t)bytes[0] << 8U) | bytes[1]);
+        ++write_calls;
+        if (write_calls == fail_at) { return write_status; }
+        if (left) { gain_left = bytes[1]; }
+        else { gain_right = bytes[1]; }
+        return HAL_OK;
+    }
     CHECK(read_calls == 1U && write_calls < EXPECTED_WRITES);
     CHECK(reg == expected[write_calls][0]);
     CHECK(bytes[0] == (uint8_t)(expected[write_calls][1] >> 8U));
@@ -82,6 +139,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *handle, uint16_t address,
     hi2c3.error = write_calls == fail_at ? injected_error : 0U;
     return write_calls == fail_at ? write_status : HAL_OK;
 }
+/** @brief 将主机 I2C 桩和事务计数恢复到每个用例的初始状态。 */
 static void Reset(void)
 {
     hi2c3 = (I2C_HandleTypeDef){HAL_I2C_STATE_READY, 0U, 0U};
@@ -89,6 +147,8 @@ static void Reset(void)
     chip_id = 0x8994U; read_status = HAL_OK; write_status = HAL_ERROR;
     fail_at = 0U; injected_error = HAL_I2C_ERROR_AF; read_bytes = 2U;
     busy_after_read = 0; busy_after_delay = 0;
+    gain_test = false; bad_gain_readback = false; gain_read_fail_at = 0U;
+    gain_left = 0xEFU; gain_right = 0xEFU;
 }
 static void CheckNoWrites(const BSP_AudioCodecSetupResult *result)
 {
@@ -182,11 +242,44 @@ static void TestEveryWriteFailure(void)
     }
     puts("PASS: NACK/timeout/HAL_BUSY at each of 24 writes stops on first error with exact diagnostics");
 }
+/** @brief 验证左右读回、同步更新、恢复和异常路径。 */
+static void TestMic2Gain(void)
+{
+    BSP_AudioCodecMic2Gain gain;
+    Reset(); gain_test = true;
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_READ, &gain) == BSP_CODEC_OK);
+    CHECK(gain.left == 0xEFU && gain.right == 0xEFU && write_calls == 0U);
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_LOW, &gain) == BSP_CODEC_OK);
+    CHECK(gain.left == 0xC0U && gain.right == 0xC0U && write_calls == 2U);
+    CHECK(written[0][1] == 0x00C0U && written[1][1] == 0x01C0U);
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_DEFAULT, &gain) == BSP_CODEC_OK);
+    CHECK(gain.left == 0xEFU && gain.right == 0xEFU && write_calls == 4U);
+
+    Reset(); gain_test = true; fail_at = 2U; gain_right = 0xE0U;
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_LOW, &gain) == BSP_CODEC_IO_ERROR);
+    CHECK(write_calls == 4U && gain_left == 0xEFU && gain_right == 0xE0U);
+
+    Reset(); gain_test = true; bad_gain_readback = true;
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_LOW, &gain) == BSP_CODEC_IO_ERROR);
+    CHECK(write_calls == 4U && gain_left == 0xEFU && gain_right == 0xEFU);
+
+    Reset(); gain_test = true; gain_read_fail_at = 2U;
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_LOW, &gain) == BSP_CODEC_IO_ERROR);
+    CHECK(write_calls == 0U);
+
+    Reset(); gain_test = true; hi2c3.flags = I2C_FLAG_BUSY;
+    CHECK(BSP_AudioCodec_DiagnoseMic2Gain(BSP_CODEC_GAIN_LOW, &gain) == BSP_CODEC_BUSY);
+    CHECK(read_calls == 0U && write_calls == 0U);
+    puts("PASS: MIC2 gain reads, stereo latch, restore, and failed-change rollback");
+}
+
+/** @brief 顺序运行 MIC2 主机用例，全部通过时返回零。 */
 int main(void)
 {
     TestSuccess();
     TestUnavailable();
     TestIdGate();
     TestEveryWriteFailure();
+    TestMic2Gain();
     return 0;
 }

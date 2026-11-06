@@ -1,10 +1,10 @@
 /**
  * @file        bsp_console.h
- * @brief       USART1 控制台同步发送及中断接收队列适配。
- * @details     声明系统信息、同步发送、字节流事件及接收统计接口；core_clock_hz 单位 Hz，UID 为三个原始字，错
- *          误统计为饱和 uint32_t 计数。
- * @note        依赖 CubeMX 已初始化的 huart1 和 HAL tick；发送禁止 ISR，接收无需 DMA。环形数组 256 字节，其中
- *          一个槽留空，实际可排队 255 字节。
+ * @brief       USART1 控制台发送（DMA 优先、同步回退）及中断接收队列适配。
+ * @details     声明系统信息、发送入队、发送/接收统计、字节流事件及接收接口；core_clock_hz 单位 Hz，UID 为三个
+ *          原始字，错误统计为饱和 uint32_t 计数。
+ * @note        依赖 CubeMX 已初始化的 huart1、USART1_TX DMA 和 HAL tick；发送为前台入队 + DMA 续传，未链接
+ *          TX DMA 时回退同步发送；接收为中断单字节环形队列。
  */
 
 #ifndef SBCG_BSP_CONSOLE_H
@@ -34,17 +34,34 @@ uint32_t BSP_Console_GetTickMs(void);
  * @note    App_Init 在生成初始化之后读取，用于启动日志和 UID 策略；不配置系统时钟。
  */
 void BSP_Console_GetInfo(BSP_ConsoleInfo *info);
-/* Main context only: returns false on HAL failure; no internal retry. */
+/* Main context only: enqueue into the DMA ring; false when the ring is full. */
 /**
- * @brief   通过控制台 UART 同步发送给定字节序列。
- * @param   data 调用者拥有的只读发送缓冲；须满足 HAL_UART_Transmit 的有效指针要求，返回前保持有效，函数不保存
- *          指针。
+ * @brief   将一行日志入队到控制台发送环形缓冲并启动 DMA。
+ * @param   data 调用者拥有的只读发送缓冲；本次调用内复制，不保存指针。
  * @param   length 要发送的字节数，uint16_t；不会自动补换行或 NUL。
- * @return  true 表示 HAL_UART_Transmit 返回 HAL_OK；false 表示 HAL 失败，不内部重试。
- * @note    仅主循环，禁止 ISR；25 ms 为 HAL 传输参数，依赖运行中的 HAL tick。同步调用返回后无 DMA/IRQ 持有缓
- *          冲，上层负责记录失败和重试策略。
+ * @return  true 表示已全部入队；false 表示参数非法或环形缓冲剩余空间不足（整行丢弃）。
+ * @note    仅主循环调用；返回时数据可能仍在 DMA 发送中。未链接 TX DMA 时内部回退同步发送。
  */
 bool BSP_Console_Write(const char *data, uint16_t length);
+
+/** @brief 控制台发送累计统计；high_water 为环形缓冲使用峰值，单位字节。 */
+typedef struct
+{
+    uint32_t enqueued;     /**< 成功入队的行数。 */
+    uint32_t dropped;      /**< 环形缓冲不足而整行丢弃的行数。 */
+    uint32_t dma_errors;   /**< HAL_UART_Transmit_DMA 返回错误次数。 */
+    uint32_t write_errors; /**< 回退同步发送失败或发送错误中断次数。 */
+    uint32_t fallbacks;    /**< 因未链接 TX DMA 而走同步发送的次数。 */
+    uint32_t high_water;   /**< 发送环形缓冲使用峰值，单位字节。 */
+} BSP_ConsoleTxStats;
+
+/**
+ * @brief   复制控制台发送统计。
+ * @param   out 调用者拥有的输出；NULL 时直接返回，不清零。
+ * @return  无返回值。
+ * @note    仅前台读取；复制时短暂屏蔽中断，计数为饱和值。
+ */
+void BSP_Console_GetTxStats(BSP_ConsoleTxStats *out);
 
 /** @brief 前台读结果：NONE 无字节、BYTE 输出字节、GAP 丢失并清空排队字节。 */
 typedef enum

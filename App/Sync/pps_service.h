@@ -105,12 +105,22 @@ void PpsService_Observe(uint32_t now_ms, uint32_t captured_ms, bool internal_loc
 bool PpsService_Invalidate(uint32_t now_ms);
 
 /**
+ * @brief   撤销PPS输出，并把“已FAULT、无输出可撤”视为可继续。
+ * @param   now_ms 当前HAL毫秒计数；本接口不刷新样本时效。
+ * @return  true表示BSP安全停止成功（包括此前已FAULT、本次Stop仍成功）；false表示Stop失败。
+ * @note    与PpsService_Invalidate的唯一差异是FAULT锁存时不返回false，供伺服恢复和相位/频率
+ *          命令继续执行；FAULT锁存不清除，仍由PpsService_Process每1s尝试自愈。
+ */
+bool PpsService_RevokeOutput(uint32_t now_ms);
+
+/**
  * @brief   在实际频率命令前决定是否保留已取得的输出资格。
  * @param   now_ms 当前HAL毫秒计数，执行时先检查样本和重新资格截止时间。
  * @param   previous_ppb 硬件原来已确认的绝对频率ppb。
  * @param   next_ppb 本次将应用的绝对频率ppb。
- * @return  true表示安全继续频率命令；false表示输出无法确认停止或已有FAULT。
+ * @return  true表示安全继续频率命令；false表示输出无法确认停止或出现新的硬故障。
  * @note    仅已具资格且频差不超过1125ppb可保持；重新资格期间第二次调频撤销，未具资格仍允许调频。
+ *          调用前已锁存FAULT且本次Stop成功时允许写入（不重新授予资格），避免PPS故障阻塞伺服。
  */
 bool PpsService_BeforeFrequency(uint32_t now_ms, int32_t previous_ppb, int32_t next_ppb);
 

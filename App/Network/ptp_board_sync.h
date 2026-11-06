@@ -74,4 +74,10 @@ bool PtpBoardSync_TakeLinkRecovery(void);
  * @note 仅前台只读；用于B端判断同步观测是否长时间停滞，不改变协议状态。
  */
 uint32_t PtpBoardSync_GetCompletedCount(void);
+/**
+ * @brief 查询启动/链路恢复/对端静默后的六秒静默窗是否已经结束。
+ * @return true表示协议已允许处理交换；false表示仍在静默窗内或服务未安装。
+ * @note 仅前台只读；同步停滞看门狗用它避免在正常静默窗内误判FAULT。
+ */
+bool PtpBoardSync_GuardDone(void);
 #endif

@@ -1,4 +1,5 @@
 # User-owned STM32F746 ETH memory integration. Do not move into generated CMake.
+option(SBCG_STACK_DIAGNOSTIC "Measure the MSP high-water mark with an 8 KiB reserve" OFF)
 set(_sbcg_ioc "${CMAKE_CURRENT_SOURCE_DIR}/SBCG.ioc")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sbcg_ioc}")
 file(STRINGS "${_sbcg_ioc}" _sbcg_eth_mode REGEX "^ETH\\.MediaInterface=")
@@ -39,6 +40,15 @@ if(_sbcg_eth_mode)
             message(FATAL_ERROR "LwIP heap differs from reviewed 0x20048000/4096 layout")
         endif()
         target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:--defsym=__sbcg_has_lwip=1")
+        # User-owned ETH link health guard: 1 Hz PHY/MAC consistency check and
+        # bounded recovery. CubeMX still owns ETH/RMII/DMA/pin initialization.
+        target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/eth_link_guard.c)
+        target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE App/Network)
+        if(SBCG_STACK_DIAGNOSTIC)
+            target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_STACK_DIAGNOSTIC=1)
+            target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/BSP/bsp_stack_diag.c)
+            target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:--defsym=__sbcg_stack_diagnostic=1")
+        endif()
         set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${_sbcg_lwipopts}")
     endif()
 

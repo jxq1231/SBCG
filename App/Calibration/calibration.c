@@ -32,22 +32,27 @@ void Calibration_Init(void)
 }
 
 /**
+ * @brief 判断原始测量是否落在现有标定偏移范围内。
+ * @param raw_mm 未应用标定偏移的温补距离，单位mm。
+ * @return 原始距离和拟应用偏移均合规时为true；不修改状态。
+ */
+bool Calibration_CanSetFromMeasurement(int32_t raw_mm)
+{
+    if (raw_mm < 0 || raw_mm > 10000) { return false; }
+    const int32_t offset_mm=CALIBRATION_REFERENCE_MM-raw_mm;
+    return offset_mm <= CALIBRATION_MAX_ABS_OFFSET_MM &&
+        offset_mm >= -CALIBRATION_MAX_ABS_OFFSET_MM;
+}
+
+/**
  * @brief 校验原始距离并替换保存系数，成功后自动启用应用并推进版本。
  * @param raw_mm 未应用偏移的原始距离，单位mm，合法范围及偏移约束见公开接口。
  * @return 校验通过返回true；失败返回false且不修改模块状态。
  */
 bool Calibration_SetFromMeasurement(int32_t raw_mm)
 {
-    if (raw_mm < 0 || raw_mm > 10000)
-    {
-        return false;
-    }
+    if (!Calibration_CanSetFromMeasurement(raw_mm)) { return false; }
     const int32_t offset_mm = CALIBRATION_REFERENCE_MM - raw_mm;
-    if (offset_mm > CALIBRATION_MAX_ABS_OFFSET_MM ||
-        offset_mm < -CALIBRATION_MAX_ABS_OFFSET_MM)
-    {
-        return false;
-    }
     calibration.calibrated = true;
     calibration.offset_mm = offset_mm;
     calibration.reference_mm = CALIBRATION_REFERENCE_MM;

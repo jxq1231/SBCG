@@ -3,10 +3,15 @@
  * @brief       协调单板网络、时间观测、温度与音频服务的初始化和前台调度。
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
+ *              双板模式握手管理声音事件采样边界与测距、拍掌和波形准入。
+ *              A板标定在前台等待新测量、锁存候选并处理独立确认期限。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
 #include "app_main.h"
+#ifdef SBCG_STACK_DIAGNOSTIC
+#include "BSP/bsp_stack_diag.h"
+#endif
 #ifdef SBCG_USE_ADVANCED_UI
 #include "Network/clap_wire.h"
 #include "UI/waveform_service.h"
@@ -19,7 +24,7 @@ void App_GetClapSnapshot(ClapRangingSnapshot *out){ClapRanging_GetSnapshot(&clap
 #endif
 #ifdef SBCG_USE_CALIBRATION_CONTROL
 #include "Calibration/calibration_control.h"
-/** @brief 已记录的前台标定请求完成序号，只按用户动作输出一次诊断。 */
+/** @brief 上次已记录的标定事件序号，倒计时刷新不产生日志。 */
 static uint32_t calibration_reported;
 #endif
 #ifdef SBCG_ITCM_PROBE
@@ -36,6 +41,9 @@ static uint32_t calibration_reported;
 #endif
 #ifdef SBCG_USE_SDRAM
 #include "BSP/bsp_sdram.h"
+#endif
+#ifdef SBCG_USE_BOOT_COUNTER
+#include "BSP/bsp_boot_counter.h"
 #endif
 #ifdef SBCG_USE_SOUND_TIME
 #include "Detector/sound_event_time.h"
@@ -91,6 +99,11 @@ static uint32_t calibration_reported;
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef SBCG_USE_MODE_OBSERVATION
+/** @brief 已完成PCM边界清理的模式代次，标定确认也须匹配该代次。 */
+static ModeSnapshot mode_sound_generation;
+#endif
 
 /**
  * ==================== 模块：构建标识与前台日志状态 ====================
@@ -151,10 +164,15 @@ static RangingAppState ranging_app __attribute__((section(".ItcmState"),aligned(
 #endif
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
-/* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。 */
-#define APP_LOG_QUEUE_CAPACITY 32U
+/* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。
+   发送改为 DMA 后仍需限制最坏积压：环形数组只保留12行，配合8行软上限。 */
+#define APP_LOG_QUEUE_CAPACITY 12U
+/* 同步发送一行最坏约23 ms，积压超过一个170.7 ms音频半块；
+   软上限只保留最近8行，丢弃最旧行并计入LOG_FULL，限制最坏排空时延。 */
+#define APP_LOG_QUEUE_SOFT_LIMIT 8U
 #else
 #define APP_LOG_QUEUE_CAPACITY 16U
+#define APP_LOG_QUEUE_SOFT_LIMIT APP_LOG_QUEUE_CAPACITY
 #endif
 /* 诊断心跳含日志原因与队列状态，满宽uint32字段仍须完整放入同一行。 */
 #ifdef SBCG_USE_CHIRP
@@ -168,6 +186,13 @@ static uint32_t heartbeat_seq;
 /* CHIRP构建：迄今最大前台循环总时长及同一轮AudioCapture/UI/其余耗时，仅诊断。 */
 #ifdef SBCG_USE_CHIRP
 static uint32_t max_loop_ms,max_loop_audio_ms,max_loop_ui_ms,max_loop_other_ms;
+#ifdef SBCG_USE_CHIRP
+/* 前台循环耗时固定毫秒桶；只用于性能对照，窗口输出后清零。 */
+#define APP_LOOP_HIST_BUCKETS 16U
+static uint32_t app_loop_hist[APP_LOOP_HIST_BUCKETS];
+static uint32_t app_loop_hist_max_ms;
+static uint32_t app_loop_hist_last_ms;
+#endif
 static uint32_t prof_lwip_max_ms,prof_temp_max_ms,prof_sound_max_ms;
 static uint32_t max_loop_flush_ms;
 #ifdef SBCG_USE_AUDIO
@@ -214,7 +239,8 @@ static void FlushOneLine(void)
  * @param   line 有效ASCII日志缓冲区；由调用者持有，必要时本函数同步复制。
  * @param   length 待发字节数，合法范围1～255，不包括字符串结尾的空字符。
  * @return  无返回值（void）。
- * @note    各服务以前台回调调用；长度非法、队满、写失败分别累计LOG_BAD/FULL/WRITE及原TX_ERRORS。
+ * @note    各服务以前台回调调用；长度非法、队列超软上限或写失败分别累计LOG_BAD/FULL/WRITE及原TX_ERRORS。
+ *          队列超软上限时丢弃最旧行，避免同步串口排空挤占音频半块预算。
  *          此处未检查line是否为NULL，调用方必须保证长度范围内的内存有效。
  */
 static void SendLine(const char *line, int length)
@@ -233,12 +259,23 @@ static void SendLine(const char *line, int length)
 #endif
     if (enqueue)
     {
+#if APP_LOG_QUEUE_SOFT_LIMIT < APP_LOG_QUEUE_CAPACITY
+        if (pending_count >= APP_LOG_QUEUE_SOFT_LIMIT)
+        {
+            /* 丢最旧行，保留最近的现场证据，同时把最坏排空时延限制在软上限内。 */
+            pending_head = (pending_head + 1U) % APP_LOG_QUEUE_CAPACITY;
+            --pending_count;
+            ++app_tx_error_count;
+            ++log_full_count;
+        }
+#else
         if (pending_count == APP_LOG_QUEUE_CAPACITY)
         {
             ++app_tx_error_count;
             ++log_full_count;
             return;
         }
+#endif
         const uint32_t tail = (pending_head + pending_count) % APP_LOG_QUEUE_CAPACITY;
         memcpy(pending_lines[tail], line, (size_t)length);
         pending_lengths[tail] = (uint16_t)length;
@@ -398,13 +435,290 @@ static bool ReadRangingClock(uint64_t *ns,uint32_t *epoch)
 }
 
 /**
+ * @brief 模式闸门是否已登记本板启动代次。
+ * @return 已登记任一方启动代次为true；未登记时保持阶段一全业务兼容。
+ * @note 只读模式快照，前台调用；固件启动会先自动登记，主机基线不注入时走兼容路径。
+ */
+#if defined(SBCG_USE_ADVANCED_UI) || defined(SBCG_USE_MODE_OBSERVATION)
+static bool ModeGateConfigured(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    return mode.a_boot != 0U || mode.b_boot != 0U;
+#else
+    return false;
+#endif
+}
+#endif
+
+/**
+ * @brief 当前是否允许RANGE/CALIBRATION测距业务。
+ * @return 未登记代次，或双板ACTIVE且生效模式为RANGE/CALIBRATION时为true。
+ * @note 只读模式快照；决定事件发布、权威配对/发布、RST2发送和MDB1准入。
+ */
+static bool ModeRangingAllowed(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE &&
+        (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION);
+#else
+    return true;
+#endif
+}
+
+/**
+ * @brief 当前是否允许标定控制推进。
+ * @return 未登记代次，或双板生效CAL且已切换到相同PCM代次时为true。
+ * @note 已保存/已启用补偿按既有路径应用；代次突变时立即拒绝旧确认。
+ */
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+static bool ModeCalibrationAllowed(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_CALIBRATION &&
+        mode_sound_generation.effective == MODE_CALIBRATION &&
+        mode.a_boot == mode_sound_generation.a_boot &&
+        mode.b_boot == mode_sound_generation.b_boot &&
+        mode.mode_seq == mode_sound_generation.mode_seq;
+#else
+    return true;
+#endif
+}
+#endif
+
+/**
+ * @brief 判断当前生效模式是否准入指定声音事件类型。
+ * @param is_chirp true为CHIRP，false为CLAP。
+ * @return 未登记代次恒true；登记后RANGE/CALIBRATION仅准入CHIRP、CLAP仅准入CLAP。
+ * @note WAVE拒绝两类；候选发布与UDP收发使用同一判定，避免模式错配事件进入配对。
+ */
+static bool ModeAdmitsSoundType(bool is_chirp)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    if (mode.state != MODE_ACTIVE)
+    {
+        return false;
+    }
+    if (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION)
+    {
+        return is_chirp;
+    }
+    if (mode.effective == MODE_CLAP)
+    {
+        return !is_chirp;
+    }
+    return false;
+#else
+    (void)is_chirp;
+    return true;
+#endif
+}
+
+/** @brief CLAP专属业务只在已生效CLAP模式放行；未登记代次时保留阶段一行为。 @return 允许为true。 */
+#ifdef SBCG_USE_ADVANCED_UI
+static bool ModeClapAllowed(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_CLAP;
+#else
+    return true;
+#endif
+}
+
+#ifdef SBCG_MODE_TEST_CONTROL
+#define CLAP_PCM_TRACE_MS 120000U
+#define CLAP_PCM_TRACE_ID_BIT UINT32_C(0x80000000)
+static bool clap_pcm_trace_armed;
+static uint32_t clap_pcm_trace_start_ms;
+static int16_t clap_pcm_trace_samples[SOUND_DETECTOR_CLASSIFY_FRAMES+SOUND_DETECTOR_TOA_LEFT_MARGIN]
+    __attribute__((section(".WaveformState"),aligned(32)));
+
+/**
+ * @brief 控制当前CLAP代次的本板PCM诊断，启用后最多120秒。
+ * @param enabled true请求启用，false立即关闭。
+ * @return 接受为true；未确认CLAP时拒绝启用。
+ * @note 串口前台命令使用；离开或重建模式代次自动撤销。
+ */
+bool App_SetClapPcmTrace(bool enabled)
+{
+    if (enabled && (!ModeGateConfigured() || !ModeClapAllowed())) { return false; }
+    clap_pcm_trace_start_ms = BSP_Console_GetTickMs();
+    clap_pcm_trace_armed = enabled;
+    return true;
+}
+
+/**
+ * @brief 把已验证环中的分类窗和TOA窗联合复制并下传给本机PC采集端。
+ * @param sequence 检测候选的非零序号，最高位保留给PCM1诊断标记。
+ * @param event 非NULL候选，调用期间借用，用会话及onset定位样本。
+ * @param toa_first TOA搜索窗绝对首帧。
+ * @return 无返回值；环中缺任一段则跳过该候选。
+ * @note 音频已归还，使用左声道独占CPU缓冲；接收端按序号去掉标记位。
+ */
+static void TraceClapPcm(uint32_t sequence, const SoundCandidate *event,uint64_t toa_first)
+{
+    if (!clap_pcm_trace_armed) { return; }
+    if ((uint32_t)(BSP_Console_GetTickMs()-clap_pcm_trace_start_ms)>=CLAP_PCM_TRACE_MS)
+    {
+        clap_pcm_trace_armed = false;
+        return;
+    }
+    if (sequence==0U || sequence>=CLAP_PCM_TRACE_ID_BIT) { return; }
+
+    const uint16_t frames = (uint16_t)(event->onset_frame-toa_first+SOUND_DETECTOR_CLASSIFY_FRAMES);
+    if (!WaveformService_CopyVerifiedPcm(event->session,toa_first,frames,clap_pcm_trace_samples))
+    { return; }
+
+    const ChirpCaptureSlice slice = {
+        .samples=clap_pcm_trace_samples,.frames=frames,.session=event->session,
+        .id=CLAP_PCM_TRACE_ID_BIT|sequence,.first_frame=toa_first,
+        .hint_frame=event->onset_frame,.raw_first_frame=toa_first
+    };
+    (void)UDPChirpCapture_Send(&slice);
+}
+#endif
+
+/** @brief WAVE专属计算只在已生效WAVE模式放行；未登记代次时保留阶段一行为。 @return 允许为true。 */
+static bool ModeWaveComputeAllowed(void)
+{
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return true;
+    }
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_WAVE;
+#else
+    return true;
+#endif
+}
+
+/**
+ * @brief 是否允许本板推进WAVE周期搜索与计划生成。
+ * @return 未登记代次恒true；登记后仅A在已生效WAVE模式为true。
+ * @note B不做独立周期对齐，只接受A计划并从本机PCM提取。
+ */
+static bool ModeWavePlannerAllowed(void)
+{
+    if (!ModeWaveComputeAllowed())
+    {
+        return false;
+    }
+    if (!ModeGateConfigured())
+    {
+        return true;
+    }
+    const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+    return profile != NULL && profile->role == BOARD_ROLE_A;
+}
+#endif
+
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+/**
+ * @brief 推进标定采集与确认，并记录有变化的状态事件。
+ * @param context 已更新的测量上下文，非NULL，只读借用。
+ * @param audio 本轮音频会话快照，非NULL，只读借用。
+ * @param common_ns 本轮共同时间，单位ns，读取失败为0。
+ * @return 标定版本发生变化时为true，由调用方同步既有测量合同。
+ * @note 仅在消费START时读DMA游标，游标有歧义时按现有模式边界方法保守跳过。
+ */
+static bool ServiceCalibration(const MeasurementContext *context,const BSP_AudioSnapshot *audio,
+                               uint64_t common_ns)
+{
+    CalibrationControlSnapshot control;
+    CalibrationControl_GetSnapshot(&control);
+    CalibrationControlInput input={
+        .context=*context,.common_ns=common_ns,.mode_allowed=ModeCalibrationAllowed(),
+        .audio_floor_frame=UINT64_MAX
+    };
+    MeasurementCalibrationSample sample;
+    if(context->authority && input.mode_allowed)
+    {
+        if(control.phase==CALIBRATION_PHASE_WAIT_SOUND && MeasurementResult_GetCalibrationSample(&sample))
+            input.sample=&sample;
+        if(control.phase==CALIBRATION_PHASE_WAIT_SOUND)
+            SoundDetectorService_GetLastChirp(&input.chirp_session,&input.chirp_onset_frame);
+        if(control.action==CALIBRATION_ACTION_START && control.result==CALIBRATION_CONTROL_PENDING)
+        {
+            BSP_AudioCursor cursor;
+            const uint64_t skip=2U*BSP_AUDIO_HALF_FRAMES;
+            if(BSP_Audio_ReadCursor(&cursor) && cursor.session==audio->session)
+                input.audio_floor_frame=cursor.complete_frames;
+            else if(context->stream_valid && audio->observed_frames<=UINT64_MAX-skip)
+                input.audio_floor_frame=audio->observed_frames+skip;
+        }
+    }
+    else if(!context->authority)
+    {
+        MeasurementPresentationSnapshot presentation;
+        MeasurementResult_GetPresentation(&presentation);
+        input.applied_offset_mm=presentation.calibration_offset_mm;
+        input.applied_version=presentation.calibration_version;
+    }
+    input.now_ms=BSP_Console_GetTickMs();
+    const bool changed=CalibrationControl_Process(&input);
+    CalibrationControl_GetSnapshot(&control);
+    if(control.completed!=calibration_reported)
+    {
+        calibration_reported=control.completed;
+        const char *phase="IDLE";
+        if(control.phase==CALIBRATION_PHASE_WAIT_SOUND)phase="WAIT_SOUND";
+        else if(control.phase==CALIBRATION_PHASE_WAIT_CONFIRM)phase="WAIT_CONFIRM";
+        char line[APP_LOG_LINE_CAPACITY];
+        const int length=snprintf(line,sizeof line,
+            "$CALIBRATION,ACTION=%u,RESULT=%u,SAVED=%u,ENABLED=%u,OFFSET_MM=%" PRId32
+            ",APPLIED_MM=%" PRId32 ",VERSION=%u,SAMPLE_ID=%" PRIu32
+            ",PHASE=%s,REASON=%s,HEARD=%u,LEFT_MS=%" PRIu32 ",TICK_MS=%" PRIu32 ",RAW_MM=%" PRId32 "\r\n",
+            (unsigned)control.action,(unsigned)control.result,control.calibration.calibrated?1U:0U,
+            control.calibration.enabled?1U:0U,control.calibration.offset_mm,control.applied_offset_mm,
+            (unsigned)control.applied_version,control.candidate.measurement_id,phase,
+            CalibrationControl_ResultName(control.result),control.heard_chirp?1U:0U,control.remaining_ms,
+            input.now_ms,
+            control.candidate.measurement_id!=0U?control.candidate.raw_mm:0);
+        if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
+    }
+    return changed;
+}
+#endif
+
+/**
  * @brief 在收发和UI之前持续驱动状态会话与真实源期限。
  * @param now_ms 当前HAL毫秒；音频快照之后另取时校验回调年龄。
  * @return 无返回值；不发送报文、不读取PCM，不改变PTP/PPS配置。
- * @note 启用标定UI时，先核对真实测量新鲜度，再执行用户确认动作；系数变化按既有合同撤值等待新声音。
+ * @note 标定采集使用受检新样本，确认使用锁存候选；系数变化按既有合同撤值等待新声音。
  */
 static void RefreshRanging(uint32_t now_ms)
 {
+#ifdef SBCG_STACK_DIAGNOSTIC
+    /* 此入口也会从A板结果回调和UDP接收路径进入，采样当前调用深度。 */
+    BSP_StackDiag_Observe();
+#endif
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL)return;
     TimeDomainSnapshot domain;TimeDomain_Get(&domain);
@@ -455,39 +769,27 @@ static void RefreshRanging(uint32_t now_ms)
     if(context.authority)MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
     MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
 #ifdef SBCG_USE_CALIBRATION_CONTROL
-    MeasurementCalibrationSample calibration_sample;
-    const bool sample_available=MeasurementResult_GetCalibrationSample(&calibration_sample);
-    MeasurementPresentationSnapshot calibration_presentation;
-    MeasurementResult_GetPresentation(&calibration_presentation);
-    if(CalibrationControl_Process(context.authority,sample_available?&calibration_sample:NULL,
-        calibration_presentation.calibration_offset_mm,calibration_presentation.calibration_version))
+    if(ServiceCalibration(&context,&audio,common_ns))
     {
         Calibration_Get(&calibration);
         MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
         MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
     }
-    CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
-    if(control.completed!=calibration_reported)
-    {
-        calibration_reported=control.completed;
-        char line[240];
-        const int length=snprintf(line,sizeof line,
-            "$CALIBRATION,ACTION=%u,RESULT=%u,SAVED=%u,ENABLED=%u,OFFSET_MM=%" PRId32
-            ",APPLIED_MM=%" PRId32 ",VERSION=%u,SAMPLE_ID=%" PRIu32 "\r\n",
-            (unsigned)control.action,(unsigned)control.result,control.calibration.calibrated?1U:0U,
-            control.calibration.enabled?1U:0U,control.calibration.offset_mm,control.applied_offset_mm,
-            (unsigned)control.applied_version,sample_available?calibration_sample.measurement_id:0U);
-        if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
-    }
 #endif
 #ifdef SBCG_USE_ADVANCED_UI
-    ClapRanging_Update(&clap_ranging,profile->role,context.domain_valid && stream_ok && clock_ok,
-        &session,clock_ok?common_ns:0U,now_ms,&temperature,&calibration);
-    const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
-    WaveformService_Update(profile->role,context.domain_valid && stream_ok && clock_ok,
-        &session,clock_ok?common_ns:0U,now_ms);
-    const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
-    if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+    if(ModeClapAllowed())
+    {
+        ClapRanging_Update(&clap_ranging,profile->role,context.domain_valid && stream_ok && clock_ok,
+            &session,clock_ok?common_ns:0U,now_ms,&temperature,&calibration);
+    }
+    if(ModeWaveComputeAllowed())
+    {
+        const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
+        WaveformService_Update(profile->role,context.domain_valid && stream_ok && clock_ok,
+            &session,clock_ok?common_ns:0U,now_ms);
+        const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
+        if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+    }
 #endif
 }
 
@@ -498,25 +800,39 @@ static void HandleAuxiliary(const uint8_t *data,uint16_t length)
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     if(memcmp(data,"CLP1",4)==0 && profile->role==BOARD_ROLE_B)
-    { ClapResultMessage result;if(ClapWire_DecodeResult(data,length,&result))
-        (void)ClapRanging_OnMessage(&clap_ranging,&result); }
+    {
+        if(!ModeClapAllowed())return;
+        ClapResultMessage result;if(ClapWire_DecodeResult(data,length,&result))
+            (void)ClapRanging_OnMessage(&clap_ranging,&result);
+    }
     else if(memcmp(data,"CLA1",4)==0 && profile->role==BOARD_ROLE_A)
-    { ClapAckMessage ack;if(ClapWire_DecodeAck(data,length,&ack))
-        (void)ClapRanging_OnAck(&clap_ranging,&ack); }
+    {
+        if(!ModeClapAllowed())return;
+        ClapAckMessage ack;if(ClapWire_DecodeAck(data,length,&ack))
+            (void)ClapRanging_OnAck(&clap_ranging,&ack);
+    }
     else if(memcmp(data,"WVP2",4)==0 && profile->role==BOARD_ROLE_B)
-    { WaveformPlan plan;if(WaveformPlanWire_Decode(data,length,&plan))
-        (void)WaveformService_OnPlan(&plan,now); }
+    {
+        if(!ModeWaveComputeAllowed())return; /* WAVE计划在阶段四前关闭。 */
+        WaveformPlan plan;if(WaveformPlanWire_Decode(data,length,&plan))
+            (void)WaveformService_OnPlan(&plan,now);
+    }
 }
 /** @brief 前台发送击掌结果/确认和共同波形计划，失败不补发突发流。@param now_ms 当前毫秒。@return 无返回值。 */
 static void ServiceAuxiliary(uint32_t now_ms)
 {
     uint8_t data[CLAP_RESULT_WIRE_BYTES];ClapResultMessage result;ClapAckMessage ack;WaveformPlan plan;
-    if(ClapRanging_TakeTx(&clap_ranging,now_ms,&result) && ClapWire_EncodeResult(&result,data,CLAP_RESULT_WIRE_BYTES))
-        (void)UDPSoundEvent_SendAuxiliary(data,CLAP_RESULT_WIRE_BYTES);
-    if(ClapRanging_TakeAck(&clap_ranging,&ack) && ClapWire_EncodeAck(&ack,data,CLAP_ACK_WIRE_BYTES))
-        (void)UDPSoundEvent_SendAuxiliary(data,CLAP_ACK_WIRE_BYTES);
-    if(WaveformService_TakePlan(&plan) && WaveformPlanWire_Encode(&plan,data,WAVEFORM_PLAN_WIRE_BYTES))
-        (void)UDPSoundEvent_SendAuxiliary(data,WAVEFORM_PLAN_WIRE_BYTES);
+    if(ModeClapAllowed() &&
+       ClapRanging_TakeTx(&clap_ranging,now_ms,&result) &&
+       ClapWire_EncodeResult(&result,data,CLAP_RESULT_WIRE_BYTES))
+        (void)UDPSoundEvent_SendProtectedShort(data,CLAP_RESULT_WIRE_BYTES);
+    if(ModeClapAllowed() &&
+       ClapRanging_TakeAck(&clap_ranging,&ack) &&
+       ClapWire_EncodeAck(&ack,data,CLAP_ACK_WIRE_BYTES))
+        (void)UDPSoundEvent_SendProtectedShort(data,CLAP_ACK_WIRE_BYTES);
+    if(ModeWavePlannerAllowed() && WaveformService_TakePlan(&plan) &&
+       WaveformPlanWire_Encode(&plan,data,WAVEFORM_PLAN_WIRE_BYTES))
+        (void)UDPSoundEvent_SendProtectedWave(data,WAVEFORM_PLAN_WIRE_BYTES);
 }
 #endif
 
@@ -671,6 +987,272 @@ static void FormatUnsigned64(uint64_t value,char *out)
     out[pos]='\0';
 }
 
+#ifdef SBCG_USE_MODE_OBSERVATION
+/**
+ * ==================== 模块：双板模式观测 ====================
+ * 作用：复用现有UDP端点同步模式并记录状态变化，仅供观测。
+ * 调度顺序：接收回调暂存报文，前台每轮在音频归还与原业务处理后消费并发送；
+ *           DHT起始低电平只暂停音频/UI，不再跳过本模块。
+ * 调用关系：App_Init注册入口，App_Process推进，诊断命令可设置代次和A板请求。
+ */
+/* 稳定后每5秒输出一次快照，避免只能靠命令观察稳态租约。 */
+#define MODE_REPORT_PERIOD_MS 5000U
+static ModeSnapshot last_mode_report;
+static bool mode_reported;
+static uint32_t last_mode_report_ms;
+/* 本机启动代次登记结果：BOOTGEN状态名、MANUAL（诊断命令登记）或DISABLED。 */
+#ifdef SBCG_USE_BOOT_COUNTER
+static const char *mode_boot_status = "PENDING";
+#else
+static const char *mode_boot_status = "DISABLED";
+#endif
+static bool mode_boot_status_from_flash;
+/* 模式控制UDP端口/回调是否已在UDPSoundEvent初始化成功后登记。 */
+static bool mode_control_port_ready;
+
+/** @brief 将本次启动代次交给模式状态机。@param boot 非零且跨启动递增。@return 接受为true。 */
+bool App_ModeSetBoot(uint64_t boot)
+{
+    const bool accepted = ModeService_SetBoot(boot);
+    if (accepted && !mode_boot_status_from_flash)
+    {
+        mode_boot_status = "MANUAL";
+    }
+    return accepted;
+}
+
+/** @brief 提交A板诊断模式请求。@param mode 待请求模式。@return 状态机接收为true。 */
+bool App_ModeRequest(ModeKind mode)
+{
+    return ModeService_Request(mode);
+}
+
+/** @brief 读取模式观测快照。@param out 调用者输出，允许NULL。@return 无返回值。 */
+void App_GetModeSnapshot(ModeSnapshot *out)
+{
+    ModeService_GetSnapshot(out);
+}
+
+/**
+ * @brief 输出一条模式观测记录，不触发状态变化。
+ * @param mode 非NULL前台快照，仅本次调用读取。
+ * @param now_ms 本地HAL毫秒，作为TICK_MS输出并支持无符号回绕。
+ * @return 无返回值。
+ * @note 复用无符号64位格式化，避免精简C库丢失启动代次的高位；REASON保留最近一次
+ *       状态/阶段变化原因，BLOCK表示当前阻塞；REG/PORT分别表示启动代次和
+ *       模式控制端口登记，WAIT_SINCE_MS仅在等待态填写。
+ *       完整行超过256字节缓冲时退化为关键字段行，保证单行可发送。
+ */
+static void LogModeSnapshot(const ModeSnapshot *mode, uint32_t now_ms)
+{
+    char a_boot[24], b_boot[24], mode_seq[24], wait_since[12];
+    FormatUnsigned64(mode->a_boot, a_boot);
+    FormatUnsigned64(mode->b_boot, b_boot);
+    FormatUnsigned64(mode->mode_seq, mode_seq);
+    wait_since[0] = '\0';
+    if (mode->waiting)
+    {
+        (void)snprintf(wait_since, sizeof wait_since, "%" PRIu32, mode->wait_since_ms);
+    }
+    char line[APP_LOG_LINE_CAPACITY];
+    int length = snprintf(line, sizeof line,
+        "$MODE,ROLE=%c,REQUESTED=%u,EFFECTIVE=%u,STATE=%u,A_BOOT=%s,B_BOOT=%s,"
+        "SEQ=%s,REASON=%u,ATTEMPTS=%" PRIu32 ",TICK_MS=%" PRIu32
+        ",STATE_MS=%" PRIu32 ",LINK_UP=%u,WAIT_SINCE_MS=%s,BLOCK=%u,REG=%u,PORT=%u,"
+        "BOOT=%s,ROLLBACKS=%" PRIu32 "\r\n",
+        mode->role == BOARD_ROLE_A ? 'A' : 'B', (unsigned)mode->requested,
+        (unsigned)mode->effective, (unsigned)mode->state, a_boot, b_boot, mode_seq,
+        (unsigned)mode->reason, mode->attempts, now_ms, mode->state_ms,
+        mode->link_up ? 1U : 0U, wait_since, (unsigned)mode->block,
+        mode->boot_set ? 1U : 0U, mode_control_port_ready ? 1U : 0U,
+        mode_boot_status, mode->rollbacks);
+    if (length <= 0 || (size_t)length >= sizeof line)
+    {
+        length = snprintf(line, sizeof line,
+            "$MODE,ROLE=%c,STATE=%u,REASON=%u,BLOCK=%u,A_BOOT=%s,B_BOOT=%s,SEQ=%s,"
+            "TICK_MS=%" PRIu32 ",LINK_UP=%u,REG=%u,PORT=%u,BOOT=%s\r\n",
+            mode->role == BOARD_ROLE_A ? 'A' : 'B', (unsigned)mode->state,
+            (unsigned)mode->reason, (unsigned)mode->block, a_boot, b_boot, mode_seq,
+            now_ms, mode->link_up ? 1U : 0U, mode->boot_set ? 1U : 0U,
+            mode_control_port_ready ? 1U : 0U, mode_boot_status);
+    }
+    SendLine(line, length);
+}
+
+#ifdef SBCG_MODE_TEST_CONTROL
+/** @brief 响应前台MODE?命令，读取并记录当前状态。@return 无返回值。 */
+void App_ReportMode(void)
+{
+    ModeSnapshot snapshot;
+    App_GetModeSnapshot(&snapshot);
+    LogModeSnapshot(&snapshot, BSP_Console_GetTickMs());
+}
+#endif
+
+/**
+ * @brief 消费模式报文并推进握手，变化或周期到期时输出诊断。
+ * @param now_ms 本地HAL毫秒，支持无符号回绕。
+ * @return 无返回值。
+ * @note 不使用PTP时间判断租约，不更改测距、音频或UI资格。DHT起始低电平期间仍推进，
+ *       避免输入窗同时冻结模式租约；本次启动代次登记前只输出首条，
+ *       登记后每MODE_REPORT_PERIOD_MS输出一次稳态快照，重发次数变化不单独产生日志；
+ *       对端代次回退收养时额外输出一条$MODE_EVENT给出原因。
+ */
+static void ServiceModeObservation(uint32_t now_ms)
+{
+    EthernetMonitorSnapshot network;
+    EthernetMonitor_GetSnapshot(now_ms, &network);
+    ModeService_Process(now_ms, network.valid && network.link_up, UDPSoundEvent_SendModeControl);
+    ModeSnapshot snapshot;
+    ModeService_GetSnapshot(&snapshot);
+    if (snapshot.rollbacks != last_mode_report.rollbacks)
+    {
+        char boot[24];
+        FormatUnsigned64(snapshot.role == BOARD_ROLE_A ? snapshot.b_boot : snapshot.a_boot,
+                         boot);
+        char event[APP_LOG_LINE_CAPACITY];
+        const int event_length = snprintf(event, sizeof event,
+            "$MODE_EVENT,EVENT=PEER_ROLLBACK,ROLE=%c,BOOT=%s,TICK_MS=%" PRIu32
+            ",COUNT=%" PRIu32 "\r\n",
+            snapshot.role == BOARD_ROLE_A ? 'A' : 'B', boot, now_ms, snapshot.rollbacks);
+        SendLine(event, event_length);
+    }
+    const bool booted = snapshot.a_boot != 0U || snapshot.b_boot != 0U;
+    const bool periodic = booted &&
+        (uint32_t)(now_ms - last_mode_report_ms) >= MODE_REPORT_PERIOD_MS;
+    if (!mode_reported || periodic || snapshot.state != last_mode_report.state ||
+        snapshot.reason != last_mode_report.reason || snapshot.block != last_mode_report.block ||
+        snapshot.requested != last_mode_report.requested ||
+        snapshot.effective != last_mode_report.effective || snapshot.a_boot != last_mode_report.a_boot ||
+        snapshot.b_boot != last_mode_report.b_boot || snapshot.mode_seq != last_mode_report.mode_seq ||
+        snapshot.boot_set != last_mode_report.boot_set ||
+        snapshot.link_up != last_mode_report.link_up ||
+        snapshot.waiting != last_mode_report.waiting ||
+        snapshot.wait_since_ms != last_mode_report.wait_since_ms ||
+        snapshot.rollbacks != last_mode_report.rollbacks)
+    {
+        mode_reported = true;
+        last_mode_report = snapshot;
+        last_mode_report_ms = now_ms;
+        LogModeSnapshot(&snapshot, now_ms);
+    }
+}
+
+/** @brief 上一次模式闸门是否允许测距业务；仅在本板已登记代次时有效。 */
+static bool mode_business_ranging_active;
+static AudioCaptureSoundBoundary mode_sound_boundary;
+#ifdef SBCG_USE_ADVANCED_UI
+/** @brief 上一次模式闸门是否允许CLAP业务；离开CLAP时撤销待发/展示。 */
+static bool mode_business_clap_active;
+/** @brief 上一次模式闸门是否允许WAVE计算；离开WAVE时作废计划与周期搜索。 */
+static bool mode_business_wave_active;
+#endif
+
+/**
+ * @brief 在模式进入/离开RANGE/CALIBRATION时清理旧展示与配对候选。
+ * @return 无返回值。
+ * @note 每轮前台调用一次，只读模式快照；离开时撤销A/B展示与权威交换状态，
+ *       进入时重置交换以强制新的RST2/RAK2确认路径，避免沿用旧世代结果。
+ */
+static void ServiceModeBusinessGates(void)
+{
+    if (!ModeGateConfigured())
+    {
+        mode_business_ranging_active = false;
+        return;
+    }
+    const bool allowed = ModeRangingAllowed();
+    if (mode_business_ranging_active && !allowed)
+    {
+        MeasurementResult_InvalidateForMode(BSP_Console_GetTickMs());
+        RangingExchange_Init(&ranging_app.exchange);
+    }
+    else if (!mode_business_ranging_active && allowed)
+    {
+        RangingExchange_Init(&ranging_app.exchange);
+    }
+    mode_business_ranging_active = allowed;
+#ifdef SBCG_USE_ADVANCED_UI
+    const bool clap_allowed = ModeClapAllowed();
+    if (mode_business_clap_active && !clap_allowed)
+    {
+        ClapRanging_Invalidate(&clap_ranging);
+    }
+    mode_business_clap_active = clap_allowed;
+    const bool wave_allowed = ModeWaveComputeAllowed();
+    if (mode_business_wave_active && !wave_allowed)
+    {
+        const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+        if (profile != NULL)
+        {
+            WaveformService_Update(profile->role, false, NULL, 0U,
+                                   BSP_Console_GetTickMs());
+        }
+    }
+    mode_business_wave_active = wave_allowed;
+#endif
+}
+
+#ifdef SBCG_USE_BOOT_COUNTER
+/**
+ * @brief   读取并登记本板跨掉电启动代次，输出一条启动诊断。
+ * @return  无返回值。
+ * @note    仅App_Init启动阶段调用一次；失败时保持模式服务未登记，串口保留稳定原因。
+ */
+static void LoadBootGeneration(void)
+{
+    BSP_BootCounterResult counter;
+    const BSP_BootCounterStatus status = BSP_BootCounter_Next(&counter);
+    char value[24];
+    FormatUnsigned64(counter.value, value);
+    char line[APP_LOG_LINE_CAPACITY];
+    const int length = snprintf(line, sizeof line,
+        "$BOOTGEN,SOURCE=FLASH,STATUS=%s,VALUE=%s,SECTOR=%u,SLOT=%u,ERASED=%u\r\n",
+        BSP_BootCounter_StatusName(status), value, (unsigned)counter.sector,
+        (unsigned)counter.slot, counter.erased ? 1U : 0U);
+    SendLine(line, length);
+    mode_boot_status = status == BSP_BOOT_COUNTER_OK
+        ? "OK" : BSP_BootCounter_StatusName(status);
+    mode_boot_status_from_flash = true;
+    if (status == BSP_BOOT_COUNTER_OK && !App_ModeSetBoot(counter.value))
+    {
+        mode_boot_status = "REJECTED";
+    }
+}
+#endif
+
+/**
+ * @brief   为UDP业务层提供MDB1模式闸门上下文。
+ * @param   out 非NULL上下文输出，仅本次调用有效。
+ * @return  已登记本板启动代次为true；未登记返回false，保持阶段一未封装兼容路径。
+ * @note    前台同步调用且只读模式快照；只有双板ACTIVE且生效模式为RANGE/CALIBRATION
+ *          才允许SEV2/WFR1/RST2/RAK2收发，其余模式由来源闸门与UDPSoundEvent共同阻断。
+ */
+static bool ProvideBusinessContext(UDPSoundEvent_BusinessContext *out)
+{
+    if (out == NULL)
+    {
+        return false;
+    }
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.a_boot == 0U && mode.b_boot == 0U)
+    {
+        return false;
+    }
+    out->configured = true;
+    out->allowed = mode.state == MODE_ACTIVE &&
+        (mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION);
+    out->clap_allowed = mode.state == MODE_ACTIVE && mode.effective == MODE_CLAP;
+    out->wave_allowed = mode.state == MODE_ACTIVE && mode.effective == MODE_WAVE;
+    out->role = mode.role;
+    out->a_boot = mode.a_boot;
+    out->b_boot = mode.b_boot;
+    out->mode_seq = mode.mode_seq;
+    return true;
+}
+#endif
+
 /** @brief 将观测决策枚举转成稳定短标签；未知值返回UNKNOWN。 */
 static const char *RangeDecisionName(MeasurementDecision decision)
 {
@@ -738,11 +1320,17 @@ static void PublishMeasurement(const SoundPairResult *pair)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+#ifdef SBCG_USE_ADVANCED_UI
+    if(!ModeRangingAllowed() && !ModeClapAllowed())return;
+#else
+    if(!ModeRangingAllowed())return;
+#endif
     const uint32_t now=BSP_Console_GetTickMs();RefreshRanging(now);
     TemperatureSnapshot temperature;TemperatureService_GetSnapshot(now,&temperature);
 #ifdef SBCG_USE_ADVANCED_UI
     if(pair->type==SOUND_EVENT_CLAP)
     {
+        if(!ModeClapAllowed())return;
         const bool published=ClapRanging_PublishPair(&clap_ranging,pair);
         ClapRangingSnapshot clap;ClapRanging_GetSnapshot(&clap_ranging,&clap);
         char line[180];const int n=snprintf(line,sizeof line,
@@ -753,6 +1341,7 @@ static void PublishMeasurement(const SoundPairResult *pair)
         return;
     }
 #endif
+    if(!ModeRangingAllowed())return; /* CHIRP测距结果只在RANGE/CALIBRATION发布。 */
     StandardSequenceSnapshot sequence;StandardSequence_Get(&standard_sequence,&sequence);
     MeasurementGateSnapshot gate;MeasurementGate_Get(&gate);
     uint64_t common_ns;uint32_t epoch;
@@ -878,6 +1467,7 @@ static void ServiceAuthoritativeStatus(uint32_t now_ms)
 {
     const BoardIdentityProfile *profile=BSP_BoardIdentity_Get();
     if(profile==NULL || profile->role!=BOARD_ROLE_A)return;
+    if(!ModeRangingAllowed())return;
     RangingStatusMessage message;
     if(!BuildRangingStatusMessage(&message,now_ms))return;
     const RangingStatusAck key={RANGING_STATUS_ACK_OK,message.domain,message.authority_clock_epoch,
@@ -952,6 +1542,11 @@ static void ServiceAuthoritativeResult(uint32_t now_ms)
 
 #endif
 
+/**
+ * @brief 完成应用资源初始化并在已识别的双板角色上注册模式观测。
+ * @return 无返回值。
+ * @note 仅启动调用。模式观测等待本次启动代次，不在此处推断代次。
+ */
 void App_Init(void)
 {
 #ifdef SBCG_USE_BOARD_SYNC
@@ -996,6 +1591,15 @@ void App_Init(void)
         memcmp(profile->uid_words, info.uid_words, sizeof info.uid_words) == 0;
     EmitBoardIdentity(app_identity_configured ? profile : NULL);
     if (!app_identity_configured) { return; }
+#ifdef SBCG_USE_MODE_OBSERVATION
+    ModeService_Init(profile->role);
+    mode_reported = false;
+    mode_sound_generation = (ModeSnapshot){0};
+    mode_sound_boundary = (AudioCaptureSoundBoundary){0};
+#ifdef SBCG_USE_BOOT_COUNTER
+    LoadBootGeneration();
+#endif
+#endif
 #endif
 #ifdef SBCG_USE_SDRAM
     /* FMC/MPU已由main生成初始化。芯片上电等待在音频DMA启动前完成。 */
@@ -1065,6 +1669,10 @@ void App_Init(void)
     TemperatureConsole_Init(SendLine);
 #ifdef SBCG_USE_AUDIO
     AudioCapture_Init(BSP_Console_GetTickMs(), SendLine);
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+    clap_pcm_trace_armed = false;
+    SoundDetectorService_SetTraceSink(TraceClapPcm);
+#endif
 #endif
 #if defined(SBCG_USE_LWIP) && defined(SBCG_USE_CHIRP)
     /* 候选附近End验证PCM快照经UDP下传；Init已清状态，注册sink不改变检测结果。 */
@@ -1110,6 +1718,11 @@ void App_Init(void)
         UDPSoundEvent_SetRangingStatusSink(PublishRemoteRangingStatus);
         UDPSoundEvent_SetRangingAckSink(HandleRangingAck);
         UDPSoundEvent_SetRangingSessionSink(HandleRangingSession);
+#ifdef SBCG_USE_MODE_OBSERVATION
+        UDPSoundEvent_SetModeControlSink(ModeService_OnControl);
+        UDPSoundEvent_SetBusinessContextProvider(ProvideBusinessContext);
+        mode_control_port_ready = true;
+#endif
 #ifdef SBCG_USE_ADVANCED_UI
         UDPSoundEvent_SetAuxiliarySink(HandleAuxiliary);
 #endif
@@ -1153,6 +1766,7 @@ void App_Init(void)
  * @param   notice 非NULL只读事件副本，包含序号、会话、模型帧与PTP时间。
  * @return  无返回值；未分类、无身份或域无效时丢弃。
  * @note    仅CHIRP推进标准序列；CLAP独立发布，不改变标准音门控。事件携带原模型帧。
+ *          模式诊断构建按候选序号记录CLAP实际UDP提交结果。
  */
 static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 {
@@ -1163,6 +1777,11 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
     if(!is_chirp && notice->event_class!=EVENT_CLASS_CLAP)return;
 #else
     if(!is_chirp)return;
+#endif
+    /* 模式准入：RANGE/CALIBRATION仅CHIRP，CLAP仅CLAP，WAVE拒绝两类。 */
+    if (!ModeAdmitsSoundType(is_chirp)) { return; }
+#ifdef SBCG_USE_MODE_OBSERVATION
+    if (mode_sound_boundary.controlled && notice->session != ranging_app.local_audio_session) { return; }
 #endif
     if(is_chirp)
     {
@@ -1204,7 +1823,19 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
         for (uint8_t i = 0U; i < SOUND_EVENT_MAX_TOA_CANDIDATES; ++i)
             event.toa_candidate_q16[i] = candidates.offset_q16[i];
     }
-    (void)UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
+    const bool sent = UDPSoundEvent_Send(BSP_Console_GetTickMs(), &event);
+#ifdef SBCG_MODE_TEST_CONTROL
+    if (!is_chirp)
+    {
+        char line[112];
+        const int length = snprintf(line, sizeof line,
+            "$CLAP_TX,SEQ=%" PRIu32 ",SESSION=%" PRIu32 ",SENT=%u\r\n",
+            event.sequence,event.session,sent ? 1U : 0U);
+        SendLine(line,length);
+    }
+#else
+    (void)sent;
+#endif
 }
 /** @brief 事件发布延迟：等待同一次扫频的波形捕获完成，避免窗口晚于事件。 */
 #define SOUND_NOTICE_DELAY_MS 700U
@@ -1212,9 +1843,78 @@ static void PublishSoundNotice(const SoundEventTimeEvent *notice)
 static SoundEventTimeEvent notice_pending[SOUND_NOTICE_MAX];
 static uint32_t notice_pending_ms[SOUND_NOTICE_MAX];
 static uint8_t notice_pending_count;
-/** @brief 暂存或立即发布一条事件；队满时立即发布最旧一条以保序。 */
+#ifdef SBCG_USE_MODE_OBSERVATION
+/**
+ * @brief 在有效模式或握手代次变更后同步撤销旧声音工作，并设置新模式的PCM下界。
+ * @return 无返回值。
+ * @note 仅在前台推进模式且已归还音频块后调用。游标有歧义时，快照可能尚未计入
+ *       待处理的DMA半块回调，因此保守跳过快照位置后的两个半块。
+ */
+static void ServiceModeSoundBoundary(void)
+{
+    ModeSnapshot mode;
+    ModeService_GetSnapshot(&mode);
+    if (mode.state != MODE_ACTIVE) { mode.effective = MODE_NONE; }
+    if (mode.effective == mode_sound_generation.effective &&
+        mode.a_boot == mode_sound_generation.a_boot &&
+        mode.b_boot == mode_sound_generation.b_boot &&
+        mode.mode_seq == mode_sound_generation.mode_seq)
+    { return; }
+
+    /* 已进入的标定只能在原模式代次内继续。 */
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+    if(mode_sound_generation.effective==MODE_CALIBRATION)
+        CalibrationControl_CancelPendingForMode();
+#endif
+    mode_sound_generation = mode;
+#if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
+    clap_pcm_trace_armed = false;
+#endif
+    const bool ranging = mode.effective == MODE_RANGE || mode.effective == MODE_CALIBRATION;
+    mode_sound_boundary = (AudioCaptureSoundBoundary){
+        .controlled = mode.a_boot != 0U || mode.b_boot != 0U,
+        .sound_enabled = ranging || mode.effective == MODE_CLAP,
+        .chirp_enabled = ranging
+    };
+    if (mode_sound_boundary.sound_enabled)
+    {
+        BSP_AudioCursor cursor;
+        if (BSP_Audio_ReadCursor(&cursor))
+        {
+            const uint64_t half = BSP_AUDIO_HALF_FRAMES;
+            const uint64_t active_first = cursor.complete_frames - cursor.complete_frames % half;
+            mode_sound_boundary.session = cursor.session;
+            mode_sound_boundary.first_frame = active_first <= UINT64_MAX - half
+                ? active_first + half : UINT64_MAX;
+        }
+        else
+        {
+            BSP_AudioSnapshot audio;
+            BSP_Audio_GetSnapshot(&audio);
+            const uint64_t skip = 2U * BSP_AUDIO_HALF_FRAMES;
+            mode_sound_boundary.session = audio.session;
+            mode_sound_boundary.first_frame = audio.running && audio.index_faults == 0U &&
+                audio.observed_frames <= UINT64_MAX - skip ? audio.observed_frames + skip : UINT64_MAX;
+        }
+    }
+    notice_pending_count = 0U;
+    SoundEventTime_DiscardPending();
+    AudioCapture_SetSoundBoundary(&mode_sound_boundary);
+    UDPSoundEvent_ResetPairing();
+}
+#endif
+/**
+ * @brief 暂存本代次声音通知；队满时立即发布最旧一条以保序。
+ * @param notice 非NULL只读TOA结果，按值复制；来源帧必须属于当前模式。
+ * @return 无返回值；前台丢弃旧模式或不允许的事件。
+ */
 static void SoundNoticeEnqueue(const SoundEventTimeEvent *notice)
 {
+#ifdef SBCG_USE_MODE_OBSERVATION
+    if (!AudioCapture_SoundFrameAllowed(&mode_sound_boundary, notice->session, notice->frame) ||
+        !ModeAdmitsSoundType(notice->event_class == EVENT_CLASS_CHIRP))
+    { return; }
+#endif
     if (notice_pending_count >= SOUND_NOTICE_MAX)
     {
         PublishSoundNotice(&notice_pending[0]);
@@ -1256,12 +1956,133 @@ static void SoundNoticeDrain(uint32_t now_ms)
  * 调度顺序：温度服务先更新当前DATA状态，后续模块据此门控，末尾最多排空一行日志。
  * 调用关系：由main的while(1)反复调用；各服务自行节流，不代表固定频率任务。
  */
+#ifdef SBCG_USE_CHIRP
+/** @brief 将一轮前台耗时计入固定毫秒桶并记录窗口最大值。 @param ms 本轮前台耗时毫秒。 @return 无返回值。 */
+static void LoopHistogramRecord(uint32_t ms)
+{
+    static const uint16_t edges[APP_LOOP_HIST_BUCKETS-1U]={1U,2U,3U,4U,5U,6U,8U,10U,
+        12U,16U,20U,24U,32U,48U,96U};
+    uint32_t bucket=APP_LOOP_HIST_BUCKETS-1U;
+    for(uint32_t i=0U;i<sizeof edges/sizeof edges[0];++i)
+    {
+        if(ms<edges[i]){bucket=i;break;}
+    }
+    ++app_loop_hist[bucket];
+    if(ms>app_loop_hist_max_ms)app_loop_hist_max_ms=ms;
+}
+/** @brief 每10s输出本窗口循环耗时分桶并清零。 @param now_ms 当前毫秒。 @return 无返回值。 */
+static void LoopHistogramReport(uint32_t now_ms)
+{
+    if((uint32_t)(now_ms-app_loop_hist_last_ms)<10000U)return;
+    app_loop_hist_last_ms=now_ms;
+    uint32_t total=0U;
+    for(uint32_t i=0U;i<APP_LOOP_HIST_BUCKETS;++i)total+=app_loop_hist[i];
+    char line[APP_LOG_LINE_CAPACITY];
+    int n=snprintf(line,sizeof line,"$LOOP_HIST,COUNT=%" PRIu32,total);
+    for(uint32_t i=0U;i<APP_LOOP_HIST_BUCKETS && n>0 && (size_t)n<sizeof line;++i)
+    {
+        n+=snprintf(line+n,sizeof line-(size_t)n,",B%" PRIu32 "=%" PRIu32,i,app_loop_hist[i]);
+    }
+    if(n>0 && (size_t)n<sizeof line)
+    {
+        n+=snprintf(line+n,sizeof line-(size_t)n,",MAX_MS=%" PRIu32 "\r\n",app_loop_hist_max_ms);
+    }
+    if(n>0 && (size_t)n<(int)sizeof line){SendLine(line,n);}
+    memset(app_loop_hist,0,sizeof app_loop_hist);
+    app_loop_hist_max_ms=0U;
+}
+#endif
+
+#ifdef SBCG_STACK_DIAGNOSTIC
+/**
+ * @brief   每5秒将MSP涂色水位、最低采样和哨兵状态写入日志队列。
+ * @param   now_ms 本机毫秒计数，支持常规回绕。
+ * @return  无返回值。
+ * @note    单独保留格式化栈帧，诊断日志沿用前台队列和DHT保护。
+ */
+static __attribute__((noinline)) void ReportStack(uint32_t now_ms)
+{
+    static uint32_t last_report_ms;
+    if ((uint32_t)(now_ms - last_report_ms) < 5000U) { return; }
+    last_report_ms = now_ms;
+
+    BSP_StackDiagSnapshot stack;
+    if (!BSP_StackDiag_Read(&stack))
+    {
+        static const char error[] = "$STACK,ERROR=PAINT_RANGE\r\n";
+        SendLine(error, (int)(sizeof error - 1U));
+        return;
+    }
+
+    const BoardIdentityProfile *profile = BSP_BoardIdentity_Get();
+    const char role = profile == NULL ? '?' : (profile->role == BOARD_ROLE_A ? 'A' : 'B');
+    char line[144];
+    const int length = snprintf(line, sizeof line,
+        "$STACK,ROLE=%c,RESERVE_B=%" PRIu32 ",HWM_B=%" PRIu32 ",MIN_MSP=%08" PRIX32
+        ",LIMIT=%08" PRIX32 ",GUARD=%u\r\n", role, stack.reserve_bytes,
+        stack.painted_used_bytes, stack.min_msp, stack.limit, stack.guard_ok ? 1U : 0U);
+    SendLine(line, length);
+}
+#endif
+
+#if defined(SBCG_USE_CHIRP) && defined(SBCG_USE_AUDIO)
+/**
+ * @brief 输出到期的主循环、音频及波形诊断快照。
+ * @return 无返回值。
+ * @note 仅由App_Process每5秒在原日志位置调用。保持独立栈帧，
+ *       避免常驻前台在进入网络回调时仍预留波形PCM快照空间。
+ */
+static __attribute__((noinline)) void ReportLoopProfile(void)
+{
+    AudioCaptureProfile audio_profile;
+    AudioCapture_GetProfile(&audio_profile);
+    char line[256];
+    int length = snprintf(line, sizeof(line),
+        "$PROFILE,LOOP_MS=%" PRIu32 ",AUDIO_MS=%" PRIu32 ",UI_MS=%" PRIu32
+        ",OTHER_MS=%" PRIu32 ",FLUSH_MS=%" PRIu32 "\r\n",
+        max_loop_ms, max_loop_audio_ms, max_loop_ui_ms, max_loop_other_ms,
+        max_loop_flush_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    length = snprintf(line, sizeof(line),
+        "$PROFILE2,LWIP_MS=%" PRIu32 ",TEMP_MS=%" PRIu32 ",SND_MS=%" PRIu32 "\r\n",
+        prof_lwip_max_ms, prof_temp_max_ms, prof_sound_max_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    prof_lwip_max_ms = prof_temp_max_ms = prof_sound_max_ms = 0U;
+    LoopHistogramReport(BSP_Console_GetTickMs());
+    length = snprintf(line, sizeof(line),
+        "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
+        ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32
+        ",CH_PROC_MS=%" PRIu32 ",IO_MS=%" PRIu32 ",LOG_MS=%" PRIu32
+        ",OTHER_MS=%" PRIu32 "\r\n", audio_profile.total_ms, audio_profile.stats_ms,
+        audio_profile.sound_stage_ms, audio_profile.sound_process_ms,
+        audio_profile.chirp_stage_ms, audio_profile.chirp_complete_ms,
+        audio_profile.chirp_process_ms, audio_profile.io_ms, audio_profile.log_ms,
+        audio_profile.other_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+#ifdef SBCG_USE_ADVANCED_UI
+    WaveformSnapshot wave_ui;
+    WaveformService_GetSnapshot(&wave_ui);
+    length = snprintf(line, sizeof(line),
+        "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%lu"
+        ",SEQ=%" PRIu32 ",STATE=%u,CAND_MHZ=%" PRIu32 ",AGE_MS=%" PRIu32
+        ",CONF=%u,WHY=%u,WORK_MS=%" PRIu32 "\r\n",
+        wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
+        wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
+        (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state,
+        wave_ui.candidate_milli_hz, wave_ui.period_age_ms,
+        (unsigned)wave_ui.confirmation_count, (unsigned)wave_ui.reason,wave_update_max_ms);
+    if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
+    wave_update_max_ms=0U;
+#endif
+}
+#endif
+
 /**
  * @brief   推进一轮前台处理、周期状态输出及延后日志发送。
  * @return  无返回值（void）。
  * @note    输入为HAL毫秒计数、网络报文、IRQ队列及各服务状态；主循环周期取决于
  *          实际处理耗时。网络RAW回调在本轮LwIP处理内同步执行，音频/UART IRQ可抢占前台。
- *          DHT低态仍逐轮将最新域资格复制给UDP层；此标量同步不主动发送报文或读取音频。
+ *          DHT低态仍逐轮将最新域资格复制给UDP层；模式控制收包只暂存，前台处理延后至允许时。
  *          A/B音频会话变化先撤销UDP旧候选；声音事件取出前刷新域，配对不跨资格边界。
  *          WAVE全滞后搜索在网络及测距处理后每轮只推进一批，避免回调重复计算。
  *          CHIRP构建额外累计最大一轮LOOP_MS及同轮AUDIO/UI/OTHER分解；LOOP与Chirp
@@ -1270,6 +2091,9 @@ static void SoundNoticeDrain(uint32_t now_ms)
  */
 void App_Process(void)
 {
+#ifdef SBCG_STACK_DIAGNOSTIC
+    BSP_StackDiag_Observe();
+#endif
 #ifdef SBCG_USE_BOARD_IDENTITY
     /* 未知UID时LwIP尚未初始化；只保留BOOT/角色诊断，不触碰网卡或其它业务。 */
     if (!app_identity_configured) { return; }
@@ -1339,11 +2163,12 @@ void App_Process(void)
     ShareTemperature(BSP_Console_GetTickMs());
 #endif
 #ifdef SBCG_USE_BOARD_SYNC
-    /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
-    TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    /* DHT起始低电平只暂停显示/采集等长路径；同步与PPS调度必须每轮继续，
+       否则20ms输入窗会同时冻结协议处理、伺服观测和PPS安全截止。 */
+    TimeSync_Process(BSP_Console_GetTickMs(), true);
 #ifdef SBCG_USE_PPS
-    /* DHT拉低只禁止新目标排程；安全截止及已到达目标的消费每轮仍须执行。 */
-    PpsService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    /* 低电平窗内仍允许安排新目标；安全截止与已到达目标的消费原本每轮执行。 */
+    PpsService_Process(BSP_Console_GetTickMs(), true);
     {
         TimeSyncSnapshot sync_snapshot;PpsServiceSnapshot pps_snapshot;
         TimeSync_GetSnapshot(BSP_Console_GetTickMs(), &sync_snapshot);
@@ -1427,13 +2252,25 @@ void App_Process(void)
         ServiceAuthoritativeStatus(BSP_Console_GetTickMs());
 #ifdef SBCG_USE_ADVANCED_UI
         ServiceAuxiliary(BSP_Console_GetTickMs());
-        const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
-        WaveformService_ProcessPeriod();
-        const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
-        if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+        if(ModeWavePlannerAllowed())
+        {
+            const uint32_t wave_begin_ms=BSP_Console_GetTickMs();
+            WaveformService_ProcessPeriod();
+            const uint32_t wave_elapsed_ms=BSP_Console_GetTickMs()-wave_begin_ms;
+            if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
+        }
 #endif
 #endif
     }
+#ifdef SBCG_USE_BOARD_IDENTITY
+#ifdef SBCG_USE_MODE_OBSERVATION
+    /* DHT起始低电平不再跳过模式观测：保持音频/业务处理后的原调度顺序，
+       在低电平窗内仍推进租约与发送，避免模式资格被动冻结。 */
+    ServiceModeObservation(BSP_Console_GetTickMs());
+    ServiceModeSoundBoundary();
+    ServiceModeBusinessGates();
+#endif
+#endif
 #ifdef SBCG_USE_CHIRP
     { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
       if (d > prof_sound_max_ms) { prof_sound_max_ms = d; } }
@@ -1493,49 +2330,18 @@ void App_Process(void)
         const uint32_t known = loop_audio_ms + loop_ui_ms;
         max_loop_other_ms = loop_ms > known ? loop_ms - known : 0U;
     }
+    LoopHistogramRecord(loop_ms);
+#ifdef SBCG_STACK_DIAGNOSTIC
+    if (!TemperatureService_IsStartLowActive())
+    {
+        ReportStack(BSP_Console_GetTickMs());
+    }
+#endif
 #if defined(SBCG_USE_AUDIO)
     /* 每5秒输出低频率A3分解：最大循环的OTHER/Flush与AudioCapture内部最大轮。 */
     if ((uint32_t)(BSP_Console_GetTickMs() - last_profile_ms) >= 5000U) {
         last_profile_ms = BSP_Console_GetTickMs();
-        AudioCaptureProfile audio_profile;
-        AudioCapture_GetProfile(&audio_profile);
-        char line[256];
-        int length = snprintf(line, sizeof(line),
-            "$PROFILE,LOOP_MS=%" PRIu32 ",AUDIO_MS=%" PRIu32 ",UI_MS=%" PRIu32
-            ",OTHER_MS=%" PRIu32 ",FLUSH_MS=%" PRIu32 "\r\n",
-            max_loop_ms, max_loop_audio_ms, max_loop_ui_ms, max_loop_other_ms,
-            max_loop_flush_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-        length = snprintf(line, sizeof(line),
-            "$PROFILE2,LWIP_MS=%" PRIu32 ",TEMP_MS=%" PRIu32 ",SND_MS=%" PRIu32 "\r\n",
-            prof_lwip_max_ms, prof_temp_max_ms, prof_sound_max_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-        prof_lwip_max_ms = prof_temp_max_ms = prof_sound_max_ms = 0U;
-        length = snprintf(line, sizeof(line),
-            "$AUDIO_PROFILE,TOTAL_MS=%" PRIu32 ",STAT_MS=%" PRIu32 ",SD_STAGE_MS=%" PRIu32
-            ",SD_PROC_MS=%" PRIu32 ",CH_STAGE_MS=%" PRIu32 ",CH_COMP_MS=%" PRIu32
-            ",CH_PROC_MS=%" PRIu32 ",IO_MS=%" PRIu32 ",LOG_MS=%" PRIu32
-            ",OTHER_MS=%" PRIu32 "\r\n", audio_profile.total_ms, audio_profile.stats_ms,
-            audio_profile.sound_stage_ms, audio_profile.sound_process_ms,
-            audio_profile.chirp_stage_ms, audio_profile.chirp_complete_ms,
-            audio_profile.chirp_process_ms, audio_profile.io_ms, audio_profile.log_ms,
-            audio_profile.other_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-#ifdef SBCG_USE_ADVANCED_UI
-        WaveformSnapshot wave_ui;
-        WaveformService_GetSnapshot(&wave_ui);
-        length = snprintf(line, sizeof(line),
-            "$WAVE_UI,VALID=%u,SYNC=%u,PERIOD=%u,SRC=%u,MHZ=%" PRIu32 ",SPAN_NS=%lu"
-            ",SEQ=%" PRIu32 ",STATE=%u,CAND_MHZ=%" PRIu32 ",AGE_MS=%" PRIu32
-            ",CONF=%u,WHY=%u,WORK_MS=%" PRIu32 "\r\n",
-            wave_ui.valid ? 1U : 0U, wave_ui.synced ? 1U : 0U,
-            wave_ui.period_valid ? 1U : 0U, (unsigned)wave_ui.source, wave_ui.period_milli_hz,
-            (unsigned long)wave_ui.window_span_ns, wave_ui.plan_sequence, (unsigned)wave_ui.render_state,
-            wave_ui.candidate_milli_hz, wave_ui.period_age_ms,
-            (unsigned)wave_ui.confirmation_count, (unsigned)wave_ui.reason,wave_update_max_ms);
-        if (length > 0 && (size_t)length < sizeof(line)) { SendLine(line, length); }
-        wave_update_max_ms=0U;
-#endif
+        ReportLoopProfile();
     }
 #endif
 #endif

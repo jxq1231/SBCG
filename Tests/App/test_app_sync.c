@@ -35,9 +35,9 @@ bool PpsService_GetSnapshot(uint32_t now_ms,PpsServiceSnapshot *out)
  out->state=pps_qualified?PPS_SERVICE_QUALIFIED:PPS_SERVICE_UNQUALIFIED;
  return true;
 }
-/** @brief 验证DHT低态也逐轮调用PPS安全处理；now_ms为当前毫秒，allowed仅限制新排程，无返回值。 */
+/** @brief 验证DHT低态也逐轮调用PPS安全处理；允许标志固定为true，低态只影响业务排程。 */
 void PpsService_Process(uint32_t now_ms,bool allowed)
-{ assert(pps_due && now_ms==tick_ms && allowed==!temperature_low);pps_due=false; }
+{ assert(pps_due && now_ms==tick_ms && allowed);pps_due=false; }
 #endif
 /** @brief 返回用例准备的只读身份；无硬件读取。 @return 静态profile或NULL。 */
 const BoardIdentityProfile *BSP_BoardIdentity_Get(void) { return current_identity; }
@@ -60,7 +60,7 @@ bool TimeSync_Init(uint32_t now_ms,const BoardIdentityProfile *profile,uint32_t(
 /**
  * @brief 核对每次前台处理使用温度服务本轮更新后的DATA状态。
  * @param now_ms 当前测试tick。
- * @param processing_allowed 必须与当前DHT低电平状态相反。
+ * @param processing_allowed 恒为true：同步/时域不再被DHT低态暂停。
  * @return 无返回值。
  */
 void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
@@ -69,7 +69,7 @@ void TimeSync_Process(uint32_t now_ms,bool processing_allowed)
  assert(!pps_due);pps_due=true;
 #endif
  assert(now_ms==tick_ms && temperature_calls==lwip_calls && console_calls==temperature_calls);
- assert(processing_allowed==!temperature_low);++sync_loops;if(processing_allowed)++sync_allowed;
+ assert(processing_allowed);++sync_loops;++sync_allowed;
 }
 /**
  * @brief 交付本轮同步只读副本，让真实共同域模块验证A/B资格。
@@ -100,7 +100,7 @@ int main(void)
   tick_ms=1000;App_Process();assert(sync_loops==1 && sync_allowed==1);
   TimeDomainSnapshot domain;TimeDomain_Get(&domain);
   assert(domain.local_valid && !domain.valid && !domain.peer_seen);
-  start_low_in_process=true;tick_ms=2000;App_Process();assert(sync_loops==2 && sync_allowed==1);
+  start_low_in_process=true;tick_ms=2000;App_Process();assert(sync_loops==2 && sync_allowed==2);
   assert(snapshot_calls==sync_loops);
   TimeDomain_Get(&domain);assert(domain.local_valid);
   temperature_low=false;start_low_in_process=false;

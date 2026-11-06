@@ -547,6 +547,30 @@ static void CheckThreeConfirmations(void)
     assert(plan.mode == WAVEFORM_MODE_RAW);
 }
 
+#ifdef SBCG_MODE_TEST_CONTROL
+/** @brief 核对窗口跨环尾时的帧顺序及失败不修改输出。 @return 无返回值。 */
+static void TestVerifiedPcmWindow(void)
+{
+    WaveformService_Init();
+    tone_period_frames = 96.0;
+    sample_bias = 0;
+    force_silence = false;
+    const uint64_t first = WAVEFORM_RING_FRAMES - 2U;
+    int16_t output[4] = {111,111,111,111};
+    assert(!WaveformService_CopyVerifiedPcm(1U,first,4U,output));
+    Feed(first,0.0,true,100U);
+    assert(!WaveformService_CopyVerifiedPcm(2U,first,4U,output));
+    assert(!WaveformService_CopyVerifiedPcm(1U,first-1U,4U,output));
+    assert(!WaveformService_CopyVerifiedPcm(1U,first+BSP_AUDIO_HALF_FRAMES-1U,4U,output));
+    assert(output[0]==111 && output[3]==111);
+    assert(WaveformService_CopyVerifiedPcm(1U,first,4U,output));
+    for (uint16_t i=0U;i<4U;++i)
+        assert(output[i]==(int16_t)(12000.0*sin((double)(first+i)*6.283185307179586/tone_period_frames)));
+    Feed(first+BSP_AUDIO_HALF_FRAMES,0.0,false,270U);
+    assert(!WaveformService_CopyVerifiedPcm(1U,first,4U,output));
+}
+#endif
+
 int main(void)
 {
     CheckInitAndLocal();
@@ -563,6 +587,9 @@ int main(void)
     CheckCacheContextAndLateHistory();
     CheckScheduling();
     CheckWireAndLimits();
+#ifdef SBCG_MODE_TEST_CONTROL
+    TestVerifiedPcmWindow();
+#endif
     puts("waveform: PASS");
     return 0;
 }

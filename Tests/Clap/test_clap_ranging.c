@@ -195,6 +195,36 @@ int main(void)
         ClapRanging_GetSnapshot(&c,&snapshot);
         assert(snapshot.has_value && snapshot.result.calibration_version==3U);
     }
+    /* A重启换代：B已学合同随新RSC2代际作废，版本回0的新CLP1仍被接受并回ACK。 */
+    {
+        ClapRanging d;ClapRanging_Init(&d);
+        const RangingSessionSnapshot generation={true,9U,7U,UINT64_C(1000000000)};
+        ClapRanging_Update(&d,BOARD_ROLE_B,true,&generation,UINT64_C(8200000000),0U,NULL,NULL);
+        ClapResultMessage before={0};
+        before.domain=9U;before.authority_epoch=7U;before.id=1U;
+        before.a_session=2U;before.a_sequence=1U;before.b_session=3U;before.b_sequence=1U;
+        before.source_common_ns=UINT64_C(8191000000);before.delta_ns=1000000;
+        before.distance_mm=355;before.sound_speed_mm_s=343000U;before.temperature_version=3U;
+        before.calibration_version=5U;before.calibration_offset_mm=12;before.quality=85U;
+        assert(ClapRanging_OnMessage(&d,&before));
+        assert(ClapRanging_TakeAck(&d,&ack));
+        ClapResultMessage rolled=before;
+        rolled.id=2U;rolled.source_common_ns=UINT64_C(8192000000);
+        rolled.calibration_version=0U;rolled.calibration_offset_mm=0;
+        assert(!ClapRanging_OnMessage(&d,&rolled)); /* 同代际内旧高水位仍拒收。 */
+        /* A重启：新权威代际与源下界，标定版本从0重新开始（RAM-only）。 */
+        const RangingSessionSnapshot restarted={true,9U,8U,UINT64_C(8100000000)};
+        ClapRanging_Update(&d,BOARD_ROLE_B,true,&restarted,UINT64_C(8210000000),10U,NULL,NULL);
+        ClapRanging_GetSnapshot(&d,&snapshot);
+        assert(!snapshot.has_value); /* 换代先撤旧展示。 */
+        rolled.authority_epoch=restarted.authority_epoch; /* 新CLP1属于新代际。 */
+        assert(ClapRanging_OnMessage(&d,&rolled)); /* 合同已清，版本0可接受。 */
+        assert(ClapRanging_TakeAck(&d,&ack) && ack.id==rolled.id &&
+               ack.source_common_ns==rolled.source_common_ns);
+        ClapRanging_GetSnapshot(&d,&snapshot);
+        assert(snapshot.has_value && snapshot.result.calibration_version==0U &&
+               snapshot.result.distance_mm==355);
+    }
     /* 共同时间倒退和0立即撤；毫秒回绕仍保持500ms退避。 */
     ClapRanging_Init(&a);
     Update(&a,BOARD_ROLE_A,true,8200000000ULL,UINT32_MAX-100U);
@@ -204,6 +234,6 @@ int main(void)
     assert(ClapRanging_TakeTx(&a,399U,&tx));
     Update(&a,BOARD_ROLE_A,true,0U,400U);
     assert(!ClapRanging_TakeTx(&a,899U,&tx));
-    puts("PASS CLAP: authority, compensation, exact ACK, retry, source expiry, RSC2 barriers");
+    puts("PASS CLAP: authority, compensation, exact ACK, retry, source expiry, RSC2 barriers, generation-scoped contract");
     return 0;
 }

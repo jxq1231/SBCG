@@ -2,12 +2,19 @@
  * @file        temperature_console.c
  * @brief       解析串口温度命令并返回环境快照。
  * @details     每次至多读取64字节，按LF分帧且回复间隔至少100毫秒，支持PING、TEMP?、TEMP SET和TEMP AUTO。
+ *              诊断构建另处理模式、PCM 采集及 MIC2 增益命令，复用同一个前台串口读取者。
  * @note        仅前台；依赖控制台接收BSP和温度服务，DHT11启动低电平期间暂停，非法/超长/接收间隙帧丢弃至LF。
  */
 #include "temperature_console.h"
 #include "BSP/bsp_console.h"
 #include "Temperature/temperature_service.h"
 #include "Temperature/temperature_config.h"
+#ifdef SBCG_MODE_TEST_CONTROL
+#include "app_main.h"
+#ifdef SBCG_USE_AUDIO
+#include "BSP/bsp_audio_codec.h"
+#endif
+#endif
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
@@ -112,11 +119,134 @@ static bool parse_temperature(const char *text, int32_t *out)
     return *out >= TEMP_MIN_MILLI_C && *out <= TEMP_MAX_MILLI_C;
 }
 
+#ifdef SBCG_MODE_TEST_CONTROL
+/**
+ * @brief 解析非零十进制启动代次，拒绝符号、溢出和多余字符。
+ * @param text 非NULL且NUL结尾的命令参数，只读。
+ * @param out 非NULL输出，仅成功时写入。
+ * @return 解析成功为true。
+ */
+static bool parse_mode_boot(const char *text, uint64_t *out)
+{
+    uint64_t boot = 0U;
+    for (; *text != '\0'; ++text)
+    {
+        if (*text < '0' || *text > '9') { return false; }
+        const unsigned digit = (unsigned)(*text - '0');
+        if (boot > (UINT64_MAX - digit) / 10U) { return false; }
+        boot = boot * 10U + digit;
+    }
+    if (boot == 0U) { return false; }
+    *out = boot;
+    return true;
+}
+
+#ifdef SBCG_USE_AUDIO
+/**
+ * @brief   处理 MIC2 增益诊断命令，成功时回复两路增益读回值。
+ * @param   text 非空且以 NUL 结尾的当前串口命令，只读。
+ * @return  true 表示已处理 MIC GAIN 命令，包括参数或 I2C 错误。
+ * @note    仅诊断构建前台使用，复用控制台节流与 DHT 门控。
+ */
+static bool execute_mic_gain_command(const char *text)
+{
+    if (strncmp(text, "MIC GAIN", 8U) != 0) { return false; }
+
+    BSP_AudioCodecGainAction action;
+    const char *name;
+    if (strcmp(text, "MIC GAIN?") == 0) { action = BSP_CODEC_GAIN_READ; name = "READ"; }
+    else if (strcmp(text, "MIC GAIN LOW") == 0) { action = BSP_CODEC_GAIN_LOW; name = "LOW"; }
+    else if (strcmp(text, "MIC GAIN DEFAULT") == 0) { action = BSP_CODEC_GAIN_DEFAULT; name = "DEFAULT"; }
+    else
+    {
+        result("MIC_GAIN", "ERROR", "VALUE");
+        return true;
+    }
+
+    BSP_AudioCodecMic2Gain gain;
+    const BSP_AudioCodecStatus status = BSP_AudioCodec_DiagnoseMic2Gain(action, &gain);
+    if (status == BSP_CODEC_OK)
+    {
+        const int length = snprintf(reply, sizeof reply, "$MIC_GAIN,ACTION=%s,L=%02X,R=%02X\r\n",
+                                    name, (unsigned)gain.left, (unsigned)gain.right);
+        emit(reply, length);
+    }
+    else
+    {
+        result("MIC_GAIN", "ERROR", status == BSP_CODEC_BUSY ? "BUSY" : "IO");
+    }
+    return true;
+}
+#endif
+
+/**
+ * @brief 在普通命令均不匹配时处理模式、PCM 采集与增益诊断命令。
+ * @param text 非NULL且NUL结尾的完整命令，借用当前串口帧。
+ * @return 已识别命令时为true，包括拒绝参数或B板请求。
+ * @note 仅诊断构建且DHT放行的前台路径使用。
+ */
+static bool execute_mode_command(const char *text)
+{
+#ifdef SBCG_USE_AUDIO
+    if (execute_mic_gain_command(text)) { return true; }
+#endif
+    if (strcmp(text, "MODE?") == 0)
+    {
+        App_ReportMode();
+        return true;
+    }
+#ifdef SBCG_USE_ADVANCED_UI
+    if (strcmp(text, "CLAP PCM ON") == 0 || strcmp(text, "CLAP PCM OFF") == 0)
+    {
+        if (App_SetClapPcmTrace(strcmp(text, "CLAP PCM ON") == 0))
+        {
+            static const char ok[] = "$CMD,NAME=CLAP_PCM,RESULT=OK\r\n";
+            emit(ok, (int)(sizeof ok - 1U));
+        }
+        else { result("CLAP_PCM", "ERROR", "UNAVAILABLE"); }
+        return true;
+    }
+#endif
+    if (strncmp(text, "MODE BOOT ", 10U) == 0)
+    {
+        uint64_t boot;
+        if (!parse_mode_boot(text + 10, &boot)) { result("MODE_BOOT", "ERROR", "VALUE"); }
+        else if (!App_ModeSetBoot(boot)) { result("MODE_BOOT", "ERROR", "UNAVAILABLE"); }
+        else
+        {
+            static const char ok[] = "$CMD,NAME=MODE_BOOT,RESULT=OK\r\n";
+            emit(ok, (int)(sizeof ok - 1U));
+        }
+        return true;
+    }
+    if (strncmp(text, "MODE SET ", 9U) != 0) { return false; }
+
+    static const struct { const char *name; ModeKind mode; } modes[] = {
+        {"RANGE", MODE_RANGE}, {"CLAP", MODE_CLAP},
+        {"WAVE", MODE_WAVE}, {"CALIBRATION", MODE_CALIBRATION},
+    };
+    for (unsigned i = 0U; i < sizeof modes / sizeof modes[0]; ++i)
+    {
+        if (strcmp(text + 9, modes[i].name) != 0) { continue; }
+        if (!App_ModeRequest(modes[i].mode)) { result("MODE_SET", "ERROR", "UNAVAILABLE"); }
+        else
+        {
+            static const char ok[] = "$CMD,NAME=MODE_SET,RESULT=OK\r\n";
+            emit(ok, (int)(sizeof ok - 1U));
+        }
+        return true;
+    }
+    result("MODE_SET", "ERROR", "VALUE");
+    return true;
+}
+#endif
+
 /**
  * @brief   执行当前完整命令并输出回复。
  * @param   now_ms 当前HAL毫秒计数；使用无符号差处理常规32位回绕。
  * @return  无返回值。
  * @note    前台在command已NUL结尾且低电平门控放行后调用；SET/AUTO更改服务，TEMP?另输出接收统计。
+ *          诊断构建在普通命令之后尝试模式命令。
  */
 static void execute(uint32_t now_ms)
 {
@@ -158,7 +288,13 @@ static void execute(uint32_t now_ms)
             emit(ok, (int)sizeof ok - 1); environment(now_ms);
         }
     }
-    else { result("INVALID", "ERROR", "COMMAND"); }
+    else
+    {
+#ifdef SBCG_MODE_TEST_CONTROL
+        if (execute_mode_command(command)) { return; }
+#endif
+        result("INVALID", "ERROR", "COMMAND");
+    }
 }
 
 /**

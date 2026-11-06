@@ -4,6 +4,8 @@
  * @details     使用真实共同源时刻限制2.5秒新鲜和6.5秒展示；RSC2域、代际和源下界
  *              隔离旧包。结果冻结本次温补，下一次有效温变不改旧值与重传；
  *              结果重传只取当前结果，重复包只触发ACK，不刷新寿命。
+ *              B学到的RST2/CLP1标定合同只对当前RSC2代际有效，换代即作废，
+ *              使A重启后版本回0的新结果仍可被接受。
  * @note        前台串行调用；不使用标准音跟踪器，不进行硬件初始化或Flash持久化。
  */
 #include "clap_ranging.h"
@@ -21,6 +23,20 @@ void ClapRanging_Invalidate(ClapRanging *self)
     self->snapshot.fresh=false;
     self->pending_tx=false;
     self->pending_ack=false;
+}
+
+/**
+ * @brief   清除B已学到的标定合同，回到“尚未观察合同”的初始状态。
+ * @param   self 非NULL可写前台实例；不清展示值、源水位或结果ID水位。
+ * @return  无返回值；仅由ClapRanging_Update在RSC2换代时调用。
+ * @note    合同高水位只属于学到它的那个域/权威代际：A重启后标定版本从0重新开始，
+ *          若保留旧高水位，B会把新CLP1当旧合同拒绝且不回ACK，CLAP结果永久不可用。
+ */
+static void ClearCalibrationContract(ClapRanging *self)
+{
+    self->have_calibration_contract=false;
+    self->calibration_contract_version=0U;
+    self->calibration_contract_offset_mm=0;
 }
 
 /**
@@ -111,6 +127,7 @@ void ClapRanging_Init(ClapRanging *self)
  * @param temperature A温补副本，可NULL；B忽略。
  * @param calibration A标定副本，可NULL表示无偏移；B忽略。
  * @return 无返回值；不保留参数指针，不从失效入口建立资格。
+ *         域/权威代际/源下界任一变化（含A重启）撤旧值并清除已学标定合同。
  */
 void ClapRanging_Update(ClapRanging *self,BoardRole role,bool healthy,
                         const RangingSessionSnapshot *session,
@@ -132,6 +149,9 @@ void ClapRanging_Update(ClapRanging *self,BoardRole role,bool healthy,
         self->last_source_ns=0U;
         self->last_id=0U;
         self->have_tx=false;
+        /* A重启/重新烧录后标定系数是RAM-only，版本从0重新开始；合同属于旧代际，
+           必须随换代清除，否则B以旧高水位永久拒收新CLP1且不回ACK。 */
+        ClearCalibrationContract(self);
     }
     self->role=role;
     if(qualified)self->session=*session;

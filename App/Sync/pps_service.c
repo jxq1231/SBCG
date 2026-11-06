@@ -33,19 +33,32 @@ static void CacheGeneration(void)
 { epoch=BSP_PTP_GetEpoch(); revision=BSP_PTP_GetRateRevision(); }
 
 /**
+ * @brief   撤销PPS输出；已锁存FAULT时把“无输出可撤”视为可继续。
+ * @param   now_ms 当前HAL毫秒；本接口不刷新样本时效。
+ * @return  true表示BSP安全停止成功（含此前已FAULT、本次Stop仍成功）；false表示Stop失败。
+ * @note    不清除FAULT锁存，PPS仍由PpsService_Process每1s尝试自愈；供伺服恢复以及相位/频率
+ *          命令在PPS已故障但输出已确认停止时继续执行，避免为等待PPS自愈而永久阻塞同步。
+ */
+bool PpsService_RevokeOutput(uint32_t now_ms)
+{
+    (void)now_ms;
+    const bool was_fault=state==FAULT;
+    pending=preserve=false;
+    const bool stopped=BSP_PPS_Stop()==BSP_PPS_OK;
+    state=stopped ? (was_fault ? FAULT : UNQUALIFIED) : FAULT;
+    CacheGeneration();
+    return stopped;
+}
+
+/**
  * @brief 同步撤销输出资格，保留已有故障锁存。
  * @param now_ms 当前毫秒，不刷新样本年龄。
  * @return true表示停止成功且无既有FAULT；false禁止后续相位命令。
- * @note Stop不依赖读时，时钟故障时仍执行。
+ * @note Stop不依赖读时，时钟故障时仍执行；与RevokeOutput的唯一差异是既有FAULT仍报false。
  */
 bool PpsService_Invalidate(uint32_t now_ms)
 {
-    (void)now_ms;
-    bool was_fault=state==FAULT;
-    pending=preserve=false;
-    state=BSP_PPS_Stop()==BSP_PPS_OK && !was_fault ? UNQUALIFIED : FAULT;
-    CacheGeneration();
-    return state!=FAULT;
+    return PpsService_RevokeOutput(now_ms) && state!=FAULT;
 }
 
 /**
@@ -220,13 +233,22 @@ void PpsService_Observe(uint32_t now_ms,uint32_t captured_ms,bool internal_locke
  */
 bool PpsService_BeforeFrequency(uint32_t now_ms,int32_t previous_ppb,int32_t next_ppb)
 {
-    if (!Check(now_ms)) { return false; }
+    const bool was_fault=state==FAULT;
+    if (!Check(now_ms))
+    {
+        /*
+         * 已锁存FAULT时PPS输出应已被撤销；再次确认Stop成功即可放行变频，不重新授予资格，
+         * 避免为等待PPS自愈而阻塞伺服。调用前未FAULT的新故障仍按硬失败处理。
+         */
+        if (!configured || board_role!=BOARD_ROLE_B || !was_fault ||
+            !PpsService_RevokeOutput(now_ms)) { return false; }
+    }
     const int64_t delta=(int64_t)next_ppb-previous_ppb;
     bool keep=board_role==BOARD_ROLE_B && state==QUALIFIED && !pending &&
         previous_ppb==BSP_PTP_GetFrequencyPpb() &&
         delta>=-MAX_RATE_DELTA_PPB && delta<=MAX_RATE_DELTA_PPB;
     const int32_t actual=BSP_PTP_GetFrequencyPpb();
-    if (!keep && !PpsService_Invalidate(now_ms)) { return false; }
+    if (!keep && !was_fault && !PpsService_Invalidate(now_ms)) { return false; }
     pending=true; preserve=keep; pending_frequency=next_ppb;
     pending_revision=revision;
     if (next_ppb!=actual)

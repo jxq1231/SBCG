@@ -24,6 +24,37 @@ typedef void (*AudioCapture_Log)(const char *line, int length);
  * @note    生成外设初始化后在前台调用；日志为空或停止失败时不启动，结果见AUDIO_INIT。
  */
 void AudioCapture_Init(uint32_t now_ms, AudioCapture_Log log);
+#ifdef SBCG_USE_MODE_OBSERVATION
+/** @brief 当前模式允许分类和扫频匹配的首个完整PCM半块位置。 */
+typedef struct {
+    uint64_t first_frame;
+    uint32_t session;
+    bool controlled, sound_enabled, chirp_enabled;
+} AudioCaptureSoundBoundary;
+
+/**
+ * @brief 判断同一会话的帧是否越过边界；更晚启动的会话全部属于新模式。
+ * @param boundary 非NULL只读模式边界。
+ * @param session 不复用的本次开机内采集会话。
+ * @param first_frame 半块首帧或已验证TOA帧，单位为双声道帧。
+ * @return true允许进入声音业务，未登记模式时保持兼容。
+ */
+static inline bool AudioCapture_SoundFrameAllowed(const AudioCaptureSoundBoundary *boundary,
+                                                  uint32_t session, uint64_t first_frame)
+{
+    return !boundary->controlled ||
+        (boundary->sound_enabled && (session > boundary->session ||
+         (session != 0U && session == boundary->session && first_frame >= boundary->first_frame)));
+}
+
+/**
+ * @brief 应用新模式采样边界并丢弃旧分类、TOA前级和扫频历史。
+ * @param boundary 非NULL只读边界，调用时复制，不保留指针。
+ * @return 无返回值。
+ * @note 仅前台且无PCM借用时调用，公共统计和原始PCM扇出继续。
+ */
+void AudioCapture_SetSoundBoundary(const AudioCaptureSoundBoundary *boundary);
+#endif
 /**
  * @brief   尝试消费一个DMA半块并按至少一秒间隔输出音频状态。
  * @param   now_ms 当前HAL毫秒计数；使用无符号差处理常规32位回绕。
