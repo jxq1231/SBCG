@@ -1418,3 +1418,9 @@ void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out)
     out->rx_unwrapped=business_rx_unwrapped;
     out->rx_bad=business_rx_bad;
 }
+
+/** @brief 只读返回成功交付的UDP收包累计数；仅前台健康观测使用。 */
+uint32_t UDPSoundEvent_GetRxOkCount(void)
+{
+    return rx_ok;
+}

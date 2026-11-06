@@ -142,6 +142,15 @@ typedef struct
 void UDPSoundEvent_GetBusinessCounters(UDPSoundEvent_BusinessCounters *out);
 
 /**
+ * @brief   读取自初始化以来成功交付的 UDP 收包累计数。
+ * @return  成功解码并分派的声音事件、模式控制等报文的累计计数；uint32_t 自然回绕，
+ *          内部计数饱和于 UINT32_MAX。
+ * @note    仅供前台只读健康观测（ETH 链路守护的收包增量），不改变接收语义、
+ *          不重置计数、不触发网络收发。
+ */
+uint32_t UDPSoundEvent_GetRxOkCount(void);
+
+/**
  * @brief 发送受保护的CLAP短报文（CLP1/CLA1）；未登记代次时按原字节未封装发送。
  * @param inner 非NULL已编码CLP1/CLA1内层字节，仅本次借用。
  * @param length 内层字节数（CLP1为80，CLA1为24）。

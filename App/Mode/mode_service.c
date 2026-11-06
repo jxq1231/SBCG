@@ -1,7 +1,9 @@
 /**
  * @file        mode_service.c
  * @brief       处理 A/B 双板模式切换握手和独立续约。
- * @details     接收回调只入有界队列，前台采用严格递增水位拒绝已经废弃的代次。
+ * @details     接收回调只入有界队列，前台采用严格递增水位拒绝已经废弃的代次；
+ *              对端持续约 3 秒给出同一更低启动代次时视为换板/擦除并重置该侧水位，
+ *              A 在对端 HELLO 缺失时仍按本机计时主动重试，不再依赖单点发现报文。
  * @note        不读硬件、共同时间或业务模块。所有计时使用调用方给出的本机毫秒计数。
  */
 #include "mode_service.h"
@@ -14,6 +16,14 @@
 #define MODE_PROBE_PERIOD_MS 500U
 #define MODE_PROBE_TIMEOUT_MS 750U
 #define MODE_LEASE_TIMEOUT_MS 2000U
+/* A 在对端 HELLO 单点缺失时，等待态每隔该时间自主发起一次新事务。 */
+#define MODE_PEER_RETRY_MS 2000U
+/* 更低启动代次必须连续出现该时长才视为对端换板/擦除，单发旧包不触发。 */
+#define MODE_ROLLBACK_HOLD_MS 3000U
+/* 相邻两次更低代次观测的最大间隔；超过即作废候选，避免把零散旧包累计成连续。 */
+#define MODE_ROLLBACK_STALE_MS 2500U
+#define MODE_ROLLBACK_HELLO_SAMPLES 6U
+#define MODE_ROLLBACK_PREPARE_SAMPLES 3U
 
 /** @brief A 的 PREPARE/COMMIT 等确认与 B 的 PREPARE 等待共用计时。 */
 typedef enum
@@ -34,6 +44,16 @@ typedef struct
     ModeControlOp op;
 } ModeReply;
 
+/** @brief 持续出现的更低对端启动代次候选，用于识别换板或整片擦除。 */
+typedef struct
+{
+    bool active;
+    uint64_t boot;
+    uint32_t first_ms;
+    uint32_t last_ms;
+    uint32_t samples;
+} ModePeerRollback;
+
 typedef struct
 {
     ModeSnapshot view;
@@ -48,12 +68,18 @@ typedef struct
     bool probe_pending;
     bool have_pong;
     bool have_a_ping;
+    bool link_up;
+    bool state_tracked;
+    ModeState last_state;
     uint32_t phase_ms;
     uint32_t hello_tx_ms;
     uint32_t phase_tx_ms;
     uint32_t probe_tx_ms;
     uint32_t pong_ms;
+    uint32_t state_since_ms;
+    uint32_t wait_since_ms;
     uint64_t probe_id;
+    ModePeerRollback rollback;
     ModeControlMessage inbox[MODE_INBOX_CAPACITY];
     size_t inbox_count;
 } ModeServiceState;
@@ -97,6 +123,7 @@ bool ModeService_SetBoot(uint64_t boot)
         return false;
     }
     service.boot_set = true;
+    service.view.boot_set = true;
     service.view.state = MODE_SYNC_WAIT;
     service.view.reason = MODE_REASON_PEER;
     return true;
@@ -105,7 +132,8 @@ bool ModeService_SetBoot(uint64_t boot)
 /** @brief 登记最新的 A 板请求。 @param mode 待同步模式。 @return 是否接收该请求。 */
 bool ModeService_Request(ModeKind mode)
 {
-    if (service.view.role != BOARD_ROLE_A || service.failed || !IsMode(mode))
+    if (service.view.role != BOARD_ROLE_A || !service.boot_set || service.failed ||
+        !IsMode(mode))
     {
         return false;
     }
@@ -126,24 +154,81 @@ void ModeService_OnControl(const ModeControlMessage *message)
 /**
  * @brief   关闭当前模式资格并清待决探测，保留启动、序号和探测水位。
  * @param   reason 进入等待的原因。
+ * @param   now_ms 当前本机毫秒计数，用于等待时长观测。
  * @return  无返回值。
  */
-static void Wait(ModeReason reason)
+static void Wait(ModeReason reason, uint32_t now_ms)
 {
     service.phase = PHASE_WAIT;
     service.candidate = MODE_NONE;
     service.view.state = MODE_SYNC_WAIT;
     service.view.reason = reason;
     service.view.effective = MODE_NONE;
+    service.wait_since_ms = now_ms;
     service.probe_pending = false;
     service.have_pong = false;
     service.have_a_ping = false;
 }
 
-/** @brief 启动内序号耗尽时停用本代次。 @return 无返回值。 */
-static void Exhausted(void)
+/**
+ * @brief   清除更低对端代次候选。
+ * @return  无返回值。
+ * @note    收到当前水位或更高代次、链路断开以及完成收养时调用，避免零散旧包被累计。
+ */
+static void ClearRollback(void)
 {
-    Wait(MODE_REASON_EXHAUSTED);
+    service.rollback = (ModePeerRollback){0};
+}
+
+/**
+ * @brief   记录一次低于当前水位的对端启动代次观测。
+ * @param   boot 报文携带的更低启动代次，非零。
+ * @param   now_ms 当前本机毫秒计数。
+ * @return  无返回值。
+ * @note    只有同一数值连续出现才累计；数值变化会重新开始计时。
+ */
+static void ObserveLowerPeer(uint64_t boot, uint32_t now_ms)
+{
+    if (!service.rollback.active || service.rollback.boot != boot)
+    {
+        service.rollback.active = true;
+        service.rollback.boot = boot;
+        service.rollback.first_ms = now_ms;
+        service.rollback.samples = 0U;
+    }
+    service.rollback.last_ms = now_ms;
+    if (service.rollback.samples < UINT32_MAX)
+    {
+        ++service.rollback.samples;
+    }
+}
+
+/**
+ * @brief   判断当前更低代次候选是否满足持续时间和样本数要求。
+ * @param   now_ms 当前本机毫秒计数。
+ * @param   min_samples 该角色要求的最小连续样本数。
+ * @return  满足收养条件返回 true；候选过期时清除并返回 false。
+ * @note    相邻观测间隔超过 MODE_ROLLBACK_STALE_MS 立即作废，单发旧包不会触发收养。
+ */
+static bool RollbackReady(uint32_t now_ms, uint32_t min_samples)
+{
+    if (!service.rollback.active)
+    {
+        return false;
+    }
+    if ((uint32_t)(now_ms - service.rollback.last_ms) > MODE_ROLLBACK_STALE_MS)
+    {
+        ClearRollback();
+        return false;
+    }
+    return service.rollback.samples >= min_samples &&
+        (uint32_t)(now_ms - service.rollback.first_ms) >= MODE_ROLLBACK_HOLD_MS;
+}
+
+/** @brief 启动内序号耗尽时停用本代次。 @param now_ms 当前本机毫秒计数。 @return 无返回值。 */
+static void Exhausted(uint32_t now_ms)
+{
+    Wait(MODE_REASON_EXHAUSTED, now_ms);
     service.failed = true;
     service.view.state = MODE_ERROR;
 }
@@ -171,15 +256,138 @@ static void EnterPhase(ModePhase phase, uint32_t now_ms)
  */
 static void BeginA(uint32_t now_ms, ModeReason reason)
 {
-    Wait(reason);
+    Wait(reason, now_ms);
     if (service.view.mode_seq == UINT64_MAX)
     {
-        Exhausted();
+        Exhausted(now_ms);
         return;
     }
     ++service.view.mode_seq;
     service.candidate = service.requested_applied;
     EnterPhase(PHASE_PREPARE, now_ms);
+}
+
+/**
+ * @brief   收养持续出现的更低对端启动代次并重新握手。
+ * @param   now_ms 当前本机毫秒计数。
+ * @return  无返回值。
+ * @note    A 收养后重置 b_boot 水位并以新序号发 PREPARE；B 收养后清 a_boot/mode_seq
+ *          水位，等 A 的下一条 PREPARE 重新建立代次。只在候选连续满足条件时执行一次。
+ */
+static void ServiceRollbacks(uint32_t now_ms)
+{
+    if (!service.rollback.active)
+    {
+        return;
+    }
+    const uint32_t min_samples = service.view.role == BOARD_ROLE_A
+        ? MODE_ROLLBACK_HELLO_SAMPLES : MODE_ROLLBACK_PREPARE_SAMPLES;
+    if (!RollbackReady(now_ms, min_samples))
+    {
+        return;
+    }
+    const uint64_t boot = service.rollback.boot;
+    if (service.view.role == BOARD_ROLE_A)
+    {
+        service.view.b_boot = boot;
+        if (service.view.rollbacks < UINT32_MAX)
+        {
+            ++service.view.rollbacks;
+        }
+        ClearRollback();
+        BeginA(now_ms, MODE_REASON_ROLLBACK);
+    }
+    else if (service.view.role == BOARD_ROLE_B)
+    {
+        Wait(MODE_REASON_ROLLBACK, now_ms);
+        service.view.a_boot = boot;
+        service.view.mode_seq = 0U;
+        if (service.view.rollbacks < UINT32_MAX)
+        {
+            ++service.view.rollbacks;
+        }
+        ClearRollback();
+    }
+    else
+    {
+        ClearRollback();
+    }
+}
+
+/**
+ * @brief   A 在等待态按本机计时主动发起新事务。
+ * @param   now_ms 当前本机毫秒计数。
+ * @return  无返回值。
+ * @note    仅 A、已登记且链路可用时执行；每 MODE_PEER_RETRY_MS 至多一次，
+ *          BeginA 会重置等待起点，握手超时后自然形成约 4 秒的重试周期。
+ */
+static void ServiceAutoRetry(uint32_t now_ms)
+{
+    if (service.view.role != BOARD_ROLE_A || service.phase != PHASE_WAIT)
+    {
+        return;
+    }
+    if ((uint32_t)(now_ms - service.wait_since_ms) >= MODE_PEER_RETRY_MS)
+    {
+        BeginA(now_ms, MODE_REASON_PEER);
+    }
+}
+
+/**
+ * @brief   计算当前实际阻塞原因供 $MODE 的 BLOCK 字段使用。
+ * @return  当前阻塞原因；ACTIVE 时为 MODE_REASON_OK。
+ * @note    与 reason 分离：reason 保留最近一次状态/阶段变化原因，block 随当前条件变化。
+ */
+static ModeReason BlockReason(void)
+{
+    if (!service.boot_set)
+    {
+        return MODE_REASON_BOOT;
+    }
+    if (service.failed)
+    {
+        return MODE_REASON_EXHAUSTED;
+    }
+    if (!service.link_up)
+    {
+        return MODE_REASON_LINK;
+    }
+    if (service.phase == PHASE_WAIT)
+    {
+        return MODE_REASON_PEER;
+    }
+    if (service.phase == PHASE_ACTIVE)
+    {
+        return MODE_REASON_OK;
+    }
+    return MODE_REASON_HANDSHAKE;
+}
+
+/**
+ * @brief   刷新状态停留时长、等待起点、链路和阻塞原因观测。
+ * @param   now_ms 当前本机毫秒计数。
+ * @return  无返回值。
+ * @note    状态变化在下一轮被识别，误差不超过一次前台周期；不改变握手状态。
+ */
+static void TrackState(uint32_t now_ms)
+{
+    if (!service.state_tracked)
+    {
+        service.state_tracked = true;
+        service.state_since_ms = now_ms;
+    }
+    else if (service.last_state != service.view.state)
+    {
+        service.state_since_ms = now_ms;
+    }
+    service.last_state = service.view.state;
+    service.view.state_ms = (uint32_t)(now_ms - service.state_since_ms);
+    service.view.boot_set = service.boot_set;
+    service.view.wait_since_ms = service.wait_since_ms;
+    service.view.waiting = service.boot_set && !service.failed &&
+        service.phase == PHASE_WAIT;
+    service.view.link_up = service.link_up;
+    service.view.block = BlockReason();
 }
 
 /**
@@ -315,10 +523,16 @@ static void ReceiveA(const ModeControlMessage *message, uint32_t now_ms, ModeRep
     if (message->op == MODE_CONTROL_HELLO)
     {
         if ((message->a_boot != 0U && message->a_boot != service.view.a_boot) ||
-            message->b_boot == 0U || message->b_boot < service.view.b_boot)
+            message->b_boot == 0U)
         {
             return;
         }
+        if (message->b_boot < service.view.b_boot)
+        {
+            ObserveLowerPeer(message->b_boot, now_ms);
+            return;
+        }
+        ClearRollback();
         if (message->b_boot > service.view.b_boot || service.phase == PHASE_WAIT)
         {
             service.view.b_boot = message->b_boot;
@@ -351,6 +565,7 @@ static void ReceiveA(const ModeControlMessage *message, uint32_t now_ms, ModeRep
  * @param   now_ms 当前本机毫秒计数。
  * @param   reply 非 NULL 本轮可写回复槽。
  * @return  无返回值。
+ * @note    更低 a_boot 先登记为回退候选，只有持续约 3 秒才在 ServiceRollbacks 中收养。
  */
 static void PrepareB(const ModeControlMessage *message, uint32_t now_ms, ModeReply *reply)
 {
@@ -359,10 +574,16 @@ static void PrepareB(const ModeControlMessage *message, uint32_t now_ms, ModeRep
     {
         return;
     }
+    if (message->a_boot < service.view.a_boot)
+    {
+        ObserveLowerPeer(message->a_boot, now_ms);
+        return;
+    }
+    ClearRollback();
     if (message->a_boot > service.view.a_boot ||
         (message->a_boot == service.view.a_boot && message->mode_seq > service.view.mode_seq))
     {
-        Wait(MODE_REASON_HANDSHAKE);
+        Wait(MODE_REASON_HANDSHAKE, now_ms);
         service.view.a_boot = message->a_boot;
         service.view.mode_seq = message->mode_seq;
         service.candidate = message->mode;
@@ -416,13 +637,13 @@ static void Expire(uint32_t now_ms)
     {
         if ((uint32_t)(now_ms - service.pong_ms) >= MODE_LEASE_TIMEOUT_MS)
         {
-            Wait(MODE_REASON_LEASE);
+            Wait(MODE_REASON_LEASE, now_ms);
         }
     }
     else if (service.phase != PHASE_WAIT &&
              (uint32_t)(now_ms - service.phase_ms) >= MODE_HANDSHAKE_TIMEOUT_MS)
     {
-        Wait(MODE_REASON_HANDSHAKE);
+        Wait(MODE_REASON_HANDSHAKE, now_ms);
     }
 }
 
@@ -467,7 +688,7 @@ static void Poll(uint32_t now_ms, ModeSend send)
     }
     if (service.probe_id == UINT64_MAX)
     {
-        Exhausted();
+        Exhausted(now_ms);
         return;
     }
     service.probe_attempted = true;
@@ -477,34 +698,40 @@ static void Poll(uint32_t now_ms, ModeSend send)
 }
 
 /**
- * @brief   依次处理链路、超时、最新请求、网络收件箱和周期发送。
+ * @brief   依次处理链路、回退收养、超时、最新请求、收件箱和周期发送。
  * @param   now_ms 当前本机毫秒计数。
  * @param   link_up 本机链路可用时为 true。
  * @param   send 控制报文发送回调，NULL 表示当前通道不可用。
  * @return  无返回值。
+ * @note    更低对端代次候选在收件箱处理后统一判断，保证单轮状态变化只产生一次日志；
+ *          A 的等待态自主重试在回退收养之后，避免同一轮重复递增序号。
  */
 void ModeService_Process(uint32_t now_ms, bool link_up, ModeSend send)
 {
+    service.link_up = link_up;
     if (!service.boot_set || service.failed)
     {
         service.inbox_count = 0U;
+        TrackState(now_ms);
         return;
     }
     if (!link_up || send == NULL)
     {
         service.inbox_count = 0U;
         service.hello_attempted = false;
-        Wait(MODE_REASON_LINK);
+        ClearRollback();
+        if (service.phase != PHASE_WAIT || service.view.reason != MODE_REASON_LINK)
+        {
+            Wait(MODE_REASON_LINK, now_ms);
+        }
+        TrackState(now_ms);
         return;
     }
     Expire(now_ms);
     if (service.requested_applied != service.view.requested)
     {
         service.requested_applied = service.view.requested;
-        if (service.phase != PHASE_WAIT)
-        {
-            BeginA(now_ms, MODE_REASON_REQUEST);
-        }
+        BeginA(now_ms, MODE_REASON_REQUEST);
     }
     ModeReply reply = {0};
     for (size_t i = 0U; i < service.inbox_count && !service.failed; ++i)
@@ -525,9 +752,15 @@ void ModeService_Process(uint32_t now_ms, bool link_up, ModeSend send)
         {
             (void)SendControl(reply.op, reply.request->probe_id, send);
         }
-        Poll(now_ms, send);
+        ServiceRollbacks(now_ms);
+        ServiceAutoRetry(now_ms);
+        if (!service.failed)
+        {
+            Poll(now_ms, send);
+        }
     }
     service.inbox_count = 0U;
+    TrackState(now_ms);
 }
 
 /** @brief 读取只读状态副本。 @param out 调用方所有的输出，可为 NULL。 @return 无返回值。 */

@@ -15,7 +15,9 @@
 #include "main.h"
 #include <string.h>
 
-/* 应用镜像当前结束于0x08060000之前，扇区6/7留作启动代次；后续扩展代码不得越过0x080C0000。 */
+/* 扇区6(0x080C0000)/7(0x080E0000)紧跟应用镜像：镜像代码与初始化数据装载镜像必须止于
+   0x080C0000之前，由cmake/linker/stm32f746_eth.ld的链接期ASSERT强制；越过时擦除扇区6
+   会删除正在执行的代码，下一次复位将无法启动。 */
 #define BOOT_COUNTER_SECTOR_COUNT 2U
 #define BOOT_COUNTER_FIRST_SECTOR_INDEX 6U
 

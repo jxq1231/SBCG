@@ -4,6 +4,7 @@
  * @details     A使用同域CLAP配对、当前温度与启用标定生成结果；每次结果冻结测量时温补，
  *              新温度仅用于下一真实击掌；B仅接收A的结果。
  *              共用调用方已建立的RSC2资格，不进入标准音tracker或序列门控。
+ *              RST2/CLP1标定合同与当前RSC2域/权威代际/源下界绑定，换代即作废。
  * @note        全部接口由前台串行调用；不访问硬件、Flash、网络或DMA，不保存传入指针。
  */
 #ifndef SBCG_CLAP_RANGING_H
@@ -51,7 +52,7 @@ typedef struct {
     BoardRole role;
     bool healthy, have_clock, pending_tx, have_tx, pending_ack, have_source;
     bool temperature_ok; /**< A最近一次入口温补可用于新结果；false只停新发布，不清已发布值。 */
-    bool have_calibration_contract; /**< B已收到RST2/CLP1中的标定合同。 */
+    bool have_calibration_contract; /**< B在当前RSC2代际内已收到RST2/CLP1标定合同；换代清除。 */
     uint16_t calibration_contract_version;
     int16_t calibration_contract_offset_mm;
     uint64_t now_common_ns, last_source_ns;
@@ -81,6 +82,8 @@ void ClapRanging_Invalidate(ClapRanging *self);
  * @param offset_mm A已应用的标定偏移，单位mm。
  * @return 无返回值；合同变化时撤销不同合同的旧击掌结果，旧RST2被忽略。
  * @note 与CLP1中的同一合同共用有序高水位；旧包不能借迟到恢复旧系数。
+ *       高水位只在本RSC2代际内有效，ClapRanging_Update检测到换代后清除，
+ *       之后A重启带来的版本0合同可重新建立。
  */
 void ClapRanging_ObserveCalibration(ClapRanging *self, uint16_t version, int16_t offset_mm);
 
@@ -95,6 +98,7 @@ void ClapRanging_ObserveCalibration(ClapRanging *self, uint16_t version, int16_t
  * @param temperature A当前温度副本；A无有效温度只拒绝新发布，已发布结果按源期限保留，B可NULL。
  * @param calibration A当前标定副本；NULL表示未标定，B忽略。
  * @return 无返回值；A标定改变撤旧值；温度无效只拒绝新发布，旧结果仍按源期限到期。
+ *         域/权威代际/源下界变化（含A重启）撤旧值并清除已学标定合同。
  *         已发布结果的温补字段、距离、源期限和重试保持不变。
  */
 void ClapRanging_Update(ClapRanging *self, BoardRole role, bool healthy,

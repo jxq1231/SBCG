@@ -6,6 +6,7 @@
  *              启动阶段把该段字节复制到ITCM的NOLOAD缓冲，之后只通过Thumb函数指针执行。
  *              命令位与STM32F7参考手册及HAL实现一致；错误标志操作前后由FLASH_SR清除和检查。
  *              编程使用x32字访问：本板无外部VPP，x64双字编程会置PGPERR。
+ *              忙等待按操作区分预算：单字编程用短上限，128 KiB扇区擦除用覆盖≥1.5 s的上限。
  * @note        复制后的函数为位置无关的相对分支/字面量，不得调用任何Flash内函数或依赖中断；
  *              调用者必须先EnsureLoaded并在调用期间关闭中断。
  */
@@ -32,11 +33,13 @@ extern uint8_t __itcm_code_end__[];
 #define FLASH_RAM_CR_SER UINT32_C(0x00000002)
 #define FLASH_RAM_CR_SNB_MASK UINT32_C(0x00000078)
 #define FLASH_RAM_CR_STRT UINT32_C(0x00010000)
-#define FLASH_RAM_WAIT_LIMIT UINT32_C(2000000)
 #define FLASH_RAM_ACTION_PROGRAM 0U
 #define FLASH_RAM_ACTION_ERASE 1U
 
 typedef bool (*BSP_FlashRamOperation)(uint32_t action, uint32_t target, uint32_t data);
+
+_Static_assert(BSP_FLASH_RAM_ERASE_WAIT_LIMIT > BSP_FLASH_RAM_PROGRAM_WAIT_LIMIT,
+               "erase wait budget must exceed program budget");
 
 static bool flash_ram_loaded;
 
@@ -46,14 +49,17 @@ static bool flash_ram_loaded;
  * @param   target 编程地址或扇区编号。
  * @param   data 编程数据，擦除时忽略。
  * @return  操作完成且无Flash错误为true。
- * @note    不得调用外部函数；所有等待为有界轮询。
+ * @note    不得调用外部函数；所有等待为有界轮询，擦除与编程分别使用各自的计数上限。
  */
 __attribute__((section("itcm_code_src"),noinline,used))
 static bool ItcmFlashOperation(uint32_t action, uint32_t target, uint32_t data)
 {
     volatile uint32_t *regs = (volatile uint32_t *)FLASH_RAM_REG_BASE;
+    /* 擦除等待必须覆盖数百毫秒到1 s量级；编程只需覆盖微秒级。 */
+    const uint32_t wait_limit = action == FLASH_RAM_ACTION_ERASE ?
+        BSP_FLASH_RAM_ERASE_WAIT_LIMIT : BSP_FLASH_RAM_PROGRAM_WAIT_LIMIT;
     bool ready = false;
-    for (uint32_t i = 0U; i < FLASH_RAM_WAIT_LIMIT; ++i)
+    for (uint32_t i = 0U; i < wait_limit; ++i)
     {
         if ((regs[FLASH_RAM_SR_INDEX] & FLASH_RAM_SR_BSY) == 0U)
         {
@@ -81,8 +87,10 @@ static bool ItcmFlashOperation(uint32_t action, uint32_t target, uint32_t data)
         regs[FLASH_RAM_CR_INDEX] |= FLASH_RAM_CR_STRT;
     }
 
+    /* 等待擦除/编程结束：超时同样清除SER/PG并按false上交错误，由调用方放弃本次登记；
+       残余扇区状态由下一次启动的扇区扫描重新判定，不在本函数内重试。 */
     ready = false;
-    for (uint32_t i = 0U; i < FLASH_RAM_WAIT_LIMIT; ++i)
+    for (uint32_t i = 0U; i < wait_limit; ++i)
     {
         if ((regs[FLASH_RAM_SR_INDEX] & FLASH_RAM_SR_BSY) == 0U)
         {

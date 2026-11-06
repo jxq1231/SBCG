@@ -29,6 +29,24 @@
 
 /* USER CODE BEGIN 0 */
 #include "BSP/bsp_board_identity.h"
+#include "BSP/bsp_console.h"
+#include "Network/eth_link_guard.h"
+
+/**
+ * @brief   把 ETH 链路守护生成的一行诊断直接写到控制台。
+ * @param   line 只读日志缓冲，非 NULL；仅本次调用有效。
+ * @param   length 有效字节数，不含结尾零字符。
+ * @return  无返回值。
+ * @note    在 MX_LWIP_Process 前台调用，属于主循环同步 UART 发送；每次最多一行，
+ *          不进入中断，也不经过应用日志队列。
+ */
+static void EthLinkGuard_ConsoleLog(const char *line, int length)
+{
+    if ((line != NULL) && (length > 0))
+    {
+        (void)BSP_Console_Write(line, (uint16_t)length);
+    }
+}
 
 /* USER CODE END 0 */
 /* Private function prototypes -----------------------------------------------*/
@@ -152,6 +170,11 @@ void MX_LWIP_Process(void)
   ethernetif_input(&gnetif);
 
 /* USER CODE BEGIN 4_2 */
+#ifdef SBCG_USE_LWIP
+  /* 1 Hz 链路健康守护：PHY/MAC 速率或双工不一致立即重配 MAC；PHY 保持 UP
+     但 2 s 无收包增量时执行有界 ETH 重初始化，10 s 窗口最多 2 次动作。 */
+  EthLinkGuard_Process(HAL_GetTick(), EthLinkGuard_ConsoleLog);
+#endif
 /* USER CODE END 4_2 */
   /* Handle timeouts */
   sys_check_timeouts();

@@ -19,7 +19,7 @@ static const BoardIdentityProfile *current_identity;
 const BoardIdentityProfile *BSP_BoardIdentity_Get(void){return current_identity;}
 bool TimeSync_Deinit(void){return true;}
 bool TimeSync_Init(uint32_t now,const BoardIdentityProfile *p,uint32_t(*tick)(void),void(*log)(const char*,int)){assert(now==tick_ms && p && tick && log);return true;}
-void TimeSync_Process(uint32_t now,bool allowed){assert(now==tick_ms && allowed==!temperature_low);}
+void TimeSync_Process(uint32_t now,bool allowed){assert(now==tick_ms && allowed);}
 static unsigned takes,model_receives,event_receives,event_processes,event_inits;
 static AudioTimeAnchorObservation delivered;
 /** @brief 本轮唯一取出，复制给out并累计；无DMA或PTP读取，返回true。 */

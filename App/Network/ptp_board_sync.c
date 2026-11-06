@@ -402,6 +402,9 @@ void PtpBoardSync_NotifyClockChange(uint32_t epoch)
 bool PtpBoardSync_TakePeerReset(void)
 { bool result=peer_reset;peer_reset=false;return result; }
 bool PtpBoardSync_LinkUsable(void) { return link_usable; }
+/** @brief 查询六秒静默窗是否结束。 @return 已安装且静默结束时为true。 @note 前台只读，供同步看门狗门控。 */
+bool PtpBoardSync_GuardDone(void)
+{ return installed && read_tick!=NULL && GuardDone(read_tick()); }
 bool PtpBoardSync_TakeLinkRecovery(void)
 { const bool result=link_recovered;link_recovered=false;return result; }
 uint32_t PtpBoardSync_GetCompletedCount(void) { return stats.completed; }

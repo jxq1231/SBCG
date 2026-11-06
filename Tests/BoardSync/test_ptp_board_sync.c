@@ -103,7 +103,9 @@ static void BComplete(uint16_t seq)
 /** @brief 执行真实传输与包装链场景断言。 @return 全部通过返回0，失败由assert终止。 */
 int main(void)
 {
-    Reset(BOARD_ROLE_A,0);assert(sends==0);now=5999;PtpBoardSync_Process(now);assert(!sends);now=6000;PtpBoardSync_Process(now);
+    Reset(BOARD_ROLE_A,0);assert(sends==0);assert(!PtpBoardSync_GuardDone());
+    now=5999;PtpBoardSync_Process(now);assert(!sends);assert(!PtpBoardSync_GuardDone());
+    now=6000;PtpBoardSync_Process(now);assert(PtpBoardSync_GuardDone());
     assert(sends==2&&sent[0][0]==0&&sent[1][0]==8&&begins==1&&ends==1&&ports[0]==319&&ports[1]==320);
     PtpWireMessage fu;assert(PtpWire_Decode(sent[1],sizes[1],&fu)==PTP_WIRE_OK&&fu.timestamp_ns==UINT64_C(10000000300));
     Deliver(PTP_WIRE_DELAY_REQ,42,0);PtpBoardSync_Process(now);assert(sends==3&&sent[2][0]==9&&begins==1);
@@ -189,6 +191,8 @@ int main(void)
     assert(!PtpBoardSync_LinkUsable());
     gnetif.flags|=NETIF_FLAG_LINK_UP;now+=1;PtpBoardSync_Process(now);
     assert(PtpBoardSync_LinkUsable()&&PtpBoardSync_TakeLinkRecovery()&&!PtpBoardSync_TakeLinkRecovery());
+    assert(!PtpBoardSync_GuardDone());
+    now+=6000;PtpBoardSync_Process(now);assert(PtpBoardSync_GuardDone());
     assert(PtpBoardSync_GetCompletedCount()==0U);
     puts("PASS link: down/up transition is visible once and clears pending protocol state");
     puts("PASS transport integration through actual legacy PtpRx/PtpTx wrappers");return 0;

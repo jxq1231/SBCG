@@ -1,8 +1,10 @@
 /**
  * @file        test_mode_service.c
  * @brief       在原生 C 进程内用两个独立实例测试真实模式握手。
- * @details     前台按固定毫秒步进，经过有界转发表传输原始报文副本并注入丢包、乱序和复位。
- * @note        夹具注入严格递增的启动代次，测试模式状态与业务调度无关。
+ * @details     前台按固定毫秒步进，经过有界转发表传输原始报文副本并注入丢包、乱序、复位
+ *              以及持续/单发的更低启动代次。
+ * @note        夹具默认注入严格递增的启动代次，另在回退场景中重新初始化对端并注入更低代次；
+ *              测试模式状态与业务调度无关。
  */
 #include "Mode/mode_service.h"
 #include <assert.h>
@@ -24,7 +26,10 @@ static struct
     ModeControlMessage queued[32];
     size_t count;
     ModeControlMessage last[2][MODE_CONTROL_PONG + 1];
+    uint32_t last_tx_ms[MODE_CONTROL_PONG + 1];
     bool lost_first[MODE_CONTROL_PONG + 1];
+    bool drop_hello_from_b;
+    bool drop_b_pong;
     bool drop_a_ping;
     bool replay_pong;
     ModeControlMessage stale_pong;
@@ -34,15 +39,24 @@ static struct
  * @brief   复制或按当前测试条件丢弃发出的控制报文。
  * @param   message 非 NULL 临时报文，返回前复制。
  * @return  始终报告本地发送已提交，模拟 UDP 丢包发生在网络中。
- * @note    原控制回调在下一步投递，避免同步重入被测状态机。
+ * @note    原控制回调在下一步投递，避免同步重入被测状态机；发送时刻在任何丢弃判断前记录。
  */
 static bool Route(const ModeControlMessage *message)
 {
     const unsigned role = message->role == BOARD_ROLE_A ? 0U : 1U;
     network.last[role][message->op] = *message;
+    network.last_tx_ms[message->op] = network.now_ms;
     if (network.lost_first[message->op])
     {
         network.lost_first[message->op] = false;
+        return true;
+    }
+    if (network.drop_hello_from_b && role == 1U && message->op == MODE_CONTROL_HELLO)
+    {
+        return true;
+    }
+    if (network.drop_b_pong && role == 1U && message->op == MODE_CONTROL_PONG)
+    {
         return true;
     }
     if (network.drop_a_ping && role == 0U && message->op == MODE_CONTROL_PING)
@@ -139,25 +153,33 @@ static void TestStartupLossAndWrap(void)
     (void)ExpectActive(MODE_RANGE);
 }
 
-/** @brief 验证请求的可观测性独立于启动、链路和模式切换。 @return 无返回值。 */
-static void TestRequestVisibleBeforeSynchronization(void)
+/**
+ * @brief 未登记启动代次时拒绝请求；登记后请求可见且仍不直接生效。
+ * @return 无返回值。
+ */
+static void TestRequestRequiresRegistration(void)
 {
     ModeSnapshot a;
     ModeService_Init(BOARD_ROLE_A);
-    assert(ModeService_Request(MODE_WAVE));
+    assert(!ModeService_Request(MODE_WAVE));
     ModeService_GetSnapshot(&a);
-    assert(a.state == MODE_STARTUP && a.requested == MODE_WAVE && a.effective == MODE_NONE);
+    assert(a.state == MODE_STARTUP && a.requested == MODE_RANGE && a.effective == MODE_NONE);
+    assert(!a.boot_set && !a.waiting && a.block == MODE_REASON_BOOT);
     ModeService_Process(100U, true, Route);
     ModeService_GetSnapshot(&a);
-    assert(a.requested == MODE_WAVE);
+    assert(a.requested == MODE_RANGE);
     assert(ModeService_SetBoot(11U));
+    assert(ModeService_Request(MODE_WAVE));
     ModeService_Process(200U, false, Route);
     assert(ModeService_Request(MODE_CLAP));
     ModeService_GetSnapshot(&a);
     assert(a.state == MODE_SYNC_WAIT && a.requested == MODE_CLAP && a.effective == MODE_NONE);
+    assert(a.boot_set && !a.link_up && a.waiting && a.wait_since_ms == 200U);
+    assert(a.block == MODE_REASON_LINK && a.state_ms == 0U);
     ModeService_Process(300U, false, Route);
     ModeService_GetSnapshot(&a);
     assert(a.requested == MODE_CLAP);
+    assert(a.waiting && a.wait_since_ms == 200U && a.state_ms == 100U);
 }
 
 /** @brief 快速请求、同模式幂等与延迟旧 PREPARE/COMMIT。 @return 无返回值。 */
@@ -296,17 +318,172 @@ static void TestLinkDownAndReconnect(void)
     assert(ExpectActive(MODE_RANGE).mode_seq > first.mode_seq);
 }
 
+/**
+ * @brief B 换板/擦除后持续给出更低代次，A 必须收养并恢复，而不是永久拒收。
+ * @return 无返回值。
+ */
+static void TestLowerPeerHelloRollback(void)
+{
+    Reset(0U);
+    Advance(40U, true);
+    (void)ExpectActive(MODE_RANGE);
+    ModeServiceB_Init(BOARD_ROLE_B);
+    assert(ModeServiceB_SetBoot(15U));
+    Advance(260U, true);
+    const ModeSnapshot a = ExpectActive(MODE_RANGE);
+    assert(a.b_boot == 15U && a.a_boot == 11U && a.rollbacks == 1U);
+}
+
+/**
+ * @brief A 换板/擦除后持续给出更低 PREPARE，B 必须重置 a_boot/mode_seq 水位并恢复。
+ * @return 无返回值。
+ */
+static void TestLowerPeerPrepareRollback(void)
+{
+    Reset(0U);
+    Advance(40U, true);
+    (void)ExpectActive(MODE_RANGE);
+    ModeService_Init(BOARD_ROLE_A);
+    assert(ModeService_SetBoot(5U));
+    Advance(320U, true);
+    const ModeSnapshot a = ExpectActive(MODE_RANGE);
+    ModeSnapshot b;
+    ModeServiceB_GetSnapshot(&b);
+    assert(a.a_boot == 5U && a.b_boot == 21U);
+    assert(b.rollbacks == 1U);
+}
+
+/** @brief 单发旧 HELLO 只登记候选，不得改变 A 的水位或生效模式。 @return 无返回值。 */
+static void TestSingleStaleHelloRejected(void)
+{
+    Reset(0U);
+    Advance(40U, true);
+    const ModeSnapshot active = ExpectActive(MODE_RANGE);
+    network.drop_hello_from_b = true;
+    ModeControlMessage stale = network.last[1][MODE_CONTROL_HELLO];
+    stale.b_boot = 20U;
+    ModeService_OnControl(&stale);
+    Advance(160U, true);
+    ModeSnapshot a, b;
+    ModeService_GetSnapshot(&a);
+    ModeServiceB_GetSnapshot(&b);
+    assert(a.state == MODE_ACTIVE && a.effective == MODE_RANGE);
+    assert(a.b_boot == 21U && a.mode_seq == active.mode_seq && a.rollbacks == 0U);
+    assert(b.state == MODE_ACTIVE && b.effective == MODE_RANGE);
+    network.drop_hello_from_b = false;
+    Advance(20U, true);
+    (void)ExpectActive(MODE_RANGE);
+}
+
+/** @brief 单发旧 PREPARE 只登记候选，不得重置 B 的 a_boot 水位。 @return 无返回值。 */
+static void TestSingleStalePrepareRejected(void)
+{
+    Reset(0U);
+    Advance(40U, true);
+    (void)ExpectActive(MODE_RANGE);
+    ModeControlMessage stale = network.last[0][MODE_CONTROL_PREPARE];
+    stale.a_boot = 10U;
+    stale.mode_seq = 1U;
+    ModeServiceB_OnControl(&stale);
+    Advance(160U, true);
+    ModeSnapshot b;
+    ModeServiceB_GetSnapshot(&b);
+    assert(b.state == MODE_ACTIVE && b.effective == MODE_RANGE);
+    assert(b.a_boot == 11U && b.rollbacks == 0U);
+}
+
+/**
+ * @brief 在链路保持时制造 A 的本机租约过期，返回进入等待的本机毫秒。
+ * @return 观察到的等待起始毫秒，误差不超过一拍。
+ * @note 只丢 B 的 HELLO 和 PONG，B 仍可靠 A 的 PONG 维持自身租约。
+ */
+static uint32_t ForceWait(void)
+{
+    network.drop_hello_from_b = true;
+    network.drop_b_pong = true;
+    for (unsigned step = 0U; step < 240U; ++step)
+    {
+        Advance(1U, true);
+        ModeSnapshot probe;
+        ModeService_GetSnapshot(&probe);
+        if (probe.state != MODE_ACTIVE)
+        {
+            return network.now_ms - 25U;
+        }
+    }
+    assert(0);
+    return 0U;
+}
+
+/**
+ * @brief 单向丢失 B 的 HELLO 后，A 必须在 2 秒内自主发 PREPARE 并恢复。
+ * @return 无返回值。
+ */
+static void TestAutonomousRetryAfterHelloLoss(void)
+{
+    Reset(0U);
+    Advance(40U, true);
+    const ModeSnapshot first = ExpectActive(MODE_RANGE);
+    const uint32_t wait_ms = ForceWait();
+    assert(wait_ms != 0U);
+    ModeSnapshot waiting;
+    ModeService_GetSnapshot(&waiting);
+    assert(waiting.effective == MODE_NONE && waiting.waiting);
+    assert(waiting.block == MODE_REASON_PEER);
+    const uint64_t seq_before = waiting.mode_seq;
+    network.drop_b_pong = false;
+    Advance(81U, true);
+    ModeSnapshot retried;
+    ModeService_GetSnapshot(&retried);
+    assert(retried.mode_seq == seq_before + 1U);
+    assert(network.last_tx_ms[MODE_CONTROL_PREPARE] >= wait_ms);
+    assert((uint32_t)(network.last_tx_ms[MODE_CONTROL_PREPARE] - wait_ms) <= 2025U);
+    Advance(40U, true);
+    assert(ExpectActive(MODE_RANGE).mode_seq == first.mode_seq + 1U);
+}
+
+/**
+ * @brief A 在等待态收到本地请求变化时必须立即发起，而不是继续等 HELLO。
+ * @return 无返回值。
+ */
+static void TestWaitRequestTriggersHandshake(void)
+{
+    Reset(0U);
+    Advance(40U, true);
+    (void)ExpectActive(MODE_RANGE);
+    (void)ForceWait();
+    ModeSnapshot waiting;
+    ModeService_GetSnapshot(&waiting);
+    const uint64_t seq_before = waiting.mode_seq;
+    assert(ModeService_Request(MODE_WAVE));
+    Advance(1U, true);
+    ModeSnapshot retried;
+    ModeService_GetSnapshot(&retried);
+    assert(retried.mode_seq == seq_before + 1U);
+    assert(network.last[0][MODE_CONTROL_PREPARE].mode == MODE_WAVE);
+    network.drop_hello_from_b = false;
+    network.drop_b_pong = false;
+    Advance(80U, true);
+    assert(ExpectActive(MODE_WAVE).mode_seq == seq_before + 1U);
+}
+
 /** @brief 运行模式握手的原生回归用例。 @return 全部断言通过时返回零。 */
 int main(void)
 {
     TestStartupLossAndWrap();
-    TestRequestVisibleBeforeSynchronization();
+    TestRequestRequiresRegistration();
     TestNewRequestTombstonesOldGeneration();
     TestBWaitsForAPostCommitPing();
     TestReplayCannotExtendLease();
     TestBurstKeepsSendBudgetAndProbe();
     TestEitherBoardReboot();
     TestLinkDownAndReconnect();
-    puts("ModeService: 8 scenarios passed");
+    TestLowerPeerHelloRollback();
+    TestLowerPeerPrepareRollback();
+    TestSingleStaleHelloRejected();
+    TestSingleStalePrepareRejected();
+    TestAutonomousRetryAfterHelloLoss();
+    TestWaitRequestTriggersHandshake();
+    puts("ModeService: 14 scenarios passed");
     return 0;
 }

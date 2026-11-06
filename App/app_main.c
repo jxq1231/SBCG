@@ -166,8 +166,12 @@ static RangingAppState ranging_app __attribute__((section(".ItcmState"),aligned(
 #ifdef SBCG_USE_SOUND_TIME
 /* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。 */
 #define APP_LOG_QUEUE_CAPACITY 32U
+/* 同步串口一行最坏约23 ms，32行积压超过一个170.7 ms音频半块；
+   软上限只保留最近8行，丢弃最旧行并计入LOG_FULL，限制最坏排空时延。 */
+#define APP_LOG_QUEUE_SOFT_LIMIT 8U
 #else
 #define APP_LOG_QUEUE_CAPACITY 16U
+#define APP_LOG_QUEUE_SOFT_LIMIT APP_LOG_QUEUE_CAPACITY
 #endif
 /* 诊断心跳含日志原因与队列状态，满宽uint32字段仍须完整放入同一行。 */
 #ifdef SBCG_USE_CHIRP
@@ -234,7 +238,8 @@ static void FlushOneLine(void)
  * @param   line 有效ASCII日志缓冲区；由调用者持有，必要时本函数同步复制。
  * @param   length 待发字节数，合法范围1～255，不包括字符串结尾的空字符。
  * @return  无返回值（void）。
- * @note    各服务以前台回调调用；长度非法、队满、写失败分别累计LOG_BAD/FULL/WRITE及原TX_ERRORS。
+ * @note    各服务以前台回调调用；长度非法、队列超软上限或写失败分别累计LOG_BAD/FULL/WRITE及原TX_ERRORS。
+ *          队列超软上限时丢弃最旧行，避免同步串口排空挤占音频半块预算。
  *          此处未检查line是否为NULL，调用方必须保证长度范围内的内存有效。
  */
 static void SendLine(const char *line, int length)
@@ -253,12 +258,23 @@ static void SendLine(const char *line, int length)
 #endif
     if (enqueue)
     {
+#if APP_LOG_QUEUE_SOFT_LIMIT < APP_LOG_QUEUE_CAPACITY
+        if (pending_count >= APP_LOG_QUEUE_SOFT_LIMIT)
+        {
+            /* 丢最旧行，保留最近的现场证据，同时把最坏排空时延限制在软上限内。 */
+            pending_head = (pending_head + 1U) % APP_LOG_QUEUE_CAPACITY;
+            --pending_count;
+            ++app_tx_error_count;
+            ++log_full_count;
+        }
+#else
         if (pending_count == APP_LOG_QUEUE_CAPACITY)
         {
             ++app_tx_error_count;
             ++log_full_count;
             return;
         }
+#endif
         const uint32_t tail = (pending_head + pending_count) % APP_LOG_QUEUE_CAPACITY;
         memcpy(pending_lines[tail], line, (size_t)length);
         pending_lengths[tail] = (uint16_t)length;
@@ -974,7 +990,8 @@ static void FormatUnsigned64(uint64_t value,char *out)
 /**
  * ==================== 模块：双板模式观测 ====================
  * 作用：复用现有UDP端点同步模式并记录状态变化，仅供观测。
- * 调度顺序：接收回调暂存报文，DHT允许且本轮音频归还与原业务处理后消费并发送。
+ * 调度顺序：接收回调暂存报文，前台每轮在音频归还与原业务处理后消费并发送；
+ *           DHT起始低电平只暂停音频/UI，不再跳过本模块。
  * 调用关系：App_Init注册入口，App_Process推进，诊断命令可设置代次和A板请求。
  */
 /* 稳定后每5秒输出一次快照，避免只能靠命令观察稳态租约。 */
@@ -982,11 +999,25 @@ static void FormatUnsigned64(uint64_t value,char *out)
 static ModeSnapshot last_mode_report;
 static bool mode_reported;
 static uint32_t last_mode_report_ms;
+/* 本机启动代次登记结果：BOOTGEN状态名、MANUAL（诊断命令登记）或DISABLED。 */
+#ifdef SBCG_USE_BOOT_COUNTER
+static const char *mode_boot_status = "PENDING";
+#else
+static const char *mode_boot_status = "DISABLED";
+#endif
+static bool mode_boot_status_from_flash;
+/* 模式控制UDP端口/回调是否已在UDPSoundEvent初始化成功后登记。 */
+static bool mode_control_port_ready;
 
 /** @brief 将本次启动代次交给模式状态机。@param boot 非零且跨启动递增。@return 接受为true。 */
 bool App_ModeSetBoot(uint64_t boot)
 {
-    return ModeService_SetBoot(boot);
+    const bool accepted = ModeService_SetBoot(boot);
+    if (accepted && !mode_boot_status_from_flash)
+    {
+        mode_boot_status = "MANUAL";
+    }
+    return accepted;
 }
 
 /** @brief 提交A板诊断模式请求。@param mode 待请求模式。@return 状态机接收为true。 */
@@ -1004,22 +1035,46 @@ void App_GetModeSnapshot(ModeSnapshot *out)
 /**
  * @brief 输出一条模式观测记录，不触发状态变化。
  * @param mode 非NULL前台快照，仅本次调用读取。
+ * @param now_ms 本地HAL毫秒，作为TICK_MS输出并支持无符号回绕。
  * @return 无返回值。
- * @note 复用无符号64位格式化，避免精简C库丢失启动代次的高位。
+ * @note 复用无符号64位格式化，避免精简C库丢失启动代次的高位；REASON保留最近一次
+ *       状态/阶段变化原因，BLOCK表示当前阻塞；REG/PORT分别表示启动代次和
+ *       模式控制端口登记，WAIT_SINCE_MS仅在等待态填写。
+ *       完整行超过256字节缓冲时退化为关键字段行，保证单行可发送。
  */
-static void LogModeSnapshot(const ModeSnapshot *mode)
+static void LogModeSnapshot(const ModeSnapshot *mode, uint32_t now_ms)
 {
-    char a_boot[24], b_boot[24], mode_seq[24];
+    char a_boot[24], b_boot[24], mode_seq[24], wait_since[12];
     FormatUnsigned64(mode->a_boot, a_boot);
     FormatUnsigned64(mode->b_boot, b_boot);
     FormatUnsigned64(mode->mode_seq, mode_seq);
+    wait_since[0] = '\0';
+    if (mode->waiting)
+    {
+        (void)snprintf(wait_since, sizeof wait_since, "%" PRIu32, mode->wait_since_ms);
+    }
     char line[APP_LOG_LINE_CAPACITY];
-    const int length = snprintf(line, sizeof line,
+    int length = snprintf(line, sizeof line,
         "$MODE,ROLE=%c,REQUESTED=%u,EFFECTIVE=%u,STATE=%u,A_BOOT=%s,B_BOOT=%s,"
-        "SEQ=%s,REASON=%u,ATTEMPTS=%" PRIu32 "\r\n",
+        "SEQ=%s,REASON=%u,ATTEMPTS=%" PRIu32 ",TICK_MS=%" PRIu32
+        ",STATE_MS=%" PRIu32 ",LINK_UP=%u,WAIT_SINCE_MS=%s,BLOCK=%u,REG=%u,PORT=%u,"
+        "BOOT=%s,ROLLBACKS=%" PRIu32 "\r\n",
         mode->role == BOARD_ROLE_A ? 'A' : 'B', (unsigned)mode->requested,
         (unsigned)mode->effective, (unsigned)mode->state, a_boot, b_boot, mode_seq,
-        (unsigned)mode->reason, mode->attempts);
+        (unsigned)mode->reason, mode->attempts, now_ms, mode->state_ms,
+        mode->link_up ? 1U : 0U, wait_since, (unsigned)mode->block,
+        mode->boot_set ? 1U : 0U, mode_control_port_ready ? 1U : 0U,
+        mode_boot_status, mode->rollbacks);
+    if (length <= 0 || (size_t)length >= sizeof line)
+    {
+        length = snprintf(line, sizeof line,
+            "$MODE,ROLE=%c,STATE=%u,REASON=%u,BLOCK=%u,A_BOOT=%s,B_BOOT=%s,SEQ=%s,"
+            "TICK_MS=%" PRIu32 ",LINK_UP=%u,REG=%u,PORT=%u,BOOT=%s\r\n",
+            mode->role == BOARD_ROLE_A ? 'A' : 'B', (unsigned)mode->state,
+            (unsigned)mode->reason, (unsigned)mode->block, a_boot, b_boot, mode_seq,
+            now_ms, mode->link_up ? 1U : 0U, mode->boot_set ? 1U : 0U,
+            mode_control_port_ready ? 1U : 0U, mode_boot_status);
+    }
     SendLine(line, length);
 }
 
@@ -1029,16 +1084,18 @@ void App_ReportMode(void)
 {
     ModeSnapshot snapshot;
     App_GetModeSnapshot(&snapshot);
-    LogModeSnapshot(&snapshot);
+    LogModeSnapshot(&snapshot, BSP_Console_GetTickMs());
 }
 #endif
 
 /**
- * @brief 在DHT允许时消费模式报文并推进握手，变化或周期到期时输出诊断。
+ * @brief 消费模式报文并推进握手，变化或周期到期时输出诊断。
  * @param now_ms 本地HAL毫秒，支持无符号回绕。
  * @return 无返回值。
- * @note 不使用PTP时间判断租约，不更改测距、音频或UI资格。本次启动代次登记前只输出首条；
- *       登记后每MODE_REPORT_PERIOD_MS输出一次稳态快照，重发次数变化不单独产生日志。
+ * @note 不使用PTP时间判断租约，不更改测距、音频或UI资格。DHT起始低电平期间仍推进，
+ *       避免输入窗同时冻结模式租约；本次启动代次登记前只输出首条，
+ *       登记后每MODE_REPORT_PERIOD_MS输出一次稳态快照，重发次数变化不单独产生日志；
+ *       对端代次回退收养时额外输出一条$MODE_EVENT给出原因。
  */
 static void ServiceModeObservation(uint32_t now_ms)
 {
@@ -1047,18 +1104,36 @@ static void ServiceModeObservation(uint32_t now_ms)
     ModeService_Process(now_ms, network.valid && network.link_up, UDPSoundEvent_SendModeControl);
     ModeSnapshot snapshot;
     ModeService_GetSnapshot(&snapshot);
+    if (snapshot.rollbacks != last_mode_report.rollbacks)
+    {
+        char boot[24];
+        FormatUnsigned64(snapshot.role == BOARD_ROLE_A ? snapshot.b_boot : snapshot.a_boot,
+                         boot);
+        char event[APP_LOG_LINE_CAPACITY];
+        const int event_length = snprintf(event, sizeof event,
+            "$MODE_EVENT,EVENT=PEER_ROLLBACK,ROLE=%c,BOOT=%s,TICK_MS=%" PRIu32
+            ",COUNT=%" PRIu32 "\r\n",
+            snapshot.role == BOARD_ROLE_A ? 'A' : 'B', boot, now_ms, snapshot.rollbacks);
+        SendLine(event, event_length);
+    }
     const bool booted = snapshot.a_boot != 0U || snapshot.b_boot != 0U;
     const bool periodic = booted &&
         (uint32_t)(now_ms - last_mode_report_ms) >= MODE_REPORT_PERIOD_MS;
     if (!mode_reported || periodic || snapshot.state != last_mode_report.state ||
-        snapshot.reason != last_mode_report.reason || snapshot.requested != last_mode_report.requested ||
+        snapshot.reason != last_mode_report.reason || snapshot.block != last_mode_report.block ||
+        snapshot.requested != last_mode_report.requested ||
         snapshot.effective != last_mode_report.effective || snapshot.a_boot != last_mode_report.a_boot ||
-        snapshot.b_boot != last_mode_report.b_boot || snapshot.mode_seq != last_mode_report.mode_seq)
+        snapshot.b_boot != last_mode_report.b_boot || snapshot.mode_seq != last_mode_report.mode_seq ||
+        snapshot.boot_set != last_mode_report.boot_set ||
+        snapshot.link_up != last_mode_report.link_up ||
+        snapshot.waiting != last_mode_report.waiting ||
+        snapshot.wait_since_ms != last_mode_report.wait_since_ms ||
+        snapshot.rollbacks != last_mode_report.rollbacks)
     {
         mode_reported = true;
         last_mode_report = snapshot;
         last_mode_report_ms = now_ms;
-        LogModeSnapshot(&snapshot);
+        LogModeSnapshot(&snapshot, now_ms);
     }
 }
 
@@ -1135,9 +1210,12 @@ static void LoadBootGeneration(void)
         BSP_BootCounter_StatusName(status), value, (unsigned)counter.sector,
         (unsigned)counter.slot, counter.erased ? 1U : 0U);
     SendLine(line, length);
-    if (status == BSP_BOOT_COUNTER_OK)
+    mode_boot_status = status == BSP_BOOT_COUNTER_OK
+        ? "OK" : BSP_BootCounter_StatusName(status);
+    mode_boot_status_from_flash = true;
+    if (status == BSP_BOOT_COUNTER_OK && !App_ModeSetBoot(counter.value))
     {
-        (void)ModeService_SetBoot(counter.value);
+        mode_boot_status = "REJECTED";
     }
 }
 #endif
@@ -1642,6 +1720,7 @@ void App_Init(void)
 #ifdef SBCG_USE_MODE_OBSERVATION
         UDPSoundEvent_SetModeControlSink(ModeService_OnControl);
         UDPSoundEvent_SetBusinessContextProvider(ProvideBusinessContext);
+        mode_control_port_ready = true;
 #endif
 #ifdef SBCG_USE_ADVANCED_UI
         UDPSoundEvent_SetAuxiliarySink(HandleAuxiliary);
@@ -2083,11 +2162,12 @@ void App_Process(void)
     ShareTemperature(BSP_Console_GetTickMs());
 #endif
 #ifdef SBCG_USE_BOARD_SYNC
-    /* 使用本轮温度状态：DATA拉低时延后主动PTP发送和硬件校正。 */
-    TimeSync_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    /* DHT起始低电平只暂停显示/采集等长路径；同步与PPS调度必须每轮继续，
+       否则20ms输入窗会同时冻结协议处理、伺服观测和PPS安全截止。 */
+    TimeSync_Process(BSP_Console_GetTickMs(), true);
 #ifdef SBCG_USE_PPS
-    /* DHT拉低只禁止新目标排程；安全截止及已到达目标的消费每轮仍须执行。 */
-    PpsService_Process(BSP_Console_GetTickMs(), !TemperatureService_IsStartLowActive());
+    /* 低电平窗内仍允许安排新目标；安全截止与已到达目标的消费原本每轮执行。 */
+    PpsService_Process(BSP_Console_GetTickMs(), true);
     {
         TimeSyncSnapshot sync_snapshot;PpsServiceSnapshot pps_snapshot;
         TimeSync_GetSnapshot(BSP_Console_GetTickMs(), &sync_snapshot);
@@ -2179,14 +2259,17 @@ void App_Process(void)
             if(wave_elapsed_ms>wave_update_max_ms)wave_update_max_ms=wave_elapsed_ms;
         }
 #endif
-#ifdef SBCG_USE_MODE_OBSERVATION
-        /* UDP提交可能等待ETH发送，本轮音频块归还和原有业务处理后才推进观测。 */
-        ServiceModeObservation(BSP_Console_GetTickMs());
-        ServiceModeSoundBoundary();
-        ServiceModeBusinessGates();
-#endif
 #endif
     }
+#ifdef SBCG_USE_BOARD_IDENTITY
+#ifdef SBCG_USE_MODE_OBSERVATION
+    /* DHT起始低电平不再跳过模式观测：保持音频/业务处理后的原调度顺序，
+       在低电平窗内仍推进租约与发送，避免模式资格被动冻结。 */
+    ServiceModeObservation(BSP_Console_GetTickMs());
+    ServiceModeSoundBoundary();
+    ServiceModeBusinessGates();
+#endif
+#endif
 #ifdef SBCG_USE_CHIRP
     { const uint32_t d = BSP_Console_GetTickMs() - prof_begin_ms;
       if (d > prof_sound_max_ms) { prof_sound_max_ms = d; } }
