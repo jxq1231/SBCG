@@ -1,5 +1,7 @@
 # User-owned STM32F746 ETH memory integration. Do not move into generated CMake.
 option(SBCG_STACK_DIAGNOSTIC "Measure the MSP high-water mark with an 8 KiB reserve" OFF)
+set(SBCG_STACK_DIAGNOSTIC_RESERVE 0 CACHE STRING
+    "Diagnostic MSP reserve in bytes (for example 0x1800); 0 keeps the 8 KiB default")
 set(_sbcg_ioc "${CMAKE_CURRENT_SOURCE_DIR}/SBCG.ioc")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sbcg_ioc}")
 file(STRINGS "${_sbcg_ioc}" _sbcg_eth_mode REGEX "^ETH\\.MediaInterface=")
@@ -48,6 +50,10 @@ if(_sbcg_eth_mode)
             target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_STACK_DIAGNOSTIC=1)
             target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/BSP/bsp_stack_diag.c)
             target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:--defsym=__sbcg_stack_diagnostic=1")
+            if(SBCG_STACK_DIAGNOSTIC_RESERVE)
+                target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+                    "LINKER:--defsym=__sbcg_stack_reserve=${SBCG_STACK_DIAGNOSTIC_RESERVE}")
+            endif()
         endif()
         set_property(TARGET ${CMAKE_PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${_sbcg_lwipopts}")
     endif()

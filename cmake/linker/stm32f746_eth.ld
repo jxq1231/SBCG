@@ -8,7 +8,11 @@ INCLUDE STM32F746xx_FLASH.ld
    284-428 B. The extra 2 KiB reduces the newlib heap, not the fixed regions.
    Keep the CubeMX base script and the fixed network regions independent. */
 PROVIDE(__sbcg_stack_diagnostic = 0);
-_Min_Stack_Size = __sbcg_stack_diagnostic ? 0x2000 : 0x1800;
+/* Optional probe reserve lets the paint/observe image measure the exact
+   6 KiB production reserve instead of the default 8 KiB diagnostic window. */
+PROVIDE(__sbcg_stack_reserve = 0);
+_Min_Stack_Size = __sbcg_stack_reserve ? __sbcg_stack_reserve :
+    (__sbcg_stack_diagnostic ? 0x2000 : 0x1800);
 
 /* CMake defines this only for the generated LwIP configuration. Keep legacy
    PHY-only snapshots buildable with their original stack location. */
