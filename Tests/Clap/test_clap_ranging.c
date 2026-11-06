@@ -195,6 +195,29 @@ int main(void)
         ClapRanging_GetSnapshot(&c,&snapshot);
         assert(snapshot.has_value && snapshot.result.calibration_version==3U);
     }
+    /* uint16 标定版本回绕：65535→1 视为向前，1→65535 视为旧合同。 */
+    {
+        ClapRanging e;ClapRanging_Init(&e);
+        Update(&e,BOARD_ROLE_B,true,8200000000ULL,0U);
+        ClapResultMessage m=tx;
+        m.id=1U;m.source_common_ns=8191000000U;
+        m.calibration_version=65535U;m.calibration_offset_mm=0;
+        assert(ClapRanging_OnMessage(&e,&m));
+        ClapRanging_ObserveCalibration(&e,1U,0);
+        assert(e.calibration_contract_version==1U);
+        ClapRanging_GetSnapshot(&e,&snapshot);
+        assert(!snapshot.has_value); /* 跨回绕的新版本仍撤旧系数结果。 */
+        ClapResultMessage old=m;
+        old.id=2U;old.source_common_ns+=1000000U;
+        assert(!ClapRanging_OnMessage(&e,&old)); /* 1 之后 65535 是旧合同。 */
+        ClapResultMessage next=m;
+        next.id=3U;next.source_common_ns+=2000000U;next.calibration_version=2U;
+        assert(ClapRanging_OnMessage(&e,&next));
+        ClapRanging_GetSnapshot(&e,&snapshot);
+        assert(snapshot.has_value && snapshot.result.calibration_version==2U);
+        ClapRanging_ObserveCalibration(&e,65535U,0);
+        assert(e.calibration_contract_version==2U); /* 后半空间不抬高合同。 */
+    }
     /* A重启换代：B已学合同随新RSC2代际作废，版本回0的新CLP1仍被接受并回ACK。 */
     {
         ClapRanging d;ClapRanging_Init(&d);

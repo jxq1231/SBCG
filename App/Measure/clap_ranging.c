@@ -40,6 +40,31 @@ static void ClearCalibrationContract(ClapRanging *self)
 }
 
 /**
+ * @brief   以回绕感知比较两个uint16标定版本。
+ * @param   candidate 待判断的候选版本。
+ * @param   current 当前已学合同版本。
+ * @return  candidate严格新于current返回true；相等或落在后半空间返回false。
+ * @note    仅用于同一RSC2代际内的单调版本；65535→1视为向前，1→65535视为旧。
+ *          半空间（差值32768）无法判定新旧，按“不新”处理。
+ */
+static bool VersionNewer(uint16_t candidate,uint16_t current)
+{
+    const uint16_t delta=(uint16_t)(candidate-current);
+    return delta!=0U && delta<32768U;
+}
+
+/**
+ * @brief   以回绕感知判断候选标定版本是否旧于当前合同。
+ * @param   candidate 待判断的候选版本。
+ * @param   current 当前已学合同版本。
+ * @return  候选落在当前版本后半个回绕空间返回true；相等返回false。
+ */
+static bool VersionOlder(uint16_t candidate,uint16_t current)
+{
+    return (uint16_t)(candidate-current)>=32768U;
+}
+
+/**
  * @brief B采用RST2标定合同；版本/偏移只前进，旧合同不能复活旧结果。
  * @param self 非NULL B前台实例。
  * @param version A当前标定版本。
@@ -49,7 +74,7 @@ static void ClearCalibrationContract(ClapRanging *self)
 void ClapRanging_ObserveCalibration(ClapRanging *self,uint16_t version,int16_t offset_mm)
 {
     if(self==NULL)return;
-    if(self->have_calibration_contract && version<self->calibration_contract_version)return;
+    if(self->have_calibration_contract && VersionOlder(version,self->calibration_contract_version))return;
     const bool changed=!self->have_calibration_contract ||
         version!=self->calibration_contract_version ||
         offset_mm!=self->calibration_contract_offset_mm;
@@ -260,7 +285,7 @@ bool ClapRanging_OnMessage(ClapRanging *self,const ClapResultMessage *message)
        !SourceValid(self,message->source_common_ns))return false;
     if(self->have_calibration_contract)
     {
-        if(message->calibration_version<self->calibration_contract_version)return false;
+        if(VersionOlder(message->calibration_version,self->calibration_contract_version))return false;
         if(message->calibration_version==self->calibration_contract_version &&
            message->calibration_offset_mm!=self->calibration_contract_offset_mm)return false;
     }
@@ -276,7 +301,7 @@ bool ClapRanging_OnMessage(ClapRanging *self,const ClapResultMessage *message)
         Accept(self,message);
     }
     if(!self->have_calibration_contract ||
-       message->calibration_version>self->calibration_contract_version)
+       VersionNewer(message->calibration_version,self->calibration_contract_version))
     {
         self->have_calibration_contract=true;
         self->calibration_contract_version=message->calibration_version;
