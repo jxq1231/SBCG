@@ -146,9 +146,9 @@ int main(void)
 {
  Reset(0U,true);temperature_low=true;
 #ifdef SBCG_USE_SOUND_TIME
- const unsigned capacity=32U;
- /* 事件时间构建使用软上限8行，最坏排空时延控制在一个音频半块内。 */
- const unsigned soft=8U;
+ const unsigned capacity=16U;
+ /* 事件时间构建使用 12 行软上限；DMA 发送不阻塞，队列只限制诊断积压。 */
+ const unsigned soft=12U;
 #else
  const unsigned capacity=16U;
  const unsigned soft=capacity;

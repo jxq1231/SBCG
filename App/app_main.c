@@ -165,11 +165,11 @@ static RangingAppState ranging_app __attribute__((section(".ItcmState"),aligned(
 #define APP_LOG_LINE_CAPACITY 256U
 #ifdef SBCG_USE_SOUND_TIME
 /* 新观察行会增加周期日志突发；复用原队列，逐轮只发一行，避免占满DMA半块窗口。
-   发送改为 DMA 后仍需限制最坏积压：环形数组只保留12行，配合8行软上限。 */
-#define APP_LOG_QUEUE_CAPACITY 12U
-/* 同步发送一行最坏约23 ms，积压超过一个170.7 ms音频半块；
-   软上限只保留最近8行，丢弃最旧行并计入LOG_FULL，限制最坏排空时延。 */
-#define APP_LOG_QUEUE_SOFT_LIMIT 8U
+   发送改为 DMA 后仍限制最坏积压：环形数组 16 行，软上限 12 行；超限丢最旧行。 */
+#define APP_LOG_QUEUE_CAPACITY 16U
+/* DMA 发送不再阻塞前台，但突发日志仍需有界：超过 12 行时丢弃最旧行并计入 LOG_FULL；
+   残余丢弃视为诊断降级，不影响 $MODE/$HEARTBEAT 的周期更新。 */
+#define APP_LOG_QUEUE_SOFT_LIMIT 12U
 #else
 #define APP_LOG_QUEUE_CAPACITY 16U
 #define APP_LOG_QUEUE_SOFT_LIMIT APP_LOG_QUEUE_CAPACITY
