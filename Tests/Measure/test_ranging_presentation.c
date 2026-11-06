@@ -1,7 +1,7 @@
 /**
  * @file test_ranging_presentation.c
  * @brief 验证真实权威缓存的源期限、版本、温补标定、标定取样和B接收保护。
- * @details 使用纯前台输入验证标定只读取A板新鲜跟踪值，且不改变现有展示。
+ * @details 使用纯前台输入验证标定只读取A板新鲜跟踪值，保留两板来源时间，不改变现有展示。
  * @note 纯主机时间/温度输入，不提供硬件验收结论。
  */
 #include "Measure/measurement_result.h"
@@ -212,7 +212,8 @@ static void CheckNoCalibrationSample(void)
     MeasurementResult_GetPresentation(&before);
     CHECK(!MeasurementResult_GetCalibrationSample(&sample));
     CHECK(sample.raw_mm==0 && sample.measurement_id==0U && sample.state_revision==0U &&
-        sample.time_domain==0U && sample.authority_clock_epoch==0U && sample.source_common_ns==0U);
+        sample.time_domain==0U && sample.authority_clock_epoch==0U && sample.source_common_ns==0U &&
+        sample.first_source_common_ns==0U);
     MeasurementResult_GetPresentation(&after);
     CHECK(memcmp(&before,&after,sizeof before)==0);
 }
@@ -236,6 +237,8 @@ static void TestCalibrationSample(void)
     CHECK(sample.measurement_id==before.measurement_id && sample.state_revision==before.state_revision &&
         sample.time_domain==before.time_domain && sample.authority_clock_epoch==before.authority_clock_epoch &&
         sample.source_common_ns==before.source_common_ns);
+    CHECK(sample.first_source_common_ns==5000000000ULL &&
+        sample.first_source_common_ns<sample.source_common_ns);
     MeasurementResult_GetPresentation(&after);
     CHECK(memcmp(&before,&after,sizeof before)==0);
     CHECK(!MeasurementResult_GetCalibrationSample(NULL));
@@ -247,10 +250,19 @@ static void TestCalibrationSample(void)
     CHECK(sample.raw_mm==321 && after.distance_mm==341);
     CHECK(sample.raw_mm==after.distance_mm-after.calibration_offset_mm);
     CHECK(sample.measurement_id==before.measurement_id && sample.source_common_ns==before.source_common_ns &&
-        sample.state_revision>before.state_revision);
+        sample.state_revision>before.state_revision && sample.first_source_common_ns==5000000000ULL);
+
+    SoundPairResult rejected=PairMm(315,4200U);
+    rejected.quality=0U;
+    CHECK(MeasurementResult_PublishTrackedPair(&rejected,&temperature,false,5200U,
+        rejected.b_time_ns+20000000ULL)==RANGING_DECISION_REJECT);
+    CHECK(MeasurementResult_GetCalibrationSample(&sample) && sample.measurement_id==before.measurement_id &&
+        sample.first_source_common_ns==5000000000ULL);
 
     Setup();(void)Push(-315,0U);(void)Push(-315,2000U);(void)Push(-315,4000U);
     CHECK(MeasurementResult_GetCalibrationSample(&sample) && sample.raw_mm==315);
+    CHECK(sample.source_common_ns==5000000000ULL &&
+        sample.first_source_common_ns==5000000000ULL-315000000000ULL/343000ULL);
 }
 
 /**

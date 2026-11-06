@@ -1,7 +1,7 @@
 /**
  * @file Screen1View.cpp
  * @brief 在原测距状态页上增加四个逻辑页面和固定底部导航。
- * @details 原十三项文本继续按版本绑定；击掌显示独立权威结果，波形只绘CPU副本，设置页保留二次确认。
+ * @details 原十三项文本继续按版本绑定；击掌显示独立权威结果，波形只绘CPU副本，设置页显示标定采集与确认。
  * @note 仅前台定容控件；不读取PCM或直接改测距参数。触控失效时取消按键，业务动作由App处理。
  */
 #include <gui/screen1_screen/Screen1View.hpp>
@@ -145,7 +145,8 @@ static const char* ModeShortName(ModeKind mode)
 /** @brief 初始化本视图的数据版本门控；尚未读取业务。@return 无返回值。 */
 Screen1View::Screen1View() : lastGeneration(0), haveGeneration(false),
     activePage(RANGE), pressedControl(-1), confirmation(CALIBRATION_ACTION_NONE),
-    confirmationSample{}, settingEnabled{false,false,false}, requestRejected(false)
+    calibrationPhase(CALIBRATION_PHASE_IDLE), calibrationCompleted(0U),
+    settingEnabled{false,false,false}, requestRejected(false)
 {
     configureNavigation();
 }
@@ -319,16 +320,21 @@ int8_t Screen1View::navigationAt(int16_t x, int16_t y)
     return local >= 4 && local < 116 ? static_cast<int8_t>(index) : -1;
 }
 
-/** @brief 屏幕事件只驱动导航；异常读取造成的框架释放不视为确认。@param event 本次借用的全屏点击。@return 无返回值。 */
+/**
+ * @brief   处理导航和设置页点击，使用当前按钮资格检查按下及松开。
+ * @param   event 框架持有的全屏点击事件，仅本次借用。
+ * @return  无返回值。
+ * @note    刷新标定阶段可撤销旧按钮的按压；触摸读取异常也不会提交动作。
+ */
 void Screen1View::handleClickEvent(const touchgfx::ClickEvent& event)
 {
+    if(activePage==SETUP)refreshCalibration();
     if (event.getType() == touchgfx::ClickEvent::PRESSED)
     {
         pressedControl = navigationAt(event.getX(), event.getY());
         const int8_t setting=settingAt(event.getX(),event.getY());
         if(pressedControl<0 && setting>=0)pressedControl=static_cast<int8_t>(PAGE_COUNT+setting);
         refreshNavigation();
-        if(activePage==SETUP)refreshCalibration();
     }
     else
     {
@@ -470,54 +476,107 @@ int8_t Screen1View::settingAt(int16_t x,int16_t y) const
     return -1;
 }
 
-/** @brief 打开动作确认或提交已确认的快照，不直接调用标定/测量写接口。@param index 当前命中的按钮索引。@return 无返回值。 */
+/**
+ * @brief   提交采集流程动作，或管理启用、停用及清除的本地二次确认。
+ * @param   index 当前阶段通过命中检测的按钮索引0..2。
+ * @return  无返回值；最多提交一条前台标定请求。
+ */
 void Screen1View::selectSetting(uint8_t index)
 {
-    if(confirmation!=CALIBRATION_ACTION_NONE)
-    {
-        if(index==0U)
-            requestRejected=!CalibrationControl_Request(confirmation,
-                confirmation==CALIBRATION_ACTION_CAPTURE?&confirmationSample:nullptr);
-        confirmation=CALIBRATION_ACTION_NONE;
-        return;
-    }
     CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
     if(!control.authority)return;
     requestRejected=false;
-    if(index==0U && control.sample_available)
-    { confirmation=CALIBRATION_ACTION_CAPTURE;confirmationSample=control.sample; }
+    if(control.phase!=CALIBRATION_PHASE_IDLE)
+    {
+        const CalibrationAction action=index==1U?CALIBRATION_ACTION_CANCEL:CALIBRATION_ACTION_CONFIRM;
+        requestRejected=!CalibrationControl_Request(action);
+    }
+    else if(confirmation!=CALIBRATION_ACTION_NONE)
+    {
+        if(index==0U)requestRejected=!CalibrationControl_Request(confirmation);
+        confirmation=CALIBRATION_ACTION_NONE;
+    }
+    else if(index==0U)
+        requestRejected=!CalibrationControl_Request(CALIBRATION_ACTION_START);
     else if(index==1U && control.calibration.calibrated)
         confirmation=control.calibration.enabled?CALIBRATION_ACTION_DISABLE:CALIBRATION_ACTION_ENABLE;
     else if(index==2U && control.calibration.calibrated)
         confirmation=CALIBRATION_ACTION_CLEAR;
 }
 
-/** @brief 依据实际控制副本刷新设置页，确认阶段冻结用户所见样本身份。@return 无返回值，只更新变化文本/按钮颜色。 */
+/**
+ * @brief   根据控制快照显示等待、候选或结果，并更新可用按钮。
+ * @return  无返回值。
+ * @note    候选和计时由控制器持有；阶段或轮次变化撤销旧按钮按压。
+ */
 void Screen1View::refreshCalibration()
 {
     CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
     char lines[4][64] = {};
     const char* labels[3]={"CALIBRATE",control.calibration.enabled?"DISABLE":"ENABLE","CLEAR"};
-    settingEnabled[0]=control.authority && control.sample_available;
-    settingEnabled[1]=settingEnabled[2]=control.authority && control.calibration.calibrated;
-    const bool mode_active = pageModeActive(SETUP);
-    if (confirmation != CALIBRATION_ACTION_NONE && control.authority && !mode_active)
+    const bool mode_active=pageModeActive(SETUP);
+    if(control.phase!=calibrationPhase || control.completed!=calibrationCompleted ||
+       !control.authority || !mode_active)
     {
-        confirmation = CALIBRATION_ACTION_NONE;
-        requestRejected = false;
+        confirmation=CALIBRATION_ACTION_NONE;
+        if(pressedControl>=PAGE_COUNT)pressedControl=-1;
+        requestRejected=false;
     }
-    if(confirmation!=CALIBRATION_ACTION_NONE)
+    calibrationPhase=control.phase;
+    calibrationCompleted=control.completed;
+
+    const bool can_act=control.authority && mode_active && control.result!=CALIBRATION_CONTROL_PENDING;
+    settingEnabled[0]=can_act;
+    settingEnabled[1]=settingEnabled[2]=can_act && control.calibration.calibrated;
+    const char* feedback="RAM ONLY / CALIBRATE TO START";
+    switch(control.result)
+    {
+    case CALIBRATION_CONTROL_PENDING:feedback="REQUEST QUEUED";break;
+    case CALIBRATION_CONTROL_APPLIED:feedback="UPDATED / NEW SOUND REQUIRED";break;
+    case CALIBRATION_CONTROL_A_ONLY:feedback="LAST: CONTROL ON A ONLY";break;
+    case CALIBRATION_CONTROL_NO_SOUND:feedback="NO CAL SOUND / RETRY";break;
+    case CALIBRATION_CONTROL_NO_QUALIFIED_SAMPLE:feedback="CHIRP / NO VALID RANGE / RETRY";break;
+    case CALIBRATION_CONTROL_NO_SAVED:feedback="LAST: NO SAVED COEFFICIENT";break;
+    case CALIBRATION_CONTROL_OUT_OF_RANGE:feedback="LAST: OFFSET OUT OF RANGE";break;
+    case CALIBRATION_CONTROL_MODE_REJECT:feedback="CAL MODE LOST / RETRY";break;
+    case CALIBRATION_CONTROL_CANCELLED:feedback="CANCELLED / RETRY";break;
+    case CALIBRATION_CONTROL_CONFIRM_TIMEOUT:feedback="CONFIRM TIMEOUT / RETRY";break;
+    case CALIBRATION_CONTROL_CLOCK_LOST:feedback="CLOCK LOST / RETRY";break;
+    case CALIBRATION_CONTROL_DOMAIN_LOST:feedback="TIME DOMAIN LOST / RETRY";break;
+    case CALIBRATION_CONTROL_AUDIO_LOST:feedback="AUDIO SESSION LOST / RETRY";break;
+    default:break;
+    }
+
+    const unsigned long seconds=control.remaining_ms/1000U + (control.remaining_ms%1000U!=0U);
+    if(control.authority && mode_active && control.phase==CALIBRATION_PHASE_WAIT_SOUND)
+    {
+        labels[0]="--";labels[1]="CANCEL";labels[2]="--";
+        settingEnabled[0]=settingEnabled[2]=false;settingEnabled[1]=can_act;
+        std::snprintf(lines[0],sizeof lines[0],"PLAY CALIBRATION SOUND");
+        std::snprintf(lines[1],sizeof lines[1],"TIME LEFT %lu S",seconds);
+        std::snprintf(lines[2],sizeof lines[2],"%s",control.heard_chirp?
+            "CHIRP DETECTED / WAITING FOR RANGE":"WAITING FOR SOUND");
+        if(can_act)feedback="CANCEL TO STOP";
+    }
+    else if(control.authority && mode_active && control.phase==CALIBRATION_PHASE_WAIT_CONFIRM)
     {
         labels[0]="CONFIRM";labels[1]="CANCEL";labels[2]="--";
-        settingEnabled[0]=settingEnabled[1]=true;settingEnabled[2]=false;
-        const char* prompt=confirmation==CALIBRATION_ACTION_CAPTURE?"BOARDS AT 500 MM?":
-            confirmation==CALIBRATION_ACTION_ENABLE?"ENABLE SAVED CALIBRATION?":
+        settingEnabled[0]=settingEnabled[1]=can_act;settingEnabled[2]=false;
+        std::snprintf(lines[0],sizeof lines[0],"CONFIRM CALIBRATION");
+        std::snprintf(lines[1],sizeof lines[1],"RAW %ld MM / REF %d MM",
+            static_cast<long>(control.candidate.raw_mm),CALIBRATION_REFERENCE_MM);
+        std::snprintf(lines[2],sizeof lines[2],"OFFSET %+ld MM / %lu S",
+            static_cast<long>(CALIBRATION_REFERENCE_MM-control.candidate.raw_mm),seconds);
+        if(can_act)feedback="CONFIRM OR CANCEL BELOW";
+    }
+    else if(confirmation!=CALIBRATION_ACTION_NONE)
+    {
+        labels[0]="CONFIRM";labels[1]="CANCEL";labels[2]="--";
+        settingEnabled[0]=settingEnabled[1]=can_act;settingEnabled[2]=false;
+        const char* prompt=confirmation==CALIBRATION_ACTION_ENABLE?"ENABLE SAVED CALIBRATION?":
             confirmation==CALIBRATION_ACTION_DISABLE?"DISABLE / KEEP SAVED OFFSET?":"CLEAR SAVED CALIBRATION?";
         std::snprintf(lines[0],sizeof lines[0],"%s",prompt);
-        if(confirmation==CALIBRATION_ACTION_CAPTURE)
-            std::snprintf(lines[1],sizeof lines[1],"RAW %ld MM / NEW %+ld MM",
-                static_cast<long>(confirmationSample.raw_mm),static_cast<long>(500-confirmationSample.raw_mm));
-        else std::snprintf(lines[1],sizeof lines[1],"SAVED OFFSET %+ld MM",static_cast<long>(control.calibration.offset_mm));
+        std::snprintf(lines[1],sizeof lines[1],"SAVED OFFSET %+ld MM",static_cast<long>(control.calibration.offset_mm));
         std::snprintf(lines[2],sizeof lines[2],"CONFIRM OR CANCEL BELOW");
     }
     else if(control.authority)
@@ -526,34 +585,18 @@ void Screen1View::refreshCalibration()
             control.calibration.enabled?"SAVED / ENABLED":"SAVED / DISABLED");
         std::snprintf(lines[1],sizeof lines[1],"SAVED %+ld MM / APPLIED %+ld MM",
             static_cast<long>(control.calibration.offset_mm),static_cast<long>(control.applied_offset_mm));
-        if(control.sample_available)
-            std::snprintf(lines[2],sizeof lines[2],"RAW %ld MM / V%u",static_cast<long>(control.sample.raw_mm),control.applied_version);
-        else std::snprintf(lines[2],sizeof lines[2],"NO FRESH TRACKING / V%u",control.applied_version);
+        std::snprintf(lines[2],sizeof lines[2],"REF %d MM / V%u",CALIBRATION_REFERENCE_MM,control.applied_version);
     }
     else
     {
         std::snprintf(lines[0],sizeof lines[0],"READ ONLY / CONTROL ON A");
         std::snprintf(lines[1],sizeof lines[1],"APPLIED %+ld MM / V%u",static_cast<long>(control.applied_offset_mm),control.applied_version);
         std::snprintf(lines[2],sizeof lines[2],"USE A BOARD FOR CALIBRATION");
+        feedback="REFERENCE 500 MM / RAM ONLY";
     }
-    const char* feedback="REFERENCE 500 MM / RAM ONLY";
     if(requestRejected)feedback="REQUEST BUSY / TRY AGAIN";
-    else switch(control.result)
-    {
-    case CALIBRATION_CONTROL_PENDING:feedback="REQUEST QUEUED";break;
-    case CALIBRATION_CONTROL_APPLIED:feedback=control.sample_available?"UPDATED / READY":"UPDATED / NEW SOUND REQUIRED";break;
-    case CALIBRATION_CONTROL_A_ONLY:feedback="LAST: CONTROL ON A ONLY";break;
-    case CALIBRATION_CONTROL_NO_SAMPLE:feedback="LAST: NO FRESH TRACKING SAMPLE";break;
-    case CALIBRATION_CONTROL_SAMPLE_CHANGED:feedback="LAST: SAMPLE CHANGED / TRY AGAIN";break;
-    case CALIBRATION_CONTROL_NO_SAVED:feedback="LAST: NO SAVED COEFFICIENT";break;
-    case CALIBRATION_CONTROL_OUT_OF_RANGE:feedback="LAST: OFFSET OUT OF RANGE";break;
-    default:break;
-    }
-    if (!mode_active && control.authority)
-    {
-        settingEnabled[0] = settingEnabled[1] = settingEnabled[2] = false;
-        feedback = "MODE WAIT: REQUEST SETUP";
-    }
+    if(!mode_active && control.authority && control.result==CALIBRATION_CONTROL_IDLE)
+        feedback="MODE WAIT: REQUEST SETUP";
     std::snprintf(lines[3],sizeof lines[3],"%s",feedback);
     for(uint8_t i=0;i<4U;++i)
     {

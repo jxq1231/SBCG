@@ -141,7 +141,7 @@ typedef struct
 /**
  * @brief 用于单点标定的未标定温补距离及其权威来源身份。
  * @details raw_mm由当前滤波时间差和有效温度声速按测距规则舍入，不含已有标定偏移。
- *          其余字段标识本次取样的测量、状态版本、同步域、权威代际和共同源时刻。
+ *          其余字段标识本次取样的测量、状态版本、同步域、权威代际和双板共同源时刻。
  */
 typedef struct
 {
@@ -150,7 +150,8 @@ typedef struct
     uint32_t state_revision;
     uint32_t time_domain;
     uint32_t authority_clock_epoch;
-    uint64_t source_common_ns;
+    uint64_t source_common_ns;       /**< 已接受配对的较晚到达时刻，单位ns，沿用新鲜度口径。 */
+    uint64_t first_source_common_ns; /**< 同一配对的较早到达时刻，单位ns，供标定启动下界校验。 */
 } MeasurementCalibrationSample;
 
 /**

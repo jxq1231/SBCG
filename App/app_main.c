@@ -4,6 +4,7 @@
  * @details     向各服务提供有界串口日志出口，按既定顺序初始化与轮询；
  *              DHT11起始低电平期间暂存日志并延后音频等观测，继续处理网络。
  *              双板模式握手管理声音事件采样边界与测距、拍掌和波形准入。
+ *              A板标定在前台等待新测量、锁存候选并处理独立确认期限。
  * @note        由Core/Src/main.c在CubeMX外设初始化后调用；不创建RTOS任务，
  *              不承担IRQ处理；维护前台日志队列及分类诊断，页面/校时/PPS交由各独立服务。
  */
@@ -23,7 +24,7 @@ void App_GetClapSnapshot(ClapRangingSnapshot *out){ClapRanging_GetSnapshot(&clap
 #endif
 #ifdef SBCG_USE_CALIBRATION_CONTROL
 #include "Calibration/calibration_control.h"
-/** @brief 已记录的前台标定请求完成序号，只按用户动作输出一次诊断。 */
+/** @brief 上次已记录的标定事件序号，倒计时刷新不产生日志。 */
 static uint32_t calibration_reported;
 #endif
 #ifdef SBCG_ITCM_PROBE
@@ -98,6 +99,11 @@ static uint32_t calibration_reported;
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifdef SBCG_USE_MODE_OBSERVATION
+/** @brief 已完成PCM边界清理的模式代次，标定确认也须匹配该代次。 */
+static ModeSnapshot mode_sound_generation;
+#endif
 
 /**
  * ==================== 模块：构建标识与前台日志状态 ====================
@@ -451,9 +457,9 @@ static bool ModeRangingAllowed(void)
 }
 
 /**
- * @brief 当前是否允许标定确认动作。
- * @return 未登记代次，或双板ACTIVE且生效模式为CALIBRATION时为true。
- * @note 只限制动作入口；已保存/已启用补偿仍按既有路径应用到测量显示。
+ * @brief 当前是否允许标定控制推进。
+ * @return 未登记代次，或双板生效CAL且已切换到相同PCM代次时为true。
+ * @note 已保存/已启用补偿按既有路径应用；代次突变时立即拒绝旧确认。
  */
 #ifdef SBCG_USE_CALIBRATION_CONTROL
 static bool ModeCalibrationAllowed(void)
@@ -465,7 +471,11 @@ static bool ModeCalibrationAllowed(void)
     {
         return true;
     }
-    return mode.state == MODE_ACTIVE && mode.effective == MODE_CALIBRATION;
+    return mode.state == MODE_ACTIVE && mode.effective == MODE_CALIBRATION &&
+        mode_sound_generation.effective == MODE_CALIBRATION &&
+        mode.a_boot == mode_sound_generation.a_boot &&
+        mode.b_boot == mode_sound_generation.b_boot &&
+        mode.mode_seq == mode_sound_generation.mode_seq;
 #else
     return true;
 #endif
@@ -612,11 +622,79 @@ static bool ModeWavePlannerAllowed(void)
 }
 #endif
 
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+/**
+ * @brief 推进标定采集与确认，并记录有变化的状态事件。
+ * @param context 已更新的测量上下文，非NULL，只读借用。
+ * @param audio 本轮音频会话快照，非NULL，只读借用。
+ * @param common_ns 本轮共同时间，单位ns，读取失败为0。
+ * @return 标定版本发生变化时为true，由调用方同步既有测量合同。
+ * @note 仅在消费START时读DMA游标，游标有歧义时按现有模式边界方法保守跳过。
+ */
+static bool ServiceCalibration(const MeasurementContext *context,const BSP_AudioSnapshot *audio,
+                               uint64_t common_ns)
+{
+    CalibrationControlSnapshot control;
+    CalibrationControl_GetSnapshot(&control);
+    CalibrationControlInput input={
+        .context=*context,.common_ns=common_ns,.mode_allowed=ModeCalibrationAllowed(),
+        .audio_floor_frame=UINT64_MAX
+    };
+    MeasurementCalibrationSample sample;
+    if(context->authority && input.mode_allowed)
+    {
+        if(control.phase==CALIBRATION_PHASE_WAIT_SOUND && MeasurementResult_GetCalibrationSample(&sample))
+            input.sample=&sample;
+        if(control.phase==CALIBRATION_PHASE_WAIT_SOUND)
+            SoundDetectorService_GetLastChirp(&input.chirp_session,&input.chirp_onset_frame);
+        if(control.action==CALIBRATION_ACTION_START && control.result==CALIBRATION_CONTROL_PENDING)
+        {
+            BSP_AudioCursor cursor;
+            const uint64_t skip=2U*BSP_AUDIO_HALF_FRAMES;
+            if(BSP_Audio_ReadCursor(&cursor) && cursor.session==audio->session)
+                input.audio_floor_frame=cursor.complete_frames;
+            else if(context->stream_valid && audio->observed_frames<=UINT64_MAX-skip)
+                input.audio_floor_frame=audio->observed_frames+skip;
+        }
+    }
+    else if(!context->authority)
+    {
+        MeasurementPresentationSnapshot presentation;
+        MeasurementResult_GetPresentation(&presentation);
+        input.applied_offset_mm=presentation.calibration_offset_mm;
+        input.applied_version=presentation.calibration_version;
+    }
+    input.now_ms=BSP_Console_GetTickMs();
+    const bool changed=CalibrationControl_Process(&input);
+    CalibrationControl_GetSnapshot(&control);
+    if(control.completed!=calibration_reported)
+    {
+        calibration_reported=control.completed;
+        const char *phase="IDLE";
+        if(control.phase==CALIBRATION_PHASE_WAIT_SOUND)phase="WAIT_SOUND";
+        else if(control.phase==CALIBRATION_PHASE_WAIT_CONFIRM)phase="WAIT_CONFIRM";
+        char line[APP_LOG_LINE_CAPACITY];
+        const int length=snprintf(line,sizeof line,
+            "$CALIBRATION,ACTION=%u,RESULT=%u,SAVED=%u,ENABLED=%u,OFFSET_MM=%" PRId32
+            ",APPLIED_MM=%" PRId32 ",VERSION=%u,SAMPLE_ID=%" PRIu32
+            ",PHASE=%s,REASON=%s,HEARD=%u,LEFT_MS=%" PRIu32 ",TICK_MS=%" PRIu32 ",RAW_MM=%" PRId32 "\r\n",
+            (unsigned)control.action,(unsigned)control.result,control.calibration.calibrated?1U:0U,
+            control.calibration.enabled?1U:0U,control.calibration.offset_mm,control.applied_offset_mm,
+            (unsigned)control.applied_version,control.candidate.measurement_id,phase,
+            CalibrationControl_ResultName(control.result),control.heard_chirp?1U:0U,control.remaining_ms,
+            input.now_ms,
+            control.candidate.measurement_id!=0U?control.candidate.raw_mm:0);
+        if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
+    }
+    return changed;
+}
+#endif
+
 /**
  * @brief 在收发和UI之前持续驱动状态会话与真实源期限。
  * @param now_ms 当前HAL毫秒；音频快照之后另取时校验回调年龄。
  * @return 无返回值；不发送报文、不读取PCM，不改变PTP/PPS配置。
- * @note 启用标定UI时，先核对真实测量新鲜度，再执行用户确认动作；系数变化按既有合同撤值等待新声音。
+ * @note 标定采集使用受检新样本，确认使用锁存候选；系数变化按既有合同撤值等待新声音。
  */
 static void RefreshRanging(uint32_t now_ms)
 {
@@ -674,34 +752,11 @@ static void RefreshRanging(uint32_t now_ms)
     if(context.authority)MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
     MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
 #ifdef SBCG_USE_CALIBRATION_CONTROL
-    MeasurementCalibrationSample calibration_sample;
-    const bool sample_available=MeasurementResult_GetCalibrationSample(&calibration_sample);
-    MeasurementPresentationSnapshot calibration_presentation;
-    MeasurementResult_GetPresentation(&calibration_presentation);
-    if(ModeCalibrationAllowed() &&
-        CalibrationControl_Process(context.authority,sample_available?&calibration_sample:NULL,
-        calibration_presentation.calibration_offset_mm,calibration_presentation.calibration_version))
+    if(ServiceCalibration(&context,&audio,common_ns))
     {
         Calibration_Get(&calibration);
         MeasurementResult_SetCalibration(calibration.enabled?calibration.offset_mm:0,calibration.version);
         MeasurementResult_Update(&context,&temperature,now_ms,common_ns);
-    }
-    else if(!ModeCalibrationAllowed())
-    {
-        CalibrationControl_CancelPendingForMode();
-    }
-    CalibrationControlSnapshot control;CalibrationControl_GetSnapshot(&control);
-    if(control.completed!=calibration_reported)
-    {
-        calibration_reported=control.completed;
-        char line[240];
-        const int length=snprintf(line,sizeof line,
-            "$CALIBRATION,ACTION=%u,RESULT=%u,SAVED=%u,ENABLED=%u,OFFSET_MM=%" PRId32
-            ",APPLIED_MM=%" PRId32 ",VERSION=%u,SAMPLE_ID=%" PRIu32 "\r\n",
-            (unsigned)control.action,(unsigned)control.result,control.calibration.calibrated?1U:0U,
-            control.calibration.enabled?1U:0U,control.calibration.offset_mm,control.applied_offset_mm,
-            (unsigned)control.applied_version,sample_available?calibration_sample.measurement_id:0U);
-        if(length>0 && (size_t)length<sizeof line)SendLine(line,length);
     }
 #endif
 #ifdef SBCG_USE_ADVANCED_UI
@@ -1009,7 +1064,6 @@ static void ServiceModeObservation(uint32_t now_ms)
 
 /** @brief 上一次模式闸门是否允许测距业务；仅在本板已登记代次时有效。 */
 static bool mode_business_ranging_active;
-static ModeSnapshot mode_sound_generation;
 static AudioCaptureSoundBoundary mode_sound_boundary;
 #ifdef SBCG_USE_ADVANCED_UI
 /** @brief 上一次模式闸门是否允许CLAP业务；离开CLAP时撤销待发/展示。 */
@@ -1727,6 +1781,11 @@ static void ServiceModeSoundBoundary(void)
         mode.mode_seq == mode_sound_generation.mode_seq)
     { return; }
 
+    /* 已进入的标定只能在原模式代次内继续。 */
+#ifdef SBCG_USE_CALIBRATION_CONTROL
+    if(mode_sound_generation.effective==MODE_CALIBRATION)
+        CalibrationControl_CancelPendingForMode();
+#endif
     mode_sound_generation = mode;
 #if defined(SBCG_MODE_TEST_CONTROL) && defined(SBCG_USE_ADVANCED_UI)
     clap_pcm_trace_armed = false;

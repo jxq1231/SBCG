@@ -104,10 +104,9 @@ static bool touch_valid=true;
 static CalibrationControlSnapshot calibration{};
 static unsigned calibration_requests=0;
 static CalibrationAction requested_action=CALIBRATION_ACTION_NONE;
-static MeasurementCalibrationSample requested_sample{};
 extern "C" void CalibrationControl_GetSnapshot(CalibrationControlSnapshot*out){*out=calibration;}
-extern "C" bool CalibrationControl_Request(CalibrationAction a,const MeasurementCalibrationSample*s){
- ++calibration_requests;requested_action=a;requested_sample=s?*s:MeasurementCalibrationSample{};return true;
+extern "C" bool CalibrationControl_Request(CalibrationAction a){
+ ++calibration_requests;requested_action=a;return true;
 }
 extern "C" void BSP_Touch_GetSnapshot(BSP_TouchSnapshot*out){out->sample_valid=touch_valid;}
 extern "C" bool UI_TouchGFX_GetText(UI_StatusText*out,uint32_t*g){if(!available)return false;*out=page;*g=generation;return true;}
@@ -262,51 +261,95 @@ int main(){
   view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,60+120*i,250));
   view.dump(i);
  }
- // A capture requires confirmation, preserves the displayed sample key, and cancels on navigation.
- calibration.authority=true;calibration.sample_available=true;
- calibration.sample={490,20,30,7,2,1000000000U};
+ // A can start an empty acquisition, and a held touch never changes its action across phases.
+ calibration.authority=true;
  mode_state.role=BOARD_ROLE_A;mode_state.requested=MODE_CALIBRATION;mode_state.effective=MODE_CALIBRATION;
  view.handleTickEvent();
  tap(view,220,202);tap(view,370,202);assert(calibration_requests==0); // no saved coefficients
- tap(view,70,202);assert(calibration_requests==0);
- view.dump(4);
- const uint32_t confirmed_id=calibration.sample.measurement_id;
- ++calibration.sample.measurement_id;view.handleTickEvent();
- tap(view,70,202);assert(calibration_requests==1);
- assert(requested_action==CALIBRATION_ACTION_CAPTURE && requested_sample.measurement_id==confirmed_id);
- calibration.calibration.calibrated=true;calibration.calibration.enabled=true;
- calibration.calibration.offset_mm=10;calibration.calibration.version=1;
- calibration.applied_offset_mm=10;calibration.applied_version=1;
- view.handleTickEvent();
- view.dump(5);
- tap(view,220,202);tap(view,220,202);assert(calibration_requests==1); // CANCEL
- tap(view,220,202);tap(view,70,202);assert(calibration_requests==2 && requested_action==CALIBRATION_ACTION_DISABLE);
- calibration.calibration.enabled=false;calibration.applied_offset_mm=0;++calibration.applied_version;
- view.handleTickEvent();tap(view,220,202);tap(view,70,202);
- assert(calibration_requests==3 && requested_action==CALIBRATION_ACTION_ENABLE);
- tap(view,370,202);tap(view,60,250);tap(view,420,250); // leaving cancels confirmation
- assert(calibration_requests==3);
- tap(view,370,202);tap(view,70,202);
- assert(calibration_requests==4 && requested_action==CALIBRATION_ACTION_CLEAR);
- calibration.sample_available=false;view.handleTickEvent();tap(view,70,202);tap(view,70,202);
- assert(calibration_requests==4); // no fresh TRACKING source
- calibration.sample_available=true;view.handleTickEvent();
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,202));
  view.handleDragEvent(touchgfx::DragEvent(touchgfx::DragEvent::DRAGGED,70,202,70,170));
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,202));
- assert(calibration_requests==4);
- tap(view,70,202); // open CAPTURE confirmation
+ assert(calibration_requests==0);
+ tap(view,70,202);
+ assert(calibration_requests==1 && requested_action==CALIBRATION_ACTION_START);
+
+ calibration.phase=CALIBRATION_PHASE_WAIT_SOUND;
+ calibration.result=CALIBRATION_CONTROL_LISTENING;calibration.remaining_ms=14950;++calibration.completed;
+ view.handleTickEvent();
+ assert(view.lineIs(0,"PLAY CALIBRATION SOUND"));assert(view.lineIs(1,"TIME LEFT 15 S"));
+ view.dump(4);
+ calibration.heard_chirp=true;view.handleTickEvent();
+ assert(view.lineIs(2,"CHIRP DETECTED / WAITING FOR RANGE"));
+ view.dump(9);
+ tap(view,70,202);tap(view,370,202);assert(calibration_requests==1);
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,220,202));
+ calibration.phase=CALIBRATION_PHASE_WAIT_CONFIRM;
+ calibration.result=CALIBRATION_CONTROL_CANDIDATE;calibration.remaining_ms=20000;++calibration.completed;
+ calibration.candidate={501,20,30,7,2,1000000000U,999000000U};
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,220,202));
+ assert(calibration_requests==1); // CANCEL was pressed in the previous phase.
+ assert(view.lineIs(1,"RAW 501 MM / REF 500 MM"));
+ assert(view.lineIs(2,"OFFSET -1 MM / 20 S"));
+ view.dump(7);
+ calibration.remaining_ms=10000;view.handleTickEvent();
+ assert(view.lineIs(1,"RAW 501 MM / REF 500 MM"));
+ assert(view.lineIs(2,"OFFSET -1 MM / 10 S"));
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,202));
- for(int i=0;i<20;++i)view.handleTickEvent();
- assert(calibration_requests==4);
+ ++calibration.completed; // A replacement round can reach the same phase between UI ticks.
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,202));
+ assert(calibration_requests==1);
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,202));
  touch_valid=false;
  view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,202));
- assert(calibration_requests==4);touch_valid=true;tap(view,220,202);
+ assert(calibration_requests==1);touch_valid=true;
+ tap(view,70,202);
+ assert(calibration_requests==2 && requested_action==CALIBRATION_ACTION_CONFIRM);
+
+ calibration.phase=CALIBRATION_PHASE_IDLE;
+ calibration.result=CALIBRATION_CONTROL_APPLIED;++calibration.completed;
+ calibration.calibration.calibrated=true;calibration.calibration.enabled=true;
+ calibration.calibration.offset_mm=-1;calibration.calibration.version=1;
+ calibration.applied_offset_mm=-1;calibration.applied_version=1;
+ view.handleTickEvent();
+ view.dump(5);
+ tap(view,220,202);tap(view,220,202);assert(calibration_requests==2); // local CANCEL
+ tap(view,220,202);tap(view,70,202);
+ assert(calibration_requests==3 && requested_action==CALIBRATION_ACTION_DISABLE);
+ calibration.calibration.enabled=false;calibration.applied_offset_mm=0;++calibration.applied_version;
+ view.handleTickEvent();tap(view,220,202);tap(view,70,202);
+ assert(calibration_requests==4 && requested_action==CALIBRATION_ACTION_ENABLE);
+ tap(view,370,202);tap(view,60,250);tap(view,420,250); // leaving cancels local confirmation
+ assert(calibration_requests==4);
+ tap(view,370,202);tap(view,70,202);
+ assert(calibration_requests==5 && requested_action==CALIBRATION_ACTION_CLEAR);
+
+ calibration.phase=CALIBRATION_PHASE_WAIT_SOUND;
+ calibration.result=CALIBRATION_CONTROL_LISTENING;++calibration.completed;
+ view.handleTickEvent();tap(view,220,202);
+ assert(calibration_requests==6 && requested_action==CALIBRATION_ACTION_CANCEL);
+ calibration.phase=CALIBRATION_PHASE_WAIT_CONFIRM;
+ calibration.result=CALIBRATION_CONTROL_CANDIDATE;++calibration.completed;
+ view.handleTickEvent();tap(view,220,202);
+ assert(calibration_requests==7 && requested_action==CALIBRATION_ACTION_CANCEL);
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::PRESSED,70,202));
+ calibration.phase=CALIBRATION_PHASE_IDLE;
+ calibration.result=CALIBRATION_CONTROL_CONFIRM_TIMEOUT;++calibration.completed;
+ view.handleClickEvent(touchgfx::ClickEvent(touchgfx::ClickEvent::RELEASED,70,202));
+ assert(calibration_requests==7); // A held CONFIRM cannot turn into START.
+ assert(view.lineIs(3,"CONFIRM TIMEOUT / RETRY"));
+ view.dump(8);
+ calibration.result=CALIBRATION_CONTROL_NO_SOUND;++calibration.completed;view.handleTickEvent();
+ assert(view.lineIs(3,"NO CAL SOUND / RETRY"));
+ view.dump(10);
+ calibration.result=CALIBRATION_CONTROL_NO_QUALIFIED_SAMPLE;++calibration.completed;view.handleTickEvent();
+ assert(view.lineIs(3,"CHIRP / NO VALID RANGE / RETRY"));
+ view.dump(11);
+
  calibration.authority=false;view.handleTickEvent();
  ++generation;std::strcpy(page.role,"BOARD B");view.handleTickEvent();
  view.dump(6);
  for(int x:{70,220,370}){tap(view,x,202);tap(view,70,202);}
- assert(calibration_requests==4); // B cannot submit even while holding saved-state fixtures
+ assert(calibration_requests==7); // B cannot submit even while holding saved-state fixtures.
  const unsigned paints=view.settingInvalidations();
  for(int i=0;i<20;++i)view.handleTickEvent();
  assert(view.settingInvalidations()==paints); // unchanged settings must not force VSYNC redraws

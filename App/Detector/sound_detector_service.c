@@ -4,6 +4,7 @@
  * @details     工作副本隔离未验证PCM，固定两级4条队列；分类等待完整2400帧，失败/断流清历史。
  *              TOA仅使用当前借用块内完整256帧窗口；窗口不完整时保留能量候选并输出NA。
  *              名义微秒发布前检查数值及uint64范围，十进制缓冲可容纳20位及结尾字符。
+ *              归还验证后保留最近一次扫频分类帧，供标定区分检出与测距不合格。
  *              模式诊断构建在候选日志内附带实际分类结果。
  * @note        仅串行前台；双2400点CPU自有尾部缓存经End提交，不保留DMA指针，无新IRQ/DMA/PTP时间查询。
  */
@@ -30,6 +31,9 @@ typedef struct { SoundCandidate event; uint32_t completed_ms,sequence;
                  SoundToaPosition toa; bool class_ready; } QueuedCandidate;
 static SoundDetector current,working;
 static SoundDetectorServiceSnapshot diagnostics;
+static uint32_t last_chirp_session;
+static uint64_t last_chirp_onset_frame,staged_chirp_onset_frame;
+static bool staged_chirp;
 static SoundCandidate staged[SOUND_DETECTOR_QUEUE_CAPACITY];
 static QueuedCandidate queue[SOUND_DETECTOR_QUEUE_CAPACITY];
 static QueuedCandidate queue_working[SOUND_DETECTOR_QUEUE_CAPACITY];
@@ -306,6 +310,7 @@ static void ResetHistory(bool reset_time)
 void SoundDetectorService_DiscardPending(void)
 {
     ResetHistory(false);
+    last_chirp_session=0U;last_chirp_onset_frame=0U;
     memset(toa_cache,0,sizeof toa_cache);
     toa_cache_next=0U;
 }
@@ -322,6 +327,7 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
     uint8_t channel,void (*log)(const char *,int))
 {
     diagnostics=(SoundDetectorServiceSnapshot){0};diagnostics.channel=channel;
+    last_chirp_session=0U;last_chirp_onset_frame=0U;
     memset(toa_cache,0,sizeof toa_cache);toa_cache_next=0U;
     head=count=staged_count=0U;staged_total=0U;active=stage_valid=boundary=false;
     class_history_valid=false;class_committed_slot=0U;
@@ -340,6 +346,19 @@ bool SoundDetectorService_Init(uint32_t now_ms,const SoundDetectorConfig *config
     return true;
 }
 /**
+ * @brief 记录当前借用块内新确认分类的最新扫频，等归还验证后提交。
+ * @param event 已完成分类的候选，只读，起始位置以双声道帧计。
+ * @return 无返回值；非扫频候选不更新观测。
+ */
+static void StageChirp(const SoundCandidate *event)
+{
+    if(event->event_class==EVENT_CLASS_CHIRP &&
+       (!staged_chirp || event->onset_frame>staged_chirp_onset_frame))
+    {
+        staged_chirp=true;staged_chirp_onset_frame=event->onset_frame;
+    }
+}
+/**
  * @brief 在已有Begin认领内暂算整个交错PCM半块；64点批量入口优先，其他配置自动回退。
  * @param now_ms 当前HAL毫秒，校验完成块年龄。
  * @param block 非NULL借用描述符，仅本次调用访问其中PCM。
@@ -352,6 +371,7 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
     if(!diagnostics.configured)return false;
     if(active){Add(&diagnostics.errors,1U);ResetHistory(true);return false;}
     active=true;stage_valid=false;staged_count=0U;staged_total=0U;boundary=false;
+    staged_chirp=false;
     if(block==NULL || block->samples==NULL || block->frame_count!=BSP_AUDIO_HALF_FRAMES ||
         !block->index_valid || block->session==0U ||
         block->first_frame>UINT64_MAX-block->frame_count ||
@@ -366,7 +386,10 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
     if(!boundary){
         for(uint8_t i=0U;i<count;++i){
             QueuedCandidate *item=&queue_working[(head+i)%SOUND_DETECTOR_QUEUE_CAPACITY];
-            if(!item->class_ready)item->class_ready=ClassifyCandidate(block,&item->event);
+            if(!item->class_ready && ClassifyCandidate(block,&item->event)){
+                item->class_ready=true;
+                StageChirp(&item->event);
+            }
             if(!item->toa_ready){
                 ToaEstimate estimate;
                 if(EstimateToaCore(block,&item->event,diagnostics.channel,&estimate)){
@@ -399,6 +422,7 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
                 staged[slot]=event;
                 EstimateToa(block,&event,slot,diagnostics.channel);
                 staged_class_ready[slot]=ClassifyCandidate(block,&staged[slot]);
+                if(staged_class_ready[slot])StageChirp(&staged[slot]);
                 ++staged_count;
             }
         }
@@ -417,6 +441,7 @@ bool SoundDetectorService_Stage(uint32_t now_ms,const BSP_AudioBlock *block)
  * @param accepted BSP_Audio_EndBlock真实返回值，不得由暂算成功替代。
  * @return true表示已验证提交；false清历史且拒绝本块。
  * @note 不读取PCM；未验证候选不增加有效候选数，验证后两级队列损失均计入dropped。
+ *       扫频分类观测不受TOA发布资格和串口限频影响。
  */
 bool SoundDetectorService_Complete(bool accepted)
 {
@@ -431,6 +456,7 @@ bool SoundDetectorService_Complete(bool accepted)
     else memcpy(queue,queue_working,sizeof queue);
     class_committed_slot=(uint8_t)(1U-class_committed_slot);
     class_first_frame=staged_class_first_frame;class_session=staged_class_session;class_history_valid=true;
+    if(staged_chirp){last_chirp_session=class_session;last_chirp_onset_frame=staged_chirp_onset_frame;}
     current=working;Add(&diagnostics.valid_blocks,1U);
     uint32_t sequence=diagnostics.candidates;
     Add(&diagnostics.candidates,staged_total);Add(&diagnostics.dropped,staged_total-staged_count);
@@ -455,6 +481,17 @@ void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 {
     if(out==NULL)return;
     *out=diagnostics;out->pending=count;out->armed=current.armed;out->staging=active;
+}
+/**
+ * @brief 读取归还已验证的最近一次扫频分类位置，不要求TOA成功。
+ * @param session 可空会话输出；未观测到时为0。
+ * @param onset_frame 可空起始帧输出，单位双声道帧。
+ * @return 无返回值；仅复制前台已提交的标量，不访问PCM。
+ */
+void SoundDetectorService_GetLastChirp(uint32_t *session,uint64_t *onset_frame)
+{
+    if(session!=NULL)*session=last_chirp_session;
+    if(onset_frame!=NULL)*onset_frame=last_chirp_onset_frame;
 }
 /**
  * @brief 归还后检查流健康、候选年龄，并按固定上限发送。

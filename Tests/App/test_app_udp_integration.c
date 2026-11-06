@@ -50,6 +50,8 @@ static bool clock_ok=true,sync_faulted,send_ok=true,event_pending,process_blocks
 static bool capture_enabled=true;
 static EventClass host_event_class=EVENT_CLASS_CHIRP;
 static SoundEventTimeEvent next_event;
+static uint32_t last_chirp_session;
+static uint64_t last_chirp_onset_frame;
 static uint32_t event_takes,event_delivered,packet_attempts;
 static bool anchor_pending;
 static uint32_t anchor_sequence,anchor_delivered,wave_anchors;
@@ -138,6 +140,17 @@ bool BSP_Audio_ReadCursor(BSP_AudioCursor *out)
 /** @brief 返回检测计数元数据。 @param out 可空输出。 @return 无返回值。 */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out)
 {if(out)*out=(SoundDetectorServiceSnapshot){.configured=true,.candidates=event_delivered};}
+/**
+ * @brief 提供独立于TOA交付的最近一次CHIRP分类位置。
+ * @param session 可空输出；尚未分类时为0。
+ * @param onset_frame 可空输出；为分类的本地起始帧。
+ * @return 无返回值。
+ */
+void SoundDetectorService_GetLastChirp(uint32_t *session,uint64_t *onset_frame)
+{
+ if(session)*session=last_chirp_session;
+ if(onset_frame)*onset_frame=last_chirp_onset_frame;
+}
 bool SoundDetectorService_GetToaCandidates(uint32_t sequence,
     SoundDetectorServiceToaCandidates *out)
 {(void)sequence;if(out)out->count=0U;return false;}
@@ -211,7 +224,10 @@ static void Snapshot(void)
  ",\"cal_saved\":%u,\"cal_enabled\":%u,\"cal_offset_mm\":%" PRId32 ",\"cal_version\":%u"
  ",\"applied_offset_mm\":%d,\"applied_version\":%u,\"control_result\":%u"
  ",\"control_completed\":%" PRIu32 ",\"control_applied_offset_mm\":%" PRId32
- ",\"control_applied_version\":%u,\"advanced\":%u,\"clap_has\":%u,\"clap_fresh\":%u"
+ ",\"control_applied_version\":%u,\"cal_phase\":%u,\"cal_remaining_ms\":%" PRIu32
+ ",\"cal_candidate_id\":%" PRIu32 ",\"cal_candidate_raw_mm\":%" PRId32
+ ",\"cal_candidate_source_ns\":%" PRIu64 ",\"cal_heard_chirp\":%u"
+ ",\"advanced\":%u,\"clap_has\":%u,\"clap_fresh\":%u"
  ",\"clap_mm\":%" PRId32 ",\"clap_dir\":%u,\"clap_id\":%" PRIu32
  ",\"clap_source_ns\":%" PRIu64 ",\"clap_quality\":%u,\"wave_anchors\":%" PRIu32 "}\n",
  identity.role==BOARD_ROLE_A?'A':'B',tick_ms,common_ns,d.valid?1U:0U,d.id,(unsigned)p.state,
@@ -222,28 +238,30 @@ static void Snapshot(void)
  audio_index_faults,
  calibration.calibrated?1U:0U,calibration.enabled?1U:0U,calibration.offset_mm,(unsigned)calibration.version,
  (int)p.calibration_offset_mm,(unsigned)p.calibration_version,(unsigned)control.result,control.completed,
- control.applied_offset_mm,(unsigned)control.applied_version,advanced,
+ control.applied_offset_mm,(unsigned)control.applied_version,(unsigned)control.phase,
+ control.remaining_ms,control.candidate.measurement_id,control.candidate.raw_mm,
+ control.candidate.source_common_ns,control.heard_chirp?1U:0U,advanced,
  clap.has_value?1U:0U,clap.fresh?1U:0U,clap.result.distance_mm,(unsigned)clap.result.direction,
  clap.result.id,clap.result.source_common_ns,(unsigned)clap.result.quality,wave_anchors);
 }
 
 /**
- * @brief 将主机确认动作提交给实际标定控制器，不直接修改标定模块。
- * @param command CAL之后的CAPTURE、ENABLE、DISABLE或CLEAR文本，只在调用期间读取。
+ * @brief 将主机动作提交给实际标定控制器，不直接修改标定模块。
+ * @param command CAL之后的START、CONFIRM、CANCEL、ENABLE、DISABLE或CLEAR文本，只在调用期间读取。
  * @return 无返回值；非法动作或尚有待处理动作时使测试失败。
- * @note CAPTURE复制当前测量取样身份；无资格时提交零身份，由下一轮实际App处理拒绝。
+ * @note 请求由下一轮实际App前台处理，主机不替代测量资格或样本身份校验。
  */
 static void RequestCalibration(const char *command)
 {
  CalibrationAction action=CALIBRATION_ACTION_NONE;
- if(strncmp(command,"CAPTURE",7U)==0)action=CALIBRATION_ACTION_CAPTURE;
+ if(strncmp(command,"START",5U)==0)action=CALIBRATION_ACTION_START;
+ else if(strncmp(command,"CONFIRM",7U)==0)action=CALIBRATION_ACTION_CONFIRM;
+ else if(strncmp(command,"CANCEL",6U)==0)action=CALIBRATION_ACTION_CANCEL;
  else if(strncmp(command,"ENABLE",6U)==0)action=CALIBRATION_ACTION_ENABLE;
  else if(strncmp(command,"DISABLE",7U)==0)action=CALIBRATION_ACTION_DISABLE;
  else if(strncmp(command,"CLEAR",5U)==0)action=CALIBRATION_ACTION_CLEAR;
  assert(action!=CALIBRATION_ACTION_NONE);
- MeasurementCalibrationSample expected={0};
- if(action==CALIBRATION_ACTION_CAPTURE)(void)MeasurementResult_GetCalibrationSample(&expected);
- assert(CalibrationControl_Request(action,action==CALIBRATION_ACTION_CAPTURE?&expected:NULL));
+ assert(CalibrationControl_Request(action));
 }
 #ifdef SBCG_USE_MODE_OBSERVATION
 /**
@@ -326,7 +344,13 @@ int main(int argc,char **argv)
    event_time=(uint64_t)strtoull(cursor,&end,10);
    if(end!=cursor){
    tick_ms=at;common_ns=clock;if(process_blocks)++audio_processed;if(seq!=0U){assert(!event_pending);next_event=(SoundEventTimeEvent){.sequence=seq,.session=audio_session,
-    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=host_event_class,.quality=98U};if(capture_enabled)CaptureEvent(next_event.frame);event_pending=true;}App_Process();
+    .time_ns=event_time,.frame=(uint64_t)seq*96000U,.event_class=host_event_class,.quality=98U};
+    if(host_event_class==EVENT_CLASS_CHIRP){
+     last_chirp_session=audio_session;last_chirp_onset_frame=next_event.frame;
+    }
+    if(capture_enabled)CaptureEvent(next_event.frame);
+    event_pending=true;
+   }App_Process();
    }
   }else if(strncmp(command,"RX ",3U)==0)Queue(command+3);
   else if(strncmp(command,"SNAP",4U)==0)Snapshot();
@@ -349,6 +373,7 @@ int main(int argc,char **argv)
   else if(sscanf(command,"CURSOR %u",&value)==1){audio_cursor_frame=value;audio_cursor_ok=true;}
   else if(sscanf(command,"CURSOR_FAIL %u",&value)==1){audio_cursor_frame=value;audio_cursor_ok=false;}
   else if(sscanf(command,"CLASS %u",&value)==1){assert(value<=EVENT_CLASS_CLAP);host_event_class=(EventClass)value;}
+  else if(sscanf(command,"CHIRP %u",&value)==1){last_chirp_session=audio_session;last_chirp_onset_frame=value;}
   else if(strncmp(command,"ANCHOR ",7U)==0){
    char *cursor=command+7,*end=NULL;
    const uint32_t anchor_session=(uint32_t)strtoul(cursor,&end,10);cursor=end;

@@ -332,31 +332,105 @@ def run_mode_tests():
 
         check(a.cmd(f'MODE_REQUEST {calibration}')['accepted']==1,'A accepts the CALIBRATION request')
         cal_key=converge(calibration,100,200,after=wave_key[2])
+        a.cmd(f'CURSOR {20*96000+1408}')
+        a.cmd('CAL START')
+        step()
+        sa,sb=snap(a,b,'calibration waiting without tracking')
+        started_ns=sa['common_ns']
+        calibration_fields=('cal_saved','cal_enabled','cal_offset_mm','cal_version')
+        initial_calibration=tuple(sa[field] for field in calibration_fields)
+        check(sa['cal_phase']==1 and sa['control_result']==9 and sa['fresh']==0 and
+              sa['cal_candidate_id']==0 and sa['cal_remaining_ms']>=14000,
+              'A starts waiting without a current TRACKING sample')
+        for _ in range(140):
+            step()
+        sa,sb=snap(a,b,'calibration seven seconds without playback')
+        check(sa['cal_phase']==1 and sa['cal_candidate_id']==0 and
+              sa['cal_heard_chirp']==0 and sa['cal_remaining_ms']>0,
+              'seven quiet seconds leave the collection window open')
         for index in range(160):
             step(sequence={39:21,79:22,119:23}.get(index,0))
         sa,sb=snap(a,b,'gated CALIBRATION business')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and sa['id']>first_id,
               'CALIBRATION mode admits RANGE business with a fresh measurement')
-        a.cmd('CAL CAPTURE')
-        for _ in range(10):
+        check(sa['cal_phase']==2 and sa['control_result']==10 and
+              sa['cal_candidate_id']==sa['id'] and sa['cal_candidate_raw_mm']==sa['mm'] and
+              sa['cal_candidate_source_ns']>started_ns and
+              tuple(sa[field] for field in calibration_fields)==initial_calibration,
+              'delayed playback freezes an eligible post-START source without changing calibration')
+        candidate_fields=('cal_candidate_id','cal_candidate_raw_mm','cal_candidate_source_ns')
+        candidate=tuple(sa[field] for field in candidate_fields)
+        saved_offset=500-sa['cal_candidate_raw_mm']
+        step(sequence=24)
+        for _ in range(29):
             step()
-        sa,sb=snap(a,b,'calibration captured')
-        check(sa['cal_saved']==1 and sa['control_result']==2,
-              'CALIBRATION mode applies a fresh CAPTURE sample')
-        saved_offset=sa['cal_offset_mm']
-        a.cmd('CAL ENABLE')
+        sa,sb=snap(a,b,'calibration frozen while live measurement refreshes')
+        check(sa['id']==sb['id'] and sa['id']>candidate[0] and sa['fresh']==sb['fresh']==1 and
+              sa['cal_phase']==2 and tuple(sa[field] for field in candidate_fields)==candidate,
+              'a subsequent valid A/B measurement does not replace the frozen candidate')
+        for _ in range(170):
+            step()
+        sa,sb=snap(a,b,'calibration candidate after ten more seconds')
+        check(sa['cal_phase']==2 and sa['cal_remaining_ms']>0 and sa['fresh']==0 and
+              tuple(sa[field] for field in candidate_fields)==candidate and
+              tuple(sa[field] for field in calibration_fields)==initial_calibration,
+              'the frozen candidate survives ten seconds and ordinary measurement expiry')
+        a.cmd('CAL CONFIRM')
+        step()
+        sa,sb=snap(a,b,'calibration explicitly confirmed')
+        check(sa['cal_phase']==0 and sa['control_result']==2 and
+              sa['cal_saved']==sa['cal_enabled']==1 and sa['cal_offset_mm']==saved_offset,
+              'CONFIRM applies 500-minus-raw from the frozen candidate')
         for index in range(160):
-            step(sequence={39:24,79:25,119:26}.get(index,0))
+            step(sequence={39:25,79:26,119:27}.get(index,0))
         sa,sb=snap(a,b,'calibration enabled')
         check(sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
               sb['applied_offset_mm']==saved_offset,
               'enabled compensation is published to both boards in CALIBRATION')
+        saved_calibration=tuple(sa[field] for field in calibration_fields)
+        old_source_ns=sa['source_ns']
+        a.cmd(f'CURSOR {27*96000+1408}')
+        a.cmd('CAL START')
+        step()
+        sa,sb=snap(a,b,'calibration ignores existing fresh source')
+        check(sa['fresh']==1 and sa['source_ns']==old_source_ns and
+              sa['cal_phase']==1 and sa['cal_candidate_id']==0 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'a fresh TRACKING sample from before START cannot be selected')
+        a.cmd('CAL CANCEL')
+        step()
+        sa,sb=snap(a,b,'calibration cancelled')
+        check(sa['cal_phase']==0 and sa['control_result']==11 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'CANCEL leaves the existing enabled calibration and version unchanged')
+        a.cmd('CAL START')
+        step()
+        sa=a.cmd('SNAP')
+        for _ in range(1+(sa['cal_remaining_ms']+49)//50):
+            step()
+        sa,sb=snap(a,b,'calibration quiet collection timeout')
+        check(sa['cal_phase']==0 and sa['control_result']==4 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'a completely quiet collection window times out without changing calibration')
+        a.cmd('CAL START')
+        step()
+        a.cmd(f'CHIRP {27*96000+48000}')
+        step()
+        sa,sb=snap(a,b,'calibration heard chirp without TOA')
+        check(sa['cal_phase']==1 and sa['cal_heard_chirp']==1 and sa['cal_candidate_id']==0,
+              'a classified CHIRP without TOA is recognized while collection continues')
+        for _ in range(1+(sa['cal_remaining_ms']+49)//50):
+            step()
+        sa,sb=snap(a,b,'calibration heard chirp but no eligible measurement')
+        check(sa['cal_phase']==0 and sa['control_result']==5 and
+              tuple(sa[field] for field in calibration_fields)==saved_calibration,
+              'CHIRP without a qualified sample times out with its own reason and preserves calibration')
 
         check(a.cmd(f'MODE_REQUEST {range_mode}')['accepted']==1,'A accepts the return to RANGE')
         range_key=converge(range_mode,100,200,after=cal_key[2])
         check(range_key[2]>cal_key[2],'the second RANGE has a fresh mode sequence')
         for index in range(160):
-            step(sequence={39:27,79:28,119:29}.get(index,0))
+            step(sequence={39:28,79:29,119:30}.get(index,0))
         sa,sb=snap(a,b,'compensation after leaving CALIBRATION')
         check(sa['has']==sb['has']==1 and sa['id']==sb['id'] and
               sa['cal_enabled']==1 and sa['applied_offset_mm']==saved_offset and
@@ -731,30 +805,35 @@ def main():
         check(sa['has']==sb['has']==0,
               'continued rejected sounds cannot keep an old distance alive')
 
-        original_checks=CHECKS
-        a.cmd('CLOCK 0');a.cmd('CAL CAPTURE')
+        a.cmd('CLOCK 0');a.cmd('CAL START')
         step(64650);step(64700)
         sa,sb=snap(a,b,'calibration-invalid-context')
-        check(sa['control_result']==4 and sa['control_completed']==1 and
+        check(sa['cal_phase']==0 and sa['control_result']==13 and sa['control_completed']==1 and
               sa['cal_saved']==sa['cal_enabled']==sa['cal_version']==0,
-              'CAPTURE with invalid actual clock is rejected without creating calibration')
+              'START with invalid actual clock is rejected without creating calibration')
         a.cmd('CLOCK 1');a.cmd('CAPTURE 1');b.cmd('CAPTURE 1')
-        for t in range(64750,70801,50):step(t,{66000:27,68000:28,70000:29}.get(t,0))
+        for t in range(64750,65951,50):step(t)
+        a.cmd(f'CURSOR {26*96000+1408}')
+        a.cmd('CAL START')
+        for t in range(66000,70801,50):step(t,{66000:27,68000:28,70000:29}.get(t,0))
         sa,sb=snap(a,b,'calibration-ready')
         check(sa['state']==sb['state']==2 and sa['has']==sb['has']==1 and
               sa['fresh']==sb['fresh']==1 and sa['id']==sb['id'] and abs(sa['mm']-309)<2,
               'new waveforms rebuild fresh A/B TRACKING before calibration')
-        raw_mm=sa['mm'];saved_offset=500-raw_mm;previous=sa
+        check(sa['cal_phase']==2 and sa['cal_candidate_id']==sa['id'] and
+              sa['cal_candidate_raw_mm']==sa['mm'] and sa['cal_saved']==0,
+              'A has a frozen candidate and has yet to change its calibration')
+        raw_mm=sa['cal_candidate_raw_mm'];saved_offset=500-raw_mm;previous=sa
 
-        a.cmd('CAL CAPTURE');step(70850);step(70900)
-        sa,sb=snap(a,b,'calibration-captured-withdrawn')
-        check(sa['control_result']==2 and sa['control_completed']==2 and
+        a.cmd('CAL CONFIRM');step(70850);step(70900)
+        sa,sb=snap(a,b,'calibration-confirmed-withdrawn')
+        check(sa['cal_phase']==0 and sa['control_result']==2 and
               sa['cal_saved']==sa['cal_enabled']==1 and sa['cal_offset_mm']==saved_offset,
-              'CAPTURE saves 500-minus-raw from the current actual source and enables it')
+              'CONFIRM saves 500-minus-raw from the frozen actual source and enables it')
         check(sa['has']==sb['has']==0 and sa['rev']==sb['rev'] and sa['rev']>previous['rev'] and
               sa['applied_offset_mm']==sb['applied_offset_mm']==saved_offset and
               sa['applied_version']==sb['applied_version']==sa['cal_version'],
-              'capture withdraws the old A/B value and publishes the same changed calibration contract')
+              'confirmation withdraws the old A/B value and publishes the same changed calibration contract')
         for t in range(70950,76801,50):step(t,{72000:30,74000:31,76000:32}.get(t,0))
         sa,sb=snap(a,b,'calibration-new-sounds-500mm')
         check(sa['state']==sb['state']==2 and sa['fresh']==sb['fresh']==1 and
@@ -798,7 +877,7 @@ def main():
 
         stable_fields=('id','rev','source_ns','mm','cal_saved','cal_enabled','cal_offset_mm','cal_version',
                        'applied_offset_mm','applied_version')
-        for index,action in enumerate(('CAPTURE','ENABLE','DISABLE','CLEAR')):
+        for index,action in enumerate(('START','ENABLE','DISABLE','CLEAR')):
             b.cmd('CAL '+action);step(88850+index*100);step(88900+index*100)
             sa,sb=snap(a,b,'B-calibration-rejected-'+action.lower())
             check(sb['control_result']==3 and sb['control_completed']==index+1 and
@@ -813,16 +892,22 @@ def main():
         for t in range(89250,91551,50):step(t)
         sa,sb=snap(a,b,'calibration-stale-source')
         check(sa['state']==sb['state']==3 and sa['has']==sb['has']==1 and sa['fresh']==sb['fresh']==0,
-              'calibration stale-source rejection begins with explicit A/B HOLD values')
+              'calibration with a stale source begins with explicit A/B HOLD values')
         previous=sa
-        a.cmd('CAL CAPTURE');step(91600);step(91650)
-        sa,sb=snap(a,b,'calibration-stale-capture-rejected')
-        check(sa['control_result']==4 and sa['control_completed']==previous['control_completed']+1 and
+        a.cmd(f'CURSOR {38*96000+1408}')
+        a.cmd('CAL START');step(91600)
+        sa,sb=snap(a,b,'calibration-waits-with-stale-source')
+        check(sa['cal_phase']==1 and sa['control_result']==9 and sa['cal_candidate_id']==0 and
               all(sa[field]==previous[field] for field in stable_fields),
-              'stale CAPTURE cannot replace or disable the saved active coefficient')
+              'starting with a stale result leaves the saved active coefficient unchanged')
         check(sa['id']==sb['id'] and sa['mm']==sb['mm'] and
               sa['applied_offset_mm']==sb['applied_offset_mm']==saved_offset,
-              'rejected stale calibration leaves the existing A/B source and applied offset unchanged')
+              'waiting for a new source preserves the existing A/B result and applied offset')
+        a.cmd('CAL CANCEL');step(91650)
+        sa,sb=snap(a,b,'calibration-cancelled-with-stale-source')
+        check(sa['cal_phase']==0 and sa['control_result']==11 and
+              all(sa[field]==previous[field] for field in stable_fields),
+              'cancelling the wait preserves the saved coefficient and A/B result')
 
         a.cmd('CAL CLEAR');step(91700);step(91750)
         sa,sb=snap(a,b,'calibration-cleared-withdrawn')

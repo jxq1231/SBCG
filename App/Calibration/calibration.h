@@ -34,6 +34,13 @@ typedef struct
 void Calibration_Init(void);
 
 /**
+ * @brief 检查原始测量及其拟应用偏移，供采集阶段只读筛选。
+ * @param raw_mm 未应用标定偏移的温补距离，单位mm。
+ * @return 原始距离与拟应用偏移均合规时为true。
+ */
+bool Calibration_CanSetFromMeasurement(int32_t raw_mm);
+
+/**
  * @brief 用500mm参考的原始测量替换已保存系数，并启用偏移应用。
  * @param raw_mm 原始距离，单位mm，范围0..10000；偏移绝对值不得超过CALIBRATION_MAX_ABS_OFFSET_MM。
  * @return 成功返回true并递增版本；失败返回false且保持全部状态。

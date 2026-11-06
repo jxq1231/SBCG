@@ -3,7 +3,7 @@
  * @brief       两板测距唯一权威结果的缓存与有效性处理。
  * @details     Update确认域/时钟/会话/流上下文；A共享临时与确认结果的ID/revision，
  *              B分离原始权威载荷和本地过期展示，声音年龄只由实际共同时间推进；
- *              标定取样只读A板当前新鲜跟踪值，复用当前温补距离的舍入规则。
+ *              标定取样只读A板当前新鲜跟踪值，复用温补距离舍入并保留双板到达时刻。
  * @note        纯前台标量；无PCM/HAL/PTP/网络访问，无动态内存。
  */
 #include "measurement_result.h"
@@ -32,6 +32,7 @@ typedef struct
     TemperatureSnapshot temperature;
     MeasurementPresentationSnapshot remote_raw;
     uint64_t now_common_ns;
+    uint64_t accepted_first_source_ns;
     uint64_t remote_source_ns;
     uint64_t remote_fresh_ns;
     uint64_t remote_display_ns;
@@ -282,10 +283,11 @@ static void AssignSourceId(MeasurementPresentationSnapshot *value)
  * @brief 发布指定无值状态，保留外层ID和revision计数器代际。
  * @param state 目标展示状态。
  * @param now_ms 当前前台毫秒，仅作内容捕获记录。
- * @return 无返回值；A使用本地权威revision，B不改写远程权威revision。
+ * @return 无返回值；清除标定来源，A使用本地权威revision，B保留远程权威revision。
  */
 static void ClearPresentation(MeasurementPresentationState state,uint32_t now_ms)
 {
+    authority_cache.accepted_first_source_ns=0U;
     MeasurementPresentationSnapshot value=presentation;
     RemoveValue(&value,state);
     value.reason=state==MEASUREMENT_PRESENTATION_FAULT?RANGING_INVALIDATE_FAULT:0U;
@@ -452,6 +454,7 @@ static void FillTrackerDiagnostic(RangingDecision decision)
  * @param now_ms 实际前台接收毫秒计数。
  * @param now_common_ns 实际共同读时纳秒；不允许用pair源时刻补读时失败。
  * @return 返回真实tracker决策；临时和确认新源共享唯一外层ID计数器。
+ * @note 只给新确认的来源保存较早到达时刻，普通展示和期限仍沿用较晚到达时刻。
  */
 RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair,
                                                      const TemperatureSnapshot *temperature,
@@ -503,7 +506,12 @@ RangingDecision MeasurementResult_PublishTrackedPair(const SoundPairResult *pair
         value.source_common_ns=snapshot.source_common_ns;
         value.fresh_deadline_ns=snapshot.fresh_deadline_ns;
         value.display_deadline_ns=snapshot.display_deadline_ns;
-        if(decision==RANGING_DECISION_ACCEPT)AssignSourceId(&value);
+        if(decision==RANGING_DECISION_ACCEPT)
+        {
+            AssignSourceId(&value);
+            authority_cache.accepted_first_source_ns=pair->a_time_ns<pair->b_time_ns?
+                pair->a_time_ns:pair->b_time_ns;
+        }
     }
     else if(decision==RANGING_DECISION_CANDIDATE && pair->quality>=90U)
     {
@@ -571,7 +579,8 @@ void MeasurementResult_GetPresentation(MeasurementPresentationSnapshot *out)
  * @brief 从A板新鲜跟踪展示只读取得未标定距离及来源身份。
  * @param out 调用方拥有的可写输出；NULL返回false，非NULL先清零，失败保持零值。
  * @return 当前受信前台状态允许标定且温补换算成功时true，否则false。
- * @note 调用方先Update实际共同时间；本函数不推进时钟、不修改展示或跟踪器。
+ * @note 调用方先Update实际共同时间；较早到达时刻与展示的较晚时刻对应同一确认配对。
+ *       本函数不推进时钟、不修改展示或跟踪器。
  */
 bool MeasurementResult_GetCalibrationSample(MeasurementCalibrationSample *out)
 {
@@ -579,7 +588,8 @@ bool MeasurementResult_GetCalibrationSample(MeasurementCalibrationSample *out)
     memset(out,0,sizeof *out);
     if(!authority_cache.mode || !authority_cache.healthy || !authority_cache.context.authority ||
        presentation.state!=MEASUREMENT_PRESENTATION_TRACKING || !presentation.has_value ||
-       !presentation.fresh || authority_cache.now_common_ns>=presentation.fresh_deadline_ns)
+       !presentation.fresh || authority_cache.now_common_ns>=presentation.fresh_deadline_ns ||
+       authority_cache.accepted_first_source_ns==0U)
         return false;
     int32_t raw_mm,corrected_mm;
     if(!CorrectedDistance(presentation.filtered_delta_ns,authority_cache.temperature.sound_speed_mm_s,
@@ -590,6 +600,7 @@ bool MeasurementResult_GetCalibrationSample(MeasurementCalibrationSample *out)
     out->time_domain=presentation.time_domain;
     out->authority_clock_epoch=presentation.authority_clock_epoch;
     out->source_common_ns=presentation.source_common_ns;
+    out->first_source_common_ns=authority_cache.accepted_first_source_ns;
     return true;
 }
 

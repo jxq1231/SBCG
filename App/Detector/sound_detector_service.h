@@ -2,6 +2,7 @@
  * @file        sound_detector_service.h
  * @brief       声明唯一PCM借用内的暂存检测与归还验证后的候选发布接口。
  * @details     工作副本、4条暂存和4条已验证队列；完整2400帧分类后才发布本地候选。
+ *              提供已归还验证的扫频分类观测，供标定独立判断是否检出声音。
  * @note        串行前台；双2400帧CPU自有NOLOAD缓存仅在End成功后提交，不保存DMA指针或修改外设。
  */
 #ifndef SBCG_SOUND_DETECTOR_SERVICE_H
@@ -92,4 +93,11 @@ void SoundDetectorService_Process(uint32_t now_ms,const BSP_AudioSnapshot *snaps
  * @note 仅串行前台；软件计数不是物理音频或PTP精度证据。
  */
 void SoundDetectorService_GetSnapshot(SoundDetectorServiceSnapshot *out);
+/**
+ * @brief 复制最近一次已验证扫频的分类位置，不依赖TOA或测距结果。
+ * @param session 可空会话输出；未观测到或清除模式历史后为0。
+ * @param onset_frame 可空起始帧输出，单位双声道帧。
+ * @return 无返回值；仅由串行前台调用。
+ */
+void SoundDetectorService_GetLastChirp(uint32_t *session,uint64_t *onset_frame);
 #endif
