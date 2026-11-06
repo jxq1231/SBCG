@@ -2,6 +2,17 @@
 option(SBCG_STACK_DIAGNOSTIC "Measure the MSP high-water mark with an 8 KiB reserve" OFF)
 set(SBCG_STACK_DIAGNOSTIC_RESERVE 0 CACHE STRING
     "Diagnostic MSP reserve in bytes (for example 0x1800); 0 keeps the 8 KiB default")
+# Record the source revision actually configured into this image. The build
+# is still CubeMX-owned; this only makes a flashed binary traceable to Git.
+execute_process(
+    COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short=8 HEAD
+    RESULT_VARIABLE _sbcg_git_result
+    OUTPUT_VARIABLE _sbcg_fw_sha
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT _sbcg_git_result EQUAL 0 OR "${_sbcg_fw_sha}" STREQUAL "")
+    set(_sbcg_fw_sha "unknown")
+endif()
 set(_sbcg_ioc "${CMAKE_CURRENT_SOURCE_DIR}/SBCG.ioc")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_sbcg_ioc}")
 file(STRINGS "${_sbcg_ioc}" _sbcg_eth_mode REGEX "^ETH\\.MediaInterface=")
@@ -46,6 +57,7 @@ if(_sbcg_eth_mode)
         # bounded recovery. CubeMX still owns ETH/RMII/DMA/pin initialization.
         target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/Network/eth_link_guard.c)
         target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE App/Network)
+        target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_FW_SHA="${_sbcg_fw_sha}")
         if(SBCG_STACK_DIAGNOSTIC)
             target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE SBCG_STACK_DIAGNOSTIC=1)
             target_sources(${CMAKE_PROJECT_NAME} PRIVATE App/BSP/bsp_stack_diag.c)

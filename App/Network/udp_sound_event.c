@@ -58,6 +58,13 @@ static uint32_t tx_ok, tx_err, rx_ok, rx_bad, foreign, init_errors;
 static uint32_t result_tx_ok, result_tx_err, result_rx_ok, result_rx_bad;
 static uint32_t ack_tx_ok, ack_tx_err, ack_rx_ok, ack_rx_bad;
 static uint32_t temperature_tx_ok, temperature_tx_err;
+#ifdef SBCG_USE_MODE_OBSERVATION
+/* MDP1逐操作接收计数；仅前台诊断使用，不改变握手语义。 */
+#define MDP1_OP_COUNT 8U
+static uint32_t mdp1_rx_op[MDP1_OP_COUNT];
+static uint32_t mdp1_bad_copy, mdp1_bad_version, mdp1_bad_fields, mdp1_bad_role;
+static uint32_t mdp1_rx_seq, mdp1_seen_seq, mdp1_last_rx_ms, mdp1_stat_ms;
+#endif
 static uint32_t temperature_rx_ok, temperature_rx_bad;
 static bool configured;
 static SoundPairConfig pair_config;
@@ -725,9 +732,15 @@ static void Receive(void *arg,struct udp_pcb *pcb,struct pbuf *packet,
         const bool copied=pbuf_copy_partial(packet,data,sizeof data,0)==sizeof data;
         pbuf_free(packet);
         ModeControlMessage message;
-        if(!copied || !ModeControlWire_Decode(data,sizeof data,&message) ||
-           message.role==local_profile.role)
-        {Increment(&rx_bad);return;}
+        if(!copied){Increment(&mdp1_bad_copy);Increment(&rx_bad);return;}
+        if(data[4]!=MODE_CONTROL_WIRE_VERSION)
+        {Increment(&mdp1_bad_version);Increment(&rx_bad);return;}
+        if(!ModeControlWire_Decode(data,sizeof data,&message))
+        {Increment(&mdp1_bad_fields);Increment(&rx_bad);return;}
+        if(message.role==local_profile.role)
+        {Increment(&mdp1_bad_role);Increment(&rx_bad);return;}
+        if((unsigned)message.op<MDP1_OP_COUNT)Increment(&mdp1_rx_op[message.op]);
+        ++mdp1_rx_seq;
         if(mode_control_sink!=NULL)mode_control_sink(&message);
         Increment(&rx_ok);
         return;
@@ -1376,6 +1389,30 @@ void UDPSoundEvent_Process(uint32_t now_ms)
             business_rx_kind[2],business_rx_kind[3],business_rx_kind[4],
             business_rx_kind[5],business_rx_kind[6]));
     }
+#ifdef SBCG_USE_MODE_OBSERVATION
+    if((uint32_t)(now_ms-mdp1_stat_ms)>=5000U)
+    {
+        mdp1_stat_ms=now_ms;
+        if(mdp1_rx_seq!=mdp1_seen_seq)
+        { mdp1_seen_seq=mdp1_rx_seq; mdp1_last_rx_ms=now_ms; }
+        const uint32_t age=mdp1_rx_seq!=0U?(uint32_t)(now_ms-mdp1_last_rx_ms):0xFFFFFFFFU;
+        const uint32_t peer_ip=(uint32_t)ip4_addr_get_u32(ip_2_ip4(&peer));
+        emit(line,snprintf(line,sizeof line,
+            "$MDP1_STATS,HELLO=%" PRIu32 ",PREPARE=%" PRIu32 ",READY=%" PRIu32
+            ",COMMIT=%" PRIu32 ",COMMITTED=%" PRIu32 ",PING=%" PRIu32 ",PONG=%" PRIu32
+            ",BAD_COPY=%" PRIu32 ",BAD_VER=%" PRIu32 ",BAD_FIELDS=%" PRIu32
+            ",BAD_ROLE=%" PRIu32 ",AGE_MS=%" PRIu32 ",PEER_IP=%08" PRIX32
+            ",PORT=%u\r\n",
+            mdp1_rx_op[1],mdp1_rx_op[2],mdp1_rx_op[3],mdp1_rx_op[4],
+            mdp1_rx_op[5],mdp1_rx_op[6],mdp1_rx_op[7],
+            mdp1_bad_copy,mdp1_bad_version,mdp1_bad_fields,mdp1_bad_role,age,
+            peer_ip,(unsigned)UDP_SOUND_EVENT_BOARD_PORT));
+        emit(line,snprintf(line,sizeof line,
+            "$UDP_PEER,PEER_IP=%08" PRIX32 ",PORT=%u,RX_OK=%" PRIu32 ",RX_BAD=%" PRIu32
+            ",FOREIGN=%" PRIu32 ",TX_OK=%" PRIu32 ",TX_ERR=%" PRIu32 "\r\n",
+            peer_ip,(unsigned)UDP_SOUND_EVENT_BOARD_PORT,rx_ok,rx_bad,foreign,tx_ok,tx_err));
+    }
+#endif
 }
 /** @brief 复制统计；NULL参数不操作。 */
 void UDPSoundEvent_GetSnapshot(SoundPairSnapshot *pair,uint32_t *out_tx_ok,

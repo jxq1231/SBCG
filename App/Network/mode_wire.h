@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #define MODE_CONTROL_WIRE_BYTES 40U
+#define MODE_CONTROL_WIRE_VERSION 1U
 
 /** @brief 系统工作模式，NONE仅用于尚未同步的状态及HELLO。 */
 typedef enum

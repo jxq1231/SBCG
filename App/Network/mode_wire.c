@@ -80,7 +80,7 @@ bool ModeControlWire_Encode(const ModeControlMessage *message, uint8_t *data, ui
         return false;
 
     memcpy(data,"MDP1",4U);
-    data[4]=1U;
+    data[4]=MODE_CONTROL_WIRE_VERSION;
     data[5]=(uint8_t)message->op;
     data[6]=(uint8_t)message->mode;
     data[7]=(uint8_t)message->role;
@@ -101,7 +101,7 @@ bool ModeControlWire_Encode(const ModeControlMessage *message, uint8_t *data, ui
 bool ModeControlWire_Decode(const uint8_t *data, uint16_t length, ModeControlMessage *out)
 {
     if(data==NULL || out==NULL || length!=MODE_CONTROL_WIRE_BYTES ||
-       memcmp(data,"MDP1",4U)!=0 || data[4]!=1U)
+       memcmp(data,"MDP1",4U)!=0 || data[4]!=MODE_CONTROL_WIRE_VERSION)
         return false;
 
     const ModeControlMessage message={

@@ -1580,6 +1580,12 @@ void App_Init(void)
         ",UID_W0=%08" PRIX32 ",UID_W1=%08" PRIX32 ",UID_W2=%08" PRIX32 "\r\n",
         info.core_clock_hz, info.uid_words[0], info.uid_words[1], info.uid_words[2]);
     SendLine(line, length);
+#ifdef SBCG_FW_SHA
+    {
+        static const char fw[] = "$FW,SHA=" SBCG_FW_SHA ",ID=" APP_FIRMWARE_ID "\r\n";
+        SendLine(fw, (int)(sizeof fw - 1U));
+    }
+#endif
 #ifdef SBCG_USE_RESET_DIAGNOSTIC
     ReportReset();
 #endif
