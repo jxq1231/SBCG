@@ -72,8 +72,12 @@ def check(sources, allow_generated_process_call=False):
         require(fragment, r'target_link_options\([^)]*LINKER:--wrap=MX_TouchGFX_Process', 'user build must always wrap the generated process entry')
     require(msp, r'__HAL_RCC_CRC_CLK_ENABLE\s*\(\s*\)', 'CRC clock must be enabled by generated MSP')
     require(data['Core/Inc/stm32f7xx_hal_conf.h'], r'#define\s+HAL_CRC_MODULE_ENABLED\b', 'HAL CRC module must be enabled')
-    for irq, priority in (('SAI2', 4), ('DMA2_Stream7', 4), ('USART1', 5)):
+    for irq, priority in (('SAI2', 4), ('DMA2_Stream6', 4), ('DMA2_Stream7', 6), ('USART1', 5)):
         require(main + msp, rf'HAL_NVIC_SetPriority\(\s*{irq}_IRQn,\s*{priority},\s*0\)', f'{irq} priority must remain {priority}/0')
+    require(msp, r'hdma_sai2_b\.Instance\s*=\s*DMA2_Stream6\b', 'SAI2_B must use DMA2 Stream6 so USART1_TX can use Stream7')
+    require(msp, r'hdma_sai2_b\.Init\.Channel\s*=\s*DMA_CHANNEL_3\b', 'SAI2_B must use DMA channel 3')
+    require(msp, r'hdma_usart1_tx\.Instance\s*=\s*DMA2_Stream7\b', 'USART1_TX must use DMA2 Stream7')
+    require(msp, r'hdma_usart1_tx\.Init\.Channel\s*=\s*DMA_CHANNEL_4\b', 'USART1_TX must use DMA channel 4')
     if re.search(r'\bSCB_Enable[ID]Cache\s*\(', main):
         errors.append('U3.1 assumes CPU I/D caches remain disabled')
 

@@ -2,11 +2,17 @@
 #include "BSP/bsp_console.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 UART_HandleTypeDef huart1;
 static UART_HandleTypeDef other;
 static uint8_t *receive;
 static HAL_StatusTypeDef arm_result = HAL_OK;
 static uint32_t mask, tick, arms;
+static DMA_HandleTypeDef txdma;
+static const uint8_t *dma_ptr;
+static uint16_t dma_len;
+static unsigned dma_calls;
+static HAL_StatusTypeDef dma_result = HAL_OK;
 uint32_t __get_PRIMASK(void) { return mask; }
 void __disable_irq(void) { mask = 1U; }
 void __set_PRIMASK(uint32_t value) { mask = value; }
@@ -17,6 +23,15 @@ uint32_t HAL_GetUIDw1(void) { return 2U; }
 uint32_t HAL_GetUIDw2(void) { return 3U; }
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *h, const uint8_t *p, uint16_t n, uint32_t t)
 { (void)h; (void)p; (void)n; (void)t; return HAL_OK; }
+/** @brief 记录一次 DMA 发送请求；完成由测试显式触发。 */
+HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *h, const uint8_t *p, uint16_t n)
+{
+    assert(h == &huart1);
+    ++dma_calls; dma_ptr = p; dma_len = n;
+    if (dma_result != HAL_OK) { return dma_result; }
+    h->gState = HAL_UART_STATE_BUSY_TX;
+    return HAL_OK;
+}
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *h)
 { h->RxState = HAL_UART_STATE_READY; h->ErrorCode = 0U; return HAL_OK; }
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *h, uint8_t *p, uint16_t n)
@@ -78,6 +93,54 @@ int main(void)
     assert(arms == before + 1U);
     assert(BSP_Console_Read(&value) == BSP_CONSOLE_RX_GAP);
     byte('R'); assert(BSP_Console_Read(&value) == BSP_CONSOLE_RX_BYTE && value == 'R');
-    puts("PASS console BSP: ring/wrap, foreign UART, errors, overflow, rearm, critical sections");
+
+    /* TX: without a linked DMA handle, enqueue falls back to blocking send. */
+    BSP_ConsoleTxStats tx;
+    static uint8_t big[1023];
+    memset(big, 'Q', sizeof big);
+    huart1.hdmatx = NULL;
+    assert(BSP_Console_Write("AB", 2U));
+    BSP_Console_GetTxStats(&tx);
+    assert(tx.enqueued == 1U && tx.fallbacks == 1U && tx.dropped == 0U);
+
+    /* TX: DMA path advances only on completion, then chains the next chunk. */
+    huart1.hdmatx = &txdma; dma_calls = 0U; dma_result = HAL_OK;
+    assert(BSP_Console_Write("HELLO", 5U));
+    assert(dma_calls == 1U && dma_len == 5U && memcmp(dma_ptr, "HELLO", 5U) == 0);
+    HAL_UART_TxCpltCallback(&huart1);
+    assert(dma_calls == 1U);
+
+    /* TX: ring wrap splits into contiguous DMA chunks whose total is the line. */
+    const unsigned before_big = dma_calls;
+    assert(BSP_Console_Write((const char *)big, (uint16_t)sizeof big));
+    assert(dma_calls == before_big + 1U);
+    const uint16_t first_len = dma_len;
+    HAL_UART_TxCpltCallback(&huart1);
+    assert(dma_calls == before_big + 2U);
+    assert((unsigned)first_len + (unsigned)dma_len == sizeof big);
+    HAL_UART_TxCpltCallback(&huart1);
+    assert(BSP_Console_Write("XY", 2U));
+    assert(dma_calls == before_big + 3U && dma_len == 2U && dma_ptr[0] == 'X');
+    HAL_UART_TxCpltCallback(&huart1);
+
+    /* TX: full ring drops the whole line and counts it. */
+    assert(BSP_Console_Write((const char *)big, (uint16_t)sizeof big));
+    assert(!BSP_Console_Write("Z", 1U));
+    BSP_Console_GetTxStats(&tx);
+    assert(tx.dropped == 1U && tx.high_water == 1023U);
+    HAL_UART_TxCpltCallback(&huart1);
+    HAL_UART_TxCpltCallback(&huart1);
+
+    /* TX: DMA submission error keeps the queued bytes for the next kick. */
+    dma_result = HAL_ERROR;
+    assert(BSP_Console_Write("ERR", 3U));
+    BSP_Console_GetTxStats(&tx);
+    assert(tx.dma_errors == 1U);
+    dma_result = HAL_OK;
+    assert(BSP_Console_Write("!", 1U));
+    assert(dma_len == 4U);
+    HAL_UART_TxCpltCallback(&huart1);
+
+    puts("PASS console BSP: ring/wrap, foreign UART, errors, overflow, rearm, critical sections, DMA TX");
     return 0;
 }
