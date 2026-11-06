@@ -2,7 +2,7 @@
  * @file        temperature_console.c
  * @brief       解析串口温度命令并返回环境快照。
  * @details     每次至多读取64字节，按LF分帧且回复间隔至少100毫秒，支持PING、TEMP?、TEMP SET和TEMP AUTO。
- *              诊断构建另处理MODE BOOT、MODE SET和MODE?，复用同一个前台串口读取者。
+ *              诊断构建另处理模式、PCM 采集及 MIC2 增益命令，复用同一个前台串口读取者。
  * @note        仅前台；依赖控制台接收BSP和温度服务，DHT11启动低电平期间暂停，非法/超长/接收间隙帧丢弃至LF。
  */
 #include "temperature_console.h"
@@ -11,6 +11,9 @@
 #include "Temperature/temperature_config.h"
 #ifdef SBCG_MODE_TEST_CONTROL
 #include "app_main.h"
+#ifdef SBCG_USE_AUDIO
+#include "BSP/bsp_audio_codec.h"
+#endif
 #endif
 #include <inttypes.h>
 #include <stdio.h>
@@ -138,14 +141,55 @@ static bool parse_mode_boot(const char *text, uint64_t *out)
     return true;
 }
 
+#ifdef SBCG_USE_AUDIO
 /**
- * @brief 在普通命令均不匹配时处理模式诊断命令。
+ * @brief   处理 MIC2 增益诊断命令，成功时回复两路增益读回值。
+ * @param   text 非空且以 NUL 结尾的当前串口命令，只读。
+ * @return  true 表示已处理 MIC GAIN 命令，包括参数或 I2C 错误。
+ * @note    仅诊断构建前台使用，复用控制台节流与 DHT 门控。
+ */
+static bool execute_mic_gain_command(const char *text)
+{
+    if (strncmp(text, "MIC GAIN", 8U) != 0) { return false; }
+
+    BSP_AudioCodecGainAction action;
+    const char *name;
+    if (strcmp(text, "MIC GAIN?") == 0) { action = BSP_CODEC_GAIN_READ; name = "READ"; }
+    else if (strcmp(text, "MIC GAIN LOW") == 0) { action = BSP_CODEC_GAIN_LOW; name = "LOW"; }
+    else if (strcmp(text, "MIC GAIN DEFAULT") == 0) { action = BSP_CODEC_GAIN_DEFAULT; name = "DEFAULT"; }
+    else
+    {
+        result("MIC_GAIN", "ERROR", "VALUE");
+        return true;
+    }
+
+    BSP_AudioCodecMic2Gain gain;
+    const BSP_AudioCodecStatus status = BSP_AudioCodec_DiagnoseMic2Gain(action, &gain);
+    if (status == BSP_CODEC_OK)
+    {
+        const int length = snprintf(reply, sizeof reply, "$MIC_GAIN,ACTION=%s,L=%02X,R=%02X\r\n",
+                                    name, (unsigned)gain.left, (unsigned)gain.right);
+        emit(reply, length);
+    }
+    else
+    {
+        result("MIC_GAIN", "ERROR", status == BSP_CODEC_BUSY ? "BUSY" : "IO");
+    }
+    return true;
+}
+#endif
+
+/**
+ * @brief 在普通命令均不匹配时处理模式、PCM 采集与增益诊断命令。
  * @param text 非NULL且NUL结尾的完整命令，借用当前串口帧。
  * @return 已识别命令时为true，包括拒绝参数或B板请求。
  * @note 仅诊断构建且DHT放行的前台路径使用。
  */
 static bool execute_mode_command(const char *text)
 {
+#ifdef SBCG_USE_AUDIO
+    if (execute_mic_gain_command(text)) { return true; }
+#endif
     if (strcmp(text, "MODE?") == 0)
     {
         App_ReportMode();

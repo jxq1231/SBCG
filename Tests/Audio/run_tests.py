@@ -37,6 +37,8 @@ def main():
                    "-o", str(executable)]
         if name == "sound_capture":
             command[1:1] = ["-DSBCG_USE_SOUND_DETECTOR=1", "-DSBCG_USE_MODE_OBSERVATION=1"]
+        if name == "codec_setup":
+            command.insert(1, "-DSBCG_MODE_TEST_CONTROL=1")
         built = subprocess.run(command, env=environment, timeout=30, check=False)
         if built.returncode:
             failures += 1

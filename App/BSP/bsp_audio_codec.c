@@ -2,7 +2,7 @@
  * @file        bsp_audio_codec.c
  * @brief       WM8994 身份读取和 MIC2 输入通路的同步 I2C 访问。
  * @details     通过已生成 I2C3 读取 0x8994 标识，再按固定输入配置表写寄存器；保留忙、失败寄存器、成功写入数及
- *          HAL 错误供前台诊断。
+ *          HAL 错误供前台诊断。诊断构建可单独读写 AIF1 ADC2 数字增益。
  * @note        主循环/启动上下文专用；采集配置前需 SAI 主时钟，调用者串行管理共享 I2C3，不重初始化 MCU 外设，
  *          不进行总线恢复。
  */
@@ -17,6 +17,10 @@ extern I2C_HandleTypeDef hi2c3;
 #define CODEC_ID_REGISTER 0x0000U
 #define CODEC_READ_TIMEOUT_MS 2U
 #define CODEC_WRITE_TIMEOUT_MS 2U
+#define CODEC_ADC2_GAIN_LEFT 0x0404U
+#define CODEC_ADC2_GAIN_RIGHT 0x0405U
+#define CODEC_GAIN_UPDATE 0x0100U
+#define CODEC_MIC2_GAIN_DEFAULT 0xEFU
 
 /** @brief 固定配置表的一次 16 位寄存器写入，以及成功后等待的毫秒数。 */
 typedef struct
@@ -56,8 +60,8 @@ static const CodecSetupWrite mic2_setup[] = {
     {0x0411U, 0x3800U, 0U},  /* Official ADC2 HPF controls; unmuted. */
     {0x0400U, 0x01EFU, 0U},  /* VU=1, VOLUME_IN_CONVERT(100)=239. */
     {0x0401U, 0x01EFU, 0U},
-    {0x0404U, 0x01EFU, 0U},
-    {0x0405U, 0x01EFU, 0U}
+    {CODEC_ADC2_GAIN_LEFT, CODEC_GAIN_UPDATE | CODEC_MIC2_GAIN_DEFAULT, 0U},
+    {CODEC_ADC2_GAIN_RIGHT, CODEC_GAIN_UPDATE | CODEC_MIC2_GAIN_DEFAULT, 0U}
 };
 
 /**
@@ -155,3 +159,86 @@ BSP_AudioCodecStatus BSP_AudioCodec_ConfigureMic2(BSP_AudioCodecSetupResult *res
     result->failed_register = UINT16_MAX;
     return BSP_CODEC_OK;
 }
+
+#ifdef SBCG_MODE_TEST_CONTROL
+#define CODEC_MIC2_GAIN_UNITY 0xC0U
+
+/**
+ * @brief   按左右声道顺序读取 AIF1 ADC2 增益，忽略音量更新位。
+ * @param   gain 调用者提供的非空输出，失败时不可用。
+ * @return  OK、BUSY 或 IO_ERROR。
+ * @note    同步前台访问；该路径对应 WM8994 AIF1 时隙 1。
+ */
+static BSP_AudioCodecStatus ReadMic2Gain(BSP_AudioCodecMic2Gain *gain)
+{
+    const uint16_t registers[] = {CODEC_ADC2_GAIN_LEFT, CODEC_ADC2_GAIN_RIGHT};
+    uint8_t *const channels[] = {&gain->left, &gain->right};
+    for (size_t i = 0U; i < sizeof registers / sizeof registers[0]; ++i)
+    {
+        if (!CodecBusReady()) { return BSP_CODEC_BUSY; }
+        uint8_t bytes[2] = {0U, 0U};
+        const HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&CODEC_I2C_HANDLE,
+            (uint16_t)(BSP_AUDIO_CODEC_ADDRESS_7BIT << 1U), registers[i],
+            I2C_MEMADD_SIZE_16BIT, bytes, sizeof bytes, CODEC_READ_TIMEOUT_MS);
+        if (status != HAL_OK) { return status == HAL_BUSY ? BSP_CODEC_BUSY : BSP_CODEC_IO_ERROR; }
+        *channels[i] = bytes[1];
+    }
+    return BSP_CODEC_OK;
+}
+
+/**
+ * @brief   暂存左声道增益，再借右声道的 VU 位同时更新两路增益。
+ * @param   gain 左右增益寄存器低 8 位，按值传入。
+ * @return  true 表示两次 I2C 写入成功，需另行读回确认。
+ * @note    同步前台访问；失败后调用方负责恢复或报告错误。
+ */
+static bool WriteMic2Gain(BSP_AudioCodecMic2Gain gain)
+{
+    const uint16_t registers[] = {CODEC_ADC2_GAIN_LEFT, CODEC_ADC2_GAIN_RIGHT};
+    const uint16_t values[] = {gain.left, CODEC_GAIN_UPDATE | gain.right};
+    for (size_t i = 0U; i < sizeof registers / sizeof registers[0]; ++i)
+    {
+        if (!CodecBusReady()) { return false; }
+        uint8_t bytes[2] = {(uint8_t)(values[i] >> 8U), (uint8_t)values[i]};
+        if (HAL_I2C_Mem_Write(&CODEC_I2C_HANDLE,
+                (uint16_t)(BSP_AUDIO_CODEC_ADDRESS_7BIT << 1U), registers[i],
+                I2C_MEMADD_SIZE_16BIT, bytes, sizeof bytes, CODEC_WRITE_TIMEOUT_MS) != HAL_OK)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief   执行诊断增益读回或成对修改，验证失败时尝试还原修改前的值。
+ * @param   action 选择读回、0 dB 或启动增益。
+ * @param   gain 调用者拥有的输出，NULL 返回 INVALID_ARG，仅成功时可用。
+ * @return  OK 表示读回已确认；修改未确认时报告 IO_ERROR。
+ * @note    仅用于 MIC2 已配置的前台，不改采集路由或重置编解码器。
+ */
+BSP_AudioCodecStatus BSP_AudioCodec_DiagnoseMic2Gain(BSP_AudioCodecGainAction action,
+                                                    BSP_AudioCodecMic2Gain *gain)
+{
+    if (gain == NULL || (action != BSP_CODEC_GAIN_READ && action != BSP_CODEC_GAIN_LOW &&
+                         action != BSP_CODEC_GAIN_DEFAULT))
+    {
+        return BSP_CODEC_INVALID_ARG;
+    }
+
+    BSP_AudioCodecStatus status = ReadMic2Gain(gain);
+    if (status != BSP_CODEC_OK || action == BSP_CODEC_GAIN_READ) { return status; }
+
+    const BSP_AudioCodecMic2Gain original = *gain;
+    const uint8_t value = action == BSP_CODEC_GAIN_LOW ? CODEC_MIC2_GAIN_UNITY : CODEC_MIC2_GAIN_DEFAULT;
+    const BSP_AudioCodecMic2Gain requested = {value, value};
+    if (WriteMic2Gain(requested) && ReadMic2Gain(gain) == BSP_CODEC_OK &&
+        gain->left == value && gain->right == value)
+    {
+        return BSP_CODEC_OK;
+    }
+
+    (void)WriteMic2Gain(original);
+    return BSP_CODEC_IO_ERROR;
+}
+#endif
